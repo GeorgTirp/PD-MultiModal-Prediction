@@ -53,10 +53,13 @@ class RegressionModels:
                 os.makedirs(save_path)
 
 
-    def model_specific_preprocess(self, data_df: pd.DataFrame) -> Tuple:
-        """ Preprocess the data for the regression model"""
+    def model_specific_preprocess(self, data_df: pd.DataFrame, Feature_Selection: dict = None) -> Tuple:
+        """ Preprocess the data for the TabPFN model"""
         # Ensure all features are numeric
-        data_df = data_df.dropna(subset=self.Feature_Selection['features'] + [self.Feature_Selection['target']])
+        if Feature_Selection is None:
+            Feature_Selection = self.Feature_Selection
+        # Ensure all features are numeric
+        data_df = data_df.dropna(subset=Feature_Selection['features'] + [Feature_Selection['target']])
         X = data_df[Feature_Selection['features']]
         y = data_df[Feature_Selection['target']]
         X = X.fillna(X.mean())
@@ -242,7 +245,7 @@ if __name__ == "__main__":
         n_top_features)
     
     model.fit()
-    X,y = model_specific_preprocess(data_df, Feature_Selection)
+    X, y = model.model_specific_preprocess(data_df, Feature_Selection)
     preds = model.predict(X, y, save_results=True)
     metrics = model.evaluate()
     importances = model.feature_importance(10)

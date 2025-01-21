@@ -42,10 +42,13 @@ class TabPFNRegression():
         if not os.path.exists(save_path):
                 os.makedirs(save_path)
 
-    def model_specific_preprocess(self, data_df: pd.DataFrame) -> Tuple:
+    def model_specific_preprocess(self, data_df: pd.DataFrame, Feature_Selection: dict = None) -> Tuple:
         """ Preprocess the data for the TabPFN model"""
         # Ensure all features are numeric
-        data_df = data_df.dropna(subset=self.Feature_Selection['features'] + [self.Feature_Selection['target']])
+        if Feature_Selection is None:
+            Feature_Selection = self.Feature_Selection
+
+        data_df = data_df.dropna(subset=Feature_Selection['features'] + [Feature_Selection['target']])
         X = data_df[self.Feature_Selection['features']]
         y = data_df[self.Feature_Selection['target']]
         X = X.apply(pd.to_numeric, errors='coerce')
@@ -195,8 +198,8 @@ if __name__ == "__main__":
     identifier = "bdi"
     model = TabPFNRegression(data_df, Feature_Selection, test_split_size, safe_path, identifier)
     model.fit()
-    X_in = data_df[Feature_Selection['features']]
-    preds = model.predict(X_in, save_results=True)
+    X, y = model.model_specific_preprocess(data_df, Feature_Selection)
+    preds = model.predict(X, save_results=True)
     metrics = model.evaluate()
     importances = model.feature_importance()
     
