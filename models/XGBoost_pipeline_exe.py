@@ -5,17 +5,16 @@ from XGBoost_pipeline import run_XGBoost_pipeline
 
 
 #######-- Set the parameters for the analysis --#######
+folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
 # Preprocessed data
-data = '/home/frieder/pCloudDrive/AirBnB_Daten/Preprocessed_data/germany_preprocessed/munich/city_listings.csv'
+data = folder_path + "/data/bdi_df.csv"
 
 # Name of the variable to predict in the data table
-target = 'price'
+target = 'BDI_diff'
 
-# Add custom features, not provided by AirBnb? currently supported: ['distance_to_city_center', 'average_review_length']
-add_custom_features = ['distance_to_city_center', 'average_review_length']
 
 # Name of the variables to use for the prediction
-features = ['accommodates', 'bathrooms', 'bedrooms', 'beds', 'review_scores_value']  # Emtpy list means all the variables except the target
+features = []  # Emtpy list means all the variables except the target
 
 # Outlier removal?
 outlier_removal = False
@@ -30,10 +29,11 @@ correlation_threshold = 0.9
 save_results = True
 
 # Safe path
-safe_path = 'results/'
+safe_path = folder_path + "/results"
+    
 
 # Identifier
-identifier = 'Munich_prediction'
+identifier = "XGBoost_bdi"
 
 # Random state
 random_state = 42
@@ -42,6 +42,14 @@ random_state = 42
 
 
 ### Run the pipeline with the specified paramters
-run_XGBoost_pipeline(data=data, target=target, features=features, 
-                     outlier_removal=outlier_removal, cv=cv, correlation_threshold=correlation_threshold, save_results=True, 
-                     save_path=safe_path, identifier=identifier, add_custom_features=add_custom_features, random_state=random_state)
+run_XGBoost_pipeline(
+    data=data, 
+    target=target, 
+    features=features, 
+    outlier_removal=outlier_removal, 
+    cv=cv, 
+    correlation_threshold=correlation_threshold,
+    save_results=True, 
+    save_path=safe_path, 
+    identifier=identifier, 
+    random_state=random_state)

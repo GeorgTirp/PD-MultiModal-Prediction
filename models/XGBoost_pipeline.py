@@ -14,7 +14,6 @@ from scipy.stats import pearsonr
 import numpy as np
 import matplotlib.pyplot as plt
 import re
-from add_custom_features import AddCustomFeatures
 import logging
 import os
 
@@ -34,7 +33,7 @@ def remove_correlated_features(X, threshold):
     return X
 
 
-def plot_results(results_df, r_score, p_value, save_results=False, save_path='results/', identifier=''):
+def plot_results(results_df, r_score, p_value, pearson_value ,save_results=False, save_path='results/', identifier=''):
     """
     Plots the results of the predictions.
 
@@ -51,8 +50,12 @@ def plot_results(results_df, r_score, p_value, save_results=False, save_path='re
     plt.plot([results_df['y_test'].min(), results_df['y_test'].max()], 
              [results_df['y_test'].min(), results_df['y_test'].max()], 
              color='red', linestyle='--', linewidth=2)
-    plt.text(results_df['y_test'].min(), results_df['y_pred'].max(), f'R^2: {r_score:.2f}\nP-value: {p_value:.2e}', 
-             fontsize=12, verticalalignment='top', bbox=dict(facecolor='white', alpha=0.5))
+    plt.text(
+        results_df['y_test'].min(), 
+        results_df['y_pred'].max(), 
+        f'R^2: {r_score:.2f}\nP-value: {p_value:.2e}', 
+        fontsize=12, verticalalignment='top', 
+        bbox=dict(facecolor='white', alpha=0.5))
     plt.xlabel('Actual prices')
     plt.ylabel('Predicted prices')
     plt.title(f'Actual vs Predicted prices ({identifier})')
@@ -63,8 +66,17 @@ def plot_results(results_df, r_score, p_value, save_results=False, save_path='re
 
 
 
-def run_XGBoost_pipeline(data='', target='listing_price', features=[], 
-                     outlier_removal=False, cv=5, correlation_threshold=1, save_results=False, save_path='results/', add_custom_features=[], identifier='', random_state=42):
+def run_XGBoost_pipeline(
+        data='', 
+        target='BDI_DIFF', 
+        features=[], 
+        outlier_removal=False, 
+        cv=5, 
+        correlation_threshold=1, 
+        save_results=False, 
+        save_path='results/', 
+        identifier='', 
+        random_state=42):
     """
     Runs a pipeline to predicts the target variable using an XGBoost regressor. The features are subsequently evaluated using SHAP analysis.
 
@@ -113,7 +125,6 @@ def run_XGBoost_pipeline(data='', target='listing_price', features=[],
     log_and_print(f'CV: {cv}')
     log_and_print(f'Correlation threshold: {correlation_threshold}')
     log_and_print(f'Save results: {save_results}')
-    log_and_print(f'Additional custom features: {add_custom_features}')
     log_and_print(f'Save path: {save_path}')
     log_and_print(f'Identifier: {identifier}')
     log_and_print(f'Random state: {random_state}')
@@ -121,14 +132,6 @@ def run_XGBoost_pipeline(data='', target='listing_price', features=[],
 
     ### -- Load and preprocess the data -- ###
     data = pd.read_csv(data)
-
-    data['price'] = data['price'].replace('[\$,]', '', regex=True).astype(float)
-    data = data[data['price'] < 1000]
-
-    # Add custom features
-    Feature_Adder = AddCustomFeatures(data, add_custom_features)
-    data = Feature_Adder.return_data()
-
 
     # Extract the target variable
     y = data[target]
@@ -141,8 +144,8 @@ def run_XGBoost_pipeline(data='', target='listing_price', features=[],
     else:
         log_and_print(f'Using the following features: {features}')
         log_and_print(data.columns)
-        log_and_print(features + add_custom_features)
-        X = data[features + add_custom_features]
+        log_and_print(features)
+        X = data[features]
 
     # Remove outliers
     if outlier_removal:
@@ -191,11 +194,11 @@ def run_XGBoost_pipeline(data='', target='listing_price', features=[],
 
     #XGBoost hyperparameters grid    
     param_grid_xgb = {
-    #    'n_estimators': [150, 200, 500, 1000, 50],
+        'n_estimators': [150, 200, 500, 1000, 50],
         'learning_rate': [0.001, 0.01, 0.1, 0.2],
-    #    'max_depth': [5, 6, 7, 8, 9, 10],
-    #    'subsample': [0.6, 0.8, 1.0],
-    #    'colsample_bytree': [0.6, 0.8, 1.0]
+        'max_depth': [5, 6, 7, 8, 9, 10],
+        'subsample': [0.6, 0.8, 1.0],
+        'colsample_bytree': [0.6, 0.8, 1.0]
     }
 
     # log_and_print the Hyperparamer grid
@@ -252,8 +255,8 @@ def run_XGBoost_pipeline(data='', target='listing_price', features=[],
     ### -- Evaluate the model -- ###
 
     # Calculate Pearson correlation and p-price
-    r_score, p_price = pearsonr(all_y_test, all_y_pred)
-    log_and_print(f'Pearson correlation: {r_score}, p-value: {p_price}')
+    r_score, p_pearson = pearsonr(all_y_test, all_y_pred)
+    log_and_print(f'Pearson correlation: {r_score}, p-value: {p_pearson}')
 
     average_mse = np.mean(all_mse)
     log_and_print(f'Nested CV Mean Squared Error: {average_mse}')
@@ -264,7 +267,7 @@ def run_XGBoost_pipeline(data='', target='listing_price', features=[],
     if save_results == True:
         results_df.to_csv(f'{save_path}/{identifier}_results.csv', index=False)
         log_and_print(f'Results saved as results/{identifier}_results.csv')
-        plot_results(results_df, r_score, p_price, save_results=True, save_path=save_path, identifier=identifier)
+        plot_results(results_df, r_score, p_pearson, save_results=True, save_path=save_path, identifier=identifier)
 
     # Aggregate SHAP prices across folds
     all_shap_prices = np.array(all_shap_prices)
