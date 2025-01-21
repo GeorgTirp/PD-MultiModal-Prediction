@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import logging
 from tqdm import tqdm
 import os
+import torch
 # Setting test split size
 
 
@@ -152,17 +153,20 @@ class TabPFNRegression():
             shap_values = []
             for i in tqdm(range(len(X_train)), desc="Computing SHAP values", unit="sample"):
                 shap_values.append(explainer.shap_values(X_train.iloc[i:i+1]))
+                # Clear CUDA cache to avoid out of memory error
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
             # Plot SHAP summary
             shap.summary_plot(shap_values, X_train)
             logging.info("SHAP summary plot generated.")
-        
+
             return shap_values
 
         # Run Loco and SHAP importance evaluations
-        #logging.info("Evaluating SHAP feature importances...")
-        #shap_attributions = shap_importances(self, X_train, y_test)
-        #logging.info("SHAP importance evaluation completed.")
+        logging.info("Evaluating SHAP feature importances...")
+        shap_attributions = shap_importances(self, X_train, y_test)
+        logging.info("SHAP importance evaluation completed.")
 
         logging.info("Evaluating LOCO feature importances...")
         loco_attributions = loco_importances(self, X_train, y_test)
@@ -180,7 +184,8 @@ class TabPFNRegression():
         pass
 
 if __name__ == "__main__":
-    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+    folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
     data_df = pd.read_csv(folder_path + "/data/bdi_df.csv")
     test_split_size= 0.2
     Feature_Selection = {}
