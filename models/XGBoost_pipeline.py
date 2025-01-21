@@ -33,7 +33,7 @@ def remove_correlated_features(X, threshold):
     return X
 
 
-def plot_results(results_df, r_score, p_value, pearson_value ,save_results=False, save_path='results/', identifier=''):
+def plot_results(results_df, r_score, p_value ,save_results=False, save_path='results/', identifier=''):
     """
     Plots the results of the predictions.
 
@@ -56,12 +56,13 @@ def plot_results(results_df, r_score, p_value, pearson_value ,save_results=False
         f'R^2: {r_score:.2f}\nP-value: {p_value:.2e}', 
         fontsize=12, verticalalignment='top', 
         bbox=dict(facecolor='white', alpha=0.5))
-    plt.xlabel('Actual prices')
-    plt.ylabel('Predicted prices')
+    plt.xlabel('Groundtruth BDI diff score')
+    plt.ylabel('Predicted BDI diff score')
     plt.title(f'Actual vs Predicted prices ({identifier})')
     plt.grid(True)
     plt.savefig(f'{save_path}/{identifier}_actual_vs_predicted.png')
-    plt.show()
+    plt.close()
+    
 
 
 

@@ -212,21 +212,6 @@ class RegressionModels:
         plt.savefig(f'{self.save_path}/{self.identifier_linear}_feature_importances.png')
         plt.close()
 
-        # Beeswarm plot for Random Forest feature importances
-        plt.figure(figsize=(10, 6))
-        plt.scatter(rf_importances, rf_features, color='b')
-        plt.xlabel('Importance')
-        plt.title('Random Forest Feature Importances (Beeswarm)')
-        plt.savefig(f'{self.save_path}/{self.identifier_rf}_importances_beeswarm.png')
-        plt.close()
-
-        # Beeswarm plot for Linear Regression feature importances
-        plt.figure(figsize=(10, 6))
-        plt.scatter(linear_importances, linear_features, color='r')
-        plt.xlabel('Importance')
-        plt.title('Linear Regression Feature Importances (Beeswarm)')
-        plt.savefig(f'{self.save_path}/{self.identifier_linear}_importances_beeswarm.png')
-        plt.close()
 
         
 
@@ -246,7 +231,7 @@ if __name__ == "__main__":
         'max_depth': 10,
         'random_state': 42
     }
-    n_top_features = 10 # Number of top features to show
+    n_top_features = 15 # Number of top features to show
     model = RegressionModels(
         data_df, 
         RandomForest_Hparams, 
