@@ -62,6 +62,7 @@ def plot_results(results_df, r_score, p_value ,save_results=False, save_path='re
     plt.grid(True)
     plt.savefig(f'{save_path}/{identifier}_actual_vs_predicted.png')
     plt.close()
+    plt.clf()
     
 
 
@@ -77,8 +78,7 @@ def run_XGBoost_pipeline(
         save_results=False, 
         save_path='results/', 
         identifier='', 
-        random_state=42,
-        external_tuned_hparams=None):
+        random_state=42):
     """
     Runs a pipeline to predicts the target variable using an XGBoost regressor. The features are subsequently evaluated using SHAP analysis.
 
@@ -212,18 +212,14 @@ def run_XGBoost_pipeline(
     log_and_print('----------------------------------')
 
     xgb = XGBRegressor(random_state=random_state)
-    if external_tuned_hparams != None:
-        best_model = XGBRegressor(**external_tuned_hparams, random_state=random_state)
-    else:
-        grid_search = GridSearchCV(estimator=xgb, param_grid=param_grid_xgb, scoring='neg_root_mean_squared_error', cv=hyperparameter_cv, n_jobs=-1)
-        best_model = grid_search.best_estimator_
-        
+
+    grid_search = GridSearchCV(estimator=xgb, param_grid=param_grid_xgb, scoring='neg_root_mean_squared_error', cv=hyperparameter_cv, n_jobs=-1)
+
     all_y_test = []
     all_y_pred = []
     all_mse = []
     all_shap_prices = []
     fold = 1
-    
     for train_idx, test_idx in model_evaluation_cv.split(X):
         log_and_print('----------------------------------')
         log_and_print(f'Training fold [{fold}/{cv}]:')
@@ -231,6 +227,7 @@ def run_XGBoost_pipeline(
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
         grid_search.fit(X_train, y_train)
+        best_model = grid_search.best_estimator_
 
         y_pred = best_model.predict(X_test)
 

@@ -136,7 +136,7 @@ def prune_trees(X, y, pat_ids, init_params, output_path):
             init_params, pd.DataFrame
         ):  # Retrieve previously optimized parameters for this LOOCV iteration
             init_params_temp = init_params.iloc[i].to_dict()
-            init_params_temp.pop("left_out_PatId")  # Remove non-model parameter
+            init_params_temp.pop("left_out_Pat_Id")  # Remove non-model parameter
         else:
             init_params_temp = init_params
 
@@ -164,7 +164,7 @@ def prune_trees(X, y, pat_ids, init_params, output_path):
         # Store the best number of estimators along with the left-out PatId
         best_params = init_params_temp.copy()
         best_params["n_estimators"] = best_n_estimators
-        best_params["left_out_PatId"] = left_out_pat_id
+        best_params["left_out_Pat_Id"] = left_out_pat_id
         best_params_list.append(best_params)
 
     # Save the final best parameters to a CSV file
@@ -215,7 +215,7 @@ def tune_nested_cross_validation(
         # Retrieve previously optimized parameters for this LOOCV iteration
         previous_params = initial_best_params_df.iloc[i].to_dict()
         previous_loss = previous_params.get("mse", 2)
-        previous_params.pop("left_out_PatId")  # Remove non-model parameter
+        previous_params.pop("left_out_Pat_Id")  # Remove non-model parameter
         previous_params.pop("mse", None)
         previous_params.pop("pearson", None)
 
@@ -331,8 +331,8 @@ if __name__ == "__main__":
         warnings.simplefilter(
             "ignore", category=RuntimeWarning
         )  # Replace RuntimeWarning with the specific category
-        folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
-        #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
+        #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+        folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
         decode = "/bdi_hparams"
         result_path = folder_path + "/results"
         target = "BDI_diff"
@@ -374,7 +374,7 @@ if __name__ == "__main__":
 
         X = m_df[predictors].values
         y = m_df[target].values
-        pat_ids = m_df["Pat_ID"].values  # Extracting PatId
+        pat_ids = m_df[IDcol].values  # Extracting PatId
         ITERATIONS = 300
         FIRST_PRUNING_PATH = result_path + decode + "/first_pruning.csv"
 
