@@ -45,6 +45,7 @@ from hyperopt import hp, fmin, tpe, Trials, STATUS_OK, rand
 from hyperopt.pyll import scope
 from scipy.stats import zscore
 import warnings
+import os
 
 
 # Define the objective function for hyperparameter tuning
@@ -317,7 +318,7 @@ def tune_nested_cross_validation(
         columns=exclude_columns, errors="ignore"
     )
     best_params_df = pd.merge(
-        best_params_df, filtered_initial_best_params_df, on="left_out_PatId"
+        best_params_df, filtered_initial_best_params_df, on="left_out_Pat_Id"
     )
     best_params_df.to_csv(output_path, index=False)
 
@@ -330,13 +331,14 @@ if __name__ == "__main__":
         warnings.simplefilter(
             "ignore", category=RuntimeWarning
         )  # Replace RuntimeWarning with the specific category
-
-        folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
-        decode = "bdi"
+        folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+        #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
+        decode = "/bdi_hparams"
         result_path = folder_path + "/results"
         target = "BDI_diff"
-        IDcol = "PatID"
-
+        IDcol = "Pat_ID"
+        # Create the result_path + decode folder if it does not exist
+        os.makedirs(result_path + decode, exist_ok=True)
         m_df = pd.read_excel(folder_path + "/data/bdi_df.xlsx")
         # print df size before removal
         # print(m_df.shape)
@@ -372,7 +374,7 @@ if __name__ == "__main__":
 
         X = m_df[predictors].values
         y = m_df[target].values
-        pat_ids = m_df["PatID"].values  # Extracting PatId
+        pat_ids = m_df["Pat_ID"].values  # Extracting PatId
         ITERATIONS = 300
         FIRST_PRUNING_PATH = result_path + decode + "/first_pruning.csv"
 
@@ -477,7 +479,7 @@ if __name__ == "__main__":
         forth_best_params_df["learning_rate"] = (
             forth_best_params_df["learning_rate"] / 2
         )
-        FINAL_BEST_PATH = result_path + decode + "/final_best_parameters_with_patid.csv"
+        FINAL_BEST_PATH = result_path + decode + "/XGBoost_hparams.csv"
         final_best_params_df = prune_trees(
             X, y, pat_ids, forth_best_params_df, FINAL_BEST_PATH
         )
