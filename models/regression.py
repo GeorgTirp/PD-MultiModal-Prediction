@@ -13,17 +13,6 @@ from scipy import stats
 import os
 
 
-def model_specific_preprocess(data_df: pd.DataFrame, Feature_Selection: dict) -> Tuple:
-        """ Preprocess the data for the TabPFN model"""
-        # Ensure all features are numeric
-        data_df = data_df.dropna(subset=Feature_Selection['features'] + [Feature_Selection['target']])
-        X = data_df[Feature_Selection['features']]
-        y = data_df[Feature_Selection['target']]
-        X = X.fillna(X.mean())
-        # Z-score normalization
-        #X = (X - X.mean()) / X.std()
-        return X, y
-
 class RegressionModels:
     """ Fit, evaluate, and get attributions regression models (current: Random Forest and Linear Regression)"""
     def __init__(
