@@ -244,9 +244,3 @@ if __name__ == "__main__":
         identifier, 
         n_top_features)
     
-    model.fit()
-    X, y = model.model_specific_preprocess(data_df, Feature_Selection)
-    preds = model.predict(X, y, save_results=True)
-    metrics = model.evaluate()
-    importances = model.feature_importance(10)
-    model.plot()
