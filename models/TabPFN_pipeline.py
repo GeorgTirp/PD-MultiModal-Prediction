@@ -119,8 +119,8 @@ class TabPFNRegression():
                 X_test_loco = X_test.drop(columns=[feature])
 
                 # Train the model and get predictions
-                self.reg_model.fit(X_train_loco, y_train)
-                loco_pred = self.reg_model.predict(X_test_loco)
+                self.model.fit(X_train_loco, y_train)
+                loco_pred = self.model.predict(X_test_loco)
 
                 # Compute the MSE and store the importance
                 loco_mse = mean_squared_error(y_test, loco_pred)
@@ -140,19 +140,19 @@ class TabPFNRegression():
             shap.initjs()
 
              # Create KernelExplainer with a small background sample
-            background = shap.sample(X_train, 20)  # Sample a small background set
-            explainer = shap.KernelExplainer(lambda x: model.predict(pd.DataFrame(x, columns=X_train.columns)), X_train, background)
+            background = shap.sample(self.X, 20)  # Sample a small background set
+            explainer = shap.KernelExplainer(lambda x: model.predict(pd.DataFrame(x, columns=self.X.columns)), self.X, background)
 
             # Define batch size
             batch_size = 5
-            num_samples = len(X_test)
+            num_samples = len(self.X)
 
             # Store results
             all_shap_values = []
 
             # Loop through test data in batches
             for i in range(0, num_samples, batch_size):
-                batch = X_test[i:i+batch_size]  # Select a batch of test points
+                batch = self.X[i:i+batch_size]  # Select a batch of test points
                 shap_values_batch = explainer.shap_values(batch, nsamples=300)  # Compute SHAP for batch
                 all_shap_values.append(shap_values_batch)  # Store results
 
@@ -180,7 +180,7 @@ class TabPFNRegression():
         logging.info("SHAP importance evaluation completed.")
     
         logging.info("Evaluating LOCO feature importances...")
-        loco_attributions = loco_importances()
+        loco_attributions = loco_importances(X_train, y_test)
         logging.info("LOCO importance evaluation completed.")
     
         # Save results if specified
