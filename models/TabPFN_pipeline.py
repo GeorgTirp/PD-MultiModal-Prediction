@@ -205,9 +205,9 @@ class TabPFNRegression():
                 verticalalignment='top', 
                 bbox=dict(facecolor='white', 
                 alpha=0.5))
-        plt.xlabel('Actual prices')
-        plt.ylabel('Predicted prices')
-        plt.title(f'Actual vs Predicted prices ({self.identifier})')
+        plt.xlabel('Actual BDI Difference')
+        plt.ylabel('Predicted BDI Difference')
+        plt.title(f'Actual vs Predicted BDI Difference ({self.identifier})')
         plt.grid(True)
         plt.savefig(f'{self.save_path}/{self.identifier}_actual_vs_predicted.png')
         plt.show()
@@ -232,4 +232,5 @@ if __name__ == "__main__":
     preds = model.predict(X, save_results=True)
     metrics = model.evaluate()
     importances = model.feature_importance()
+    model.plot()
     
