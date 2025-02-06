@@ -139,18 +139,25 @@ class TabPFNRegression():
             # Initialize SHAP
             shap.initjs()
 
-            # Sample background data
-            background_data = self.X.sample(25, random_state=42)
-            logging.info("Background data for SHAP initialized.")
+             # Create KernelExplainer with a small background sample
+            background = shap.sample(X_train, 20)  # Sample a small background set
+            explainer = shap.KernelExplainer(lambda x: model.predict(pd.DataFrame(x, columns=X_train.columns)), X_train, background)
 
-            # Initialize SHAP Explainer
-            shap_values = []
-            explainer = shap.KernelExplainer(self.model.predict, background_data)
-            for row in tqdm(self.X.itertuples(index=False), total=len(self.X), desc="Computing SHAP values"):
-                row_shap = explainer.shap_values(pd.DataFrame([row], columns=self.X.columns))
-                shap_values.append(row_shap)
-            # Convert list of arrays to a single array
-            shap_values = np.array(shap_values).squeeze()
+            # Define batch size
+            batch_size = 5
+            num_samples = len(X_test)
+
+            # Store results
+            all_shap_values = []
+
+            # Loop through test data in batches
+            for i in range(0, num_samples, batch_size):
+                batch = X_test[i:i+batch_size]  # Select a batch of test points
+                shap_values_batch = explainer.shap_values(batch, nsamples=300)  # Compute SHAP for batch
+                all_shap_values.append(shap_values_batch)  # Store results
+
+            # Concatenate results into a single array
+            shap_values = np.concatenate(all_shap_values, axis=0)
             # Plot SHAP summary
 
             # Plot aggregated SHAP values (Feature impact)
