@@ -17,7 +17,7 @@ from tqdm import tqdm
 import torch
 from scipy.stats import pearsonr
 import os
-from sklearn import KFold
+from sklearn.model_selection import KFold
 
 
 class TabPFNRegression():
