@@ -17,6 +17,7 @@ from tqdm import tqdm
 import torch
 from scipy.stats import pearsonr
 import os
+from sklearn import KFold
 
 
 class TabPFNRegression():
@@ -51,7 +52,9 @@ class TabPFNRegression():
         # Remove dollar sign and convert to float
         if y.dtype == object:
             y = y.replace('[\$,]', '', regex=True).astype(float)
-    
+
+        # Z-score normalization for the target variable y
+        y = (y - y.mean()) / y.std()
         return X, y
     
     def fit(self) -> None:
@@ -80,11 +83,26 @@ class TabPFNRegression():
         """ Evaluate the models using mean squared error, r2 score and cross validation"""
         X_train, X_test, y_train, y_test = self.train_split
 
-        pred = self.model.predict(X_test)
-        mse = mean_squared_error(y_test, pred)
-        r2, p_price = pearsonr(y_test, pred)
-        
-        # Cross-validation for Random Forest
+        # Cross-validation for TabPFN
+        kf = KFold(n_splits=5, shuffle=True, random_state=42)
+        cv_p_values = []
+        cv_r2_scores = []
+
+        for train_index, val_index in kf.split(self.X):
+            X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
+            y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
+            self.model.fit(X_train_kf, y_train_kf)
+            pred = self.model.predict(X_val_kf)
+            mse = mean_squared_error(y_val_kf, pred)
+            r2, p = pearsonr(y_val_kf, pred)
+
+            cv_p_values.append(p)
+            cv_r2_scores.append(r2)
+
+        avg_cv_mse = np.mean(cv_p_values)
+        avg_cv_r2 = np.mean(cv_r2_scores)
+
+        print(f"Average CV MSE: {avg_cv_mse}, Average CV R2: {avg_cv_r2}")
         #reg_cv_scores = cross_val_score(self.reg_model, X_train, y_train, cv=10, scoring='accuracy')
         #reg_cv_mean_score = reg_cv_scores.mean()
 
@@ -231,6 +249,6 @@ if __name__ == "__main__":
     X, y = model.model_specific_preprocess(data_df, Feature_Selection)
     preds = model.predict(X, save_results=True)
     metrics = model.evaluate()
-    importances = model.feature_importance()
+    #importances = model.feature_importance()
     model.plot()
     
