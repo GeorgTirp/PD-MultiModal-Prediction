@@ -53,12 +53,12 @@ def plot_results(results_df, r_score, p_value ,save_results=False, save_path='re
     plt.text(
         results_df['y_test'].min(), 
         results_df['y_pred'].max(), 
-        f'R^2: {r_score:.2f}\nP-value: {p_value:.2e}', 
+        f'R: {r_score:.2f}\nP-value: {p_value:.2e}', 
         fontsize=12, verticalalignment='top', 
         bbox=dict(facecolor='white', alpha=0.5))
-    plt.xlabel('Groundtruth BDI diff score')
-    plt.ylabel('Predicted BDI diff score')
-    plt.title(f'Actual vs Predicted prices ({identifier})')
+    plt.xlabel('Actual BDI Ratio')
+    plt.ylabel('Predicted BDI Ratio')
+    plt.title(f'Actual vs Predicted ({identifier})')
     plt.grid(True)
     plt.savefig(f'{save_path}/{identifier}_actual_vs_predicted.png')
     plt.close()
@@ -157,6 +157,11 @@ def run_XGBoost_pipeline(
     # Remove correlated features
     X = remove_correlated_features(X, correlation_threshold)
 
+    # Drop the 'Pat_ID' column if it exists
+    if 'Pat_ID' in X.columns:
+        X = X.drop(columns=['Pat_ID'])
+        log_and_print('Dropped column: Pat_ID')
+
     log_and_print('Features:')
     log_and_print(X.head())
     log_and_print('----------------------------------')
@@ -196,11 +201,11 @@ def run_XGBoost_pipeline(
 
     #XGBoost hyperparameters grid    
     param_grid_xgb = {
-        'n_estimators': [150, 200, 500, 1000, 50],
-        'learning_rate': [0.001, 0.01, 0.1, 0.2],
-        'max_depth': [5, 6, 7, 8, 9, 10],
-        'subsample': [0.6, 0.8, 1.0],
-        'colsample_bytree': [0.6, 0.8, 1.0]
+        'n_estimators': [150, 200, 300, 100, 50],
+        'learning_rate': [0.001, 0.01, 0.1],
+        'max_depth': [3, 5, 6, 7, 8, 4],
+        'subsample': [0.9, 0.8, 1.0],
+        'colsample_bytree': [0.9, 0.8, 1.0]
     }
 
     # log_and_print the Hyperparamer grid

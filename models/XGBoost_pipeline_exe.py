@@ -5,16 +5,16 @@ from XGBoost_pipeline import run_XGBoost_pipeline
 
 
 #######-- Set the parameters for the analysis --#######
-#folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
-folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
+folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+#folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
 # Preprocessed data
-data = folder_path + "/data/bdi_df.csv"
+data = folder_path + "/data/bdi_df_normalized.csv"
 
 #
 #external_tuned_hparams = pd.read_csv(folder_path +"/results/bdi_haparams/XGBoost_hparams.csv").to_dict(orient='records')[0]
 external_tuned_hparams = None
 # Name of the variable to predict in the data table
-target = 'BDI_diff'
+target = 'BDI_ratio'
 
 
 # Name of the variables to use for the prediction

@@ -331,8 +331,8 @@ if __name__ == "__main__":
         warnings.simplefilter(
             "ignore", category=RuntimeWarning
         )  # Replace RuntimeWarning with the specific category
-        #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
-        folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
+        folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+        #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
         decode = "/bdi_hparams"
         result_path = folder_path + "/results"
         target = "BDI_diff"

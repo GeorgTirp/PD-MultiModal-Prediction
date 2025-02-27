@@ -17,6 +17,7 @@ import shap
 import logging
 from tqdm import tqdm
 from scipy.stats import pearsonr
+from sklearn.model_selection import KFold
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -53,20 +54,14 @@ class BaseRegressionModel:
         y = data_df[self.feature_selection['target']]
         X = X.fillna(X.mean())
         X = X.apply(pd.to_numeric, errors='coerce')
-        if y.dtype == object:
-            y = y.replace('[\$,]', '', regex=True).astype(float)
         logging.info("Finished model-specific preprocessing.")
         # Z-score normalization for numerical features
-        numerical_features = X.select_dtypes(include=[np.number]).columns
-        X[numerical_features] = X[numerical_features].apply(stats.zscore)
+        print(len(X), len(y))
         return X, y
 
     def predict(self, X: pd.DataFrame, y: pd.DataFrame = None, save_results=False) -> np.ndarray:
         """ Predict using the trained model"""
         logging.info("Starting prediction...")
-        nan_counts = X.isna().sum()
-        logging.info("NaN counts per column:")
-        logging.info(nan_counts)
         pred = self.model.predict(X)
         
         if save_results:
@@ -75,31 +70,44 @@ class BaseRegressionModel:
         logging.info("Finished prediction.")
         return pred
 
-    def evaluate(self) -> Dict:
+    def evaluate(self, n_splits) -> Dict:
         """ Evaluate the model using mean squared error, r2 score and cross validation"""
         logging.info("Starting model evaluation...")
-        X_train, X_test, y_train, y_test = self.train_split
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+        cv_p_values = []
+        cv_r2_scores = []
 
-        pred = self.model.predict(X_test)
-        mse = mean_squared_error(y_test, pred)
-        r2, p_price = pearsonr(y_test, pred)
+        for train_index, val_index in kf.split(self.X):
+            X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
+            y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
+            self.model.fit(X_train_kf, y_train_kf)
+            pred = self.model.predict(X_val_kf)
+            mse = mean_squared_error(y_val_kf, pred)
+            r2, p = pearsonr(y_val_kf, pred)
 
-        logging.info(f"{self.identifier} MSE: {mse}, R2: {r2}")
-        logging.info(f"{self.identifier} P_value: {p_price}")
+            cv_p_values.append(p)
+            cv_r2_scores.append(r2)
+
+        p_value = np.mean(cv_p_values)
+        r2 = np.mean(cv_r2_scores)
+
 
         metrics = {
             'mse': mse,
             'r2': r2,
-            'p_value': p_price
+            'all_r2' : cv_r2_scores,
+            'p_value': p_value
         }
+
         self.metrics = metrics
         metrics_df = pd.DataFrame([metrics])
         metrics_df.to_csv(f'{self.save_path}/{self.identifier}_metrics.csv', index=False)
         logging.info("Finished model evaluation.")
         return metrics
 
-    def feature_importance(self, top_n: int = 10, save_results=True) -> Dict:
+    def feature_importance(self, top_n: int = 10, batch_size=None, save_results=True) -> Dict:
         """ Return the feature importance for the model"""
+        del batch_size
         logging.info("Starting feature importance evaluation...")
         if hasattr(self.model, 'feature_importances_'):
             attribution = self.model.feature_importances_
@@ -135,7 +143,7 @@ class BaseRegressionModel:
             shap_values = explainer.shap_values(self.X)
         
         # Plot aggregated SHAP values (Feature impact)
-        shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=40)
+        shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=top_n)
         plt.title(f'{self.identifier} SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
@@ -149,7 +157,7 @@ class BaseRegressionModel:
         logging.info("Finished feature importance evaluation.")
         return top_features
 
-    def plot(self) -> None:
+    def plot(self, title) -> None:
         """ Plot feature importances"""
         results_df = pd.read_csv(f'{self.save_path}/{self.identifier}_results.csv')
         plt.figure(figsize=(10, 6))
@@ -159,14 +167,14 @@ class BaseRegressionModel:
                  color='red', linestyle='--', linewidth=2)
         plt.text(results_df['y_test'].min(), 
                 results_df['y_pred'].max(), 
-                f'R^2: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.2e}', 
+                f'R: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.2e}', 
                 fontsize=12, 
                 verticalalignment='top', 
                 bbox=dict(facecolor='white', 
                 alpha=0.5))
-        plt.xlabel('BDI Differnce')
-        plt.ylabel('Predicted BDI Differnce')
-        plt.title(f'Actual vs Predicted prices ({self.identifier})')
+        plt.xlabel('BDI Ratio')
+        plt.ylabel('Predicted BDI Ratio')
+        plt.title(title)
         plt.grid(True)
         plt.savefig(f'{self.save_path}/{self.identifier}_actual_vs_predicted.png')
         plt.show()
@@ -219,11 +227,11 @@ class RandomForestModel(BaseRegressionModel):
 if __name__ == "__main__":
     logging.info("Starting main execution...")
     folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
-    data_df = pd.read_csv(folder_path + "/data/bdi_df.csv")
+    data_df = pd.read_csv(folder_path + "/data/bdi_df_normalized.csv")
     data_df = data_df.drop(columns=['Pat_ID'])
     test_split_size= 0.2
     Feature_Selection = {}
-    Feature_Selection['target'] = 'BDI_diff'
+    Feature_Selection['target'] = 'BDI_ratio'
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
     safe_path_linear= folder_path + "/results/LinearRegression"
     if not os.path.exists(safe_path_linear):
@@ -249,10 +257,10 @@ if __name__ == "__main__":
         identifier_linear, 
         n_top_features)
     linear_model.fit()
-    linear_preds = linear_model.predict(linear_model.train_split[1], linear_model.train_split[3], save_results=True)
-    linear_metrics = linear_model.evaluate()
-    linear_importances = linear_model.feature_importance(10)
-    linear_model.plot()
+    linear_preds = linear_model.predict(linear_model.X, linear_model.y, save_results=True)
+    linear_metrics = linear_model.evaluate(n_splits=10)
+    linear_importances = linear_model.feature_importance(19)
+    linear_model.plot("Actual vs. Prediction (Linear Regression)")
 
     # Random Forest Model
     rf_model = RandomForestModel(
@@ -264,10 +272,10 @@ if __name__ == "__main__":
         identifier_rf, 
         n_top_features)
     rf_model.fit()
-    rf_preds = rf_model.predict(rf_model.train_split[1], rf_model.train_split[3], save_results=True)
-    rf_metrics = rf_model.evaluate()
-    rf_importances = rf_model.feature_importance(10)
-    rf_model.plot()
+    rf_preds = rf_model.predict(rf_model.X, rf_model.y, save_results=True)
+    rf_metrics = rf_model.evaluate(n_splits=10)
+    rf_importances = rf_model.feature_importance(19)
+    rf_model.plot("Actual vs. Prediction (Random Forest)")
 
    
     logging.info("Finished main execution.")

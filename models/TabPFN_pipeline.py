@@ -3,10 +3,9 @@ from tabpfn import TabPFNClassifier
 from tabpfn import TabPFNRegressor
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import KFold
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score
 from sklearn.model_selection import cross_val_score
 from typing import Tuple, Dict
@@ -17,7 +16,6 @@ from tqdm import tqdm
 import torch
 from scipy.stats import pearsonr
 import os
-from sklearn.model_selection import KFold
 
 
 class TabPFNRegression():
@@ -50,17 +48,14 @@ class TabPFNRegression():
         y = data_df[Feature_Selection['target']]
         X = X.apply(pd.to_numeric, errors='coerce')
         # Remove dollar sign and convert to float
-        if y.dtype == object:
-            y = y.replace('[\$,]', '', regex=True).astype(float)
-
-        # Z-score normalization for the target variable y
-        y = (y - y.mean()) / y.std()
+        
         return X, y
     
     def fit(self) -> None:
         """ Train and predict using Linear Regression and Random Forest"""
+        X_train, X_test, y_train, y_test = self.train_split
         reg = TabPFNRegressor()
-        reg.fit(self.X, self.y)
+        reg.fit(X_train, y_train)
         self.model = reg
         return self.model
        
@@ -79,12 +74,11 @@ class TabPFNRegression():
 
         return predictions
 
-    def evaluate(self) -> Tuple:
+    def evaluate(self, n_splits) -> Tuple:
         """ Evaluate the models using mean squared error, r2 score and cross validation"""
-        X_train, X_test, y_train, y_test = self.train_split
 
         # Cross-validation for TabPFN
-        kf = KFold(n_splits=5, shuffle=True, random_state=42)
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
         cv_p_values = []
         cv_r2_scores = []
 
@@ -99,20 +93,16 @@ class TabPFNRegression():
             cv_p_values.append(p)
             cv_r2_scores.append(r2)
 
-        avg_cv_mse = np.mean(cv_p_values)
-        avg_cv_r2 = np.mean(cv_r2_scores)
-
-        print(f"Average CV MSE: {avg_cv_mse}, Average CV R2: {avg_cv_r2}")
-        #reg_cv_scores = cross_val_score(self.reg_model, X_train, y_train, cv=10, scoring='accuracy')
-        #reg_cv_mean_score = reg_cv_scores.mean()
+        p_value = np.mean(cv_p_values)
+        r2 = np.mean(cv_r2_scores)
 
         print(f"TabPFN MSE: {mse}, R2: {r2}")
-        print(f"TabPFN R^2: {r2}")
     
         tabpfn_metrics = {
             'mse': mse,
             'r2': r2,
-            'p_value': p_price
+            'all_r2' : cv_r2_scores,
+            'p_value': p_value
         }
         self.metrics = tabpfn_metrics
 
@@ -120,7 +110,7 @@ class TabPFNRegression():
     
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
-    def feature_importance(self, save_results=True) -> Dict:
+    def feature_importance(self, top_n: int = 10, batch_size=10, save_results=True) -> Dict:
         """Return the feature importance for the Random Forest and linear model"""
         logging.info("Starting feature importance evaluation.")
 
@@ -151,18 +141,18 @@ class TabPFNRegression():
             logging.info("Finished Loco importance evaluation.")
             return importances
 
-        def shap_importances():
+        def shap_importances(batch_size):
             logging.info("Starting SHAP importance evaluation...")
 
             # Initialize SHAP
             shap.initjs()
 
-             # Create KernelExplainer with a small background sample
+            # Create KernelExplainer with a small background sample
             background = shap.sample(self.X, 20)  # Sample a small background set
             explainer = shap.KernelExplainer(lambda x: model.predict(pd.DataFrame(x, columns=self.X.columns)), self.X, background)
 
             # Define batch size
-            batch_size = 5
+            batch_size
             num_samples = len(self.X)
 
             # Store results
@@ -176,14 +166,16 @@ class TabPFNRegression():
 
             # Concatenate results into a single array
             shap_values = np.concatenate(all_shap_values, axis=0)
+            print(shap_values.shape)
             # Plot SHAP summary
 
             # Plot aggregated SHAP values (Feature impact)
-            shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=40)
+            shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=top_n)
             plt.title(f'{self.identifier} SHAP Summary Plot (Aggregated)', fontsize=16)
             if save_results:
                 plt.subplots_adjust(top=0.90)
                 plt.savefig(f'{self.save_path}/{self.identifier}_shap_aggregated_beeswarm.png')
+                plt.show()
                 plt.close()
                 shap.summary_plot(shap_values, self.X, plot_type="bar", show=False)
                 plt.savefig(f'{self.save_path}/{self.identifier}_shap_aggregated_bar.png')
@@ -194,11 +186,11 @@ class TabPFNRegression():
 
         # Run Loco and SHAP importance evaluations
         logging.info("Evaluating SHAP feature importances...")
-        shap_attributions = shap_importances()
+        shap_attributions = shap_importances(batch_size)
         logging.info("SHAP importance evaluation completed.")
     
         logging.info("Evaluating LOCO feature importances...")
-        loco_attributions = loco_importances(X_train, y_test)
+        loco_attributions = loco_importances(X_train,y_test)
         logging.info("LOCO importance evaluation completed.")
     
         # Save results if specified
@@ -208,7 +200,7 @@ class TabPFNRegression():
     
         return loco_attributions, shap_attributions
 
-    def plot(self):
+    def plot(self, title):
         """ Plot """
         results_df = pd.read_csv(f'{self.save_path}/{self.identifier}_results.csv')
         plt.figure(figsize=(10, 6))
@@ -218,27 +210,28 @@ class TabPFNRegression():
                  color='red', linestyle='--', linewidth=2)
         plt.text(results_df['y_test'].min(), 
                 results_df['y_pred'].max(), 
-                f'R^2: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.2e}', 
+                f'R: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.2e}', 
                 fontsize=12, 
                 verticalalignment='top', 
                 bbox=dict(facecolor='white', 
                 alpha=0.5))
-        plt.xlabel('Actual BDI Difference')
-        plt.ylabel('Predicted BDI Difference')
-        plt.title(f'Actual vs Predicted BDI Difference ({self.identifier})')
+        plt.xlabel('Actual BDI Ratio')
+        plt.ylabel('Predicted BDI Ratio')
+        plt.title(title)
         plt.grid(True)
         plt.savefig(f'{self.save_path}/{self.identifier}_actual_vs_predicted.png')
-        plt.show()
         plt.close()
+
+
 
 if __name__ == "__main__":
        #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
     folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
     data_df = pd.read_csv(folder_path + "/data/bdi_df.csv")
     data_df = data_df.drop(columns=['Pat_ID'])
-    test_split_size= 0.2
+    test_split_size = 0.2
     Feature_Selection = {}
-    Feature_Selection['target'] = 'BDI_diff'
+    Feature_Selection['target'] = 'BDI_ratio'
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
     safe_path = folder_path + "/results/TabPFN"
     identifier = "bdi"
@@ -248,7 +241,8 @@ if __name__ == "__main__":
     model.fit()
     X, y = model.model_specific_preprocess(data_df, Feature_Selection)
     preds = model.predict(X, save_results=True)
-    metrics = model.evaluate()
-    #importances = model.feature_importance()
-    model.plot()
+    metrics = model.evaluate(n_splits=10)
+    model.plot("Actual vs. Prediction (TabPFN)")
+    #importances = model.feature_importance(batch_size=10)
+    
     
