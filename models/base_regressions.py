@@ -70,33 +70,40 @@ class BaseRegressionModel:
         logging.info("Finished prediction.")
         return pred
 
-    def evaluate(self, n_splits) -> Dict:
+    def evaluate(self, n_splits, folds=10) -> Dict:
         """ Evaluate the model using mean squared error, r2 score and cross validation"""
         logging.info("Starting model evaluation...")
-        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+        # Cross-validation for TabPFN
+        kf = KFold(n_splits=folds, shuffle=True, random_state=42)
         cv_p_values = []
         cv_r2_scores = []
-
+        preds = []
+        y_vals = []
         for train_index, val_index in kf.split(self.X):
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
             self.model.fit(X_train_kf, y_train_kf)
             pred = self.model.predict(X_val_kf)
             mse = mean_squared_error(y_val_kf, pred)
-            r2, p = pearsonr(y_val_kf, pred)
-
+            r, p = pearsonr(y_val_kf, pred)
+            r2 = r**2
             cv_p_values.append(p)
             cv_r2_scores.append(r2)
+            preds.append(pred)
+            y_vals.append(y_val_kf)
 
-        p_value = np.mean(cv_p_values)
-        r2 = np.mean(cv_r2_scores)
+        preds = np.concatenate(preds)
+        y_vals = np.concatenate(y_vals)
 
+        avg_cv_mse = np.mean(cv_p_values)
+        avg_cv_r2 = np.mean(cv_r2_scores)
 
         metrics = {
-            'mse': mse,
-            'r2': r2,
-            'all_r2' : cv_r2_scores,
-            'p_value': p_value
+            'mse': avg_cv_mse,
+            'r2': avg_cv_r2,
+            'p_value': p,
+            'y_pred': preds,
+            'y_test': y_vals
         }
 
         self.metrics = metrics
@@ -161,13 +168,13 @@ class BaseRegressionModel:
         """ Plot feature importances"""
         results_df = pd.read_csv(f'{self.save_path}/{self.identifier}_results.csv')
         plt.figure(figsize=(10, 6))
-        plt.scatter(results_df['y_test'], results_df['y_pred'], alpha=0.5)
-        plt.plot([results_df['y_test'].min(), results_df['y_test'].max()], 
-                 [results_df['y_test'].min(), results_df['y_test'].max()], 
+        plt.scatter(self.metrics['y_test'], self.metrics['y_pred'], alpha=0.5)
+        plt.plot([self.metrics['y_test'].min(), self.metrics['y_test'].max()], 
+                 [self.metrics['y_test'].min(), self.metrics['y_test'].max()], 
                  color='red', linestyle='--', linewidth=2)
-        plt.text(results_df['y_test'].min(), 
-                results_df['y_pred'].max(), 
-                f'R: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.2e}', 
+        plt.text(self.metrics['y_test'].min(), 
+                self.metrics['y_pred'].max(), 
+                f'R^2: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.2e}', 
                 fontsize=12, 
                 verticalalignment='top', 
                 bbox=dict(facecolor='white', 
@@ -226,7 +233,8 @@ class RandomForestModel(BaseRegressionModel):
 
 if __name__ == "__main__":
     logging.info("Starting main execution...")
-    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+    folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction" # Gets directory of current script
     data_df = pd.read_csv(folder_path + "/data/bdi_df_normalized.csv")
     data_df = data_df.drop(columns=['Pat_ID'])
     test_split_size= 0.2
