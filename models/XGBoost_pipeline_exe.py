@@ -5,8 +5,9 @@ from XGBoost_pipeline import run_XGBoost_pipeline
 
 
 #######-- Set the parameters for the analysis --#######
-folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+#folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
 #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
+folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
 # Preprocessed data
 data = folder_path + "/data/bdi_df_normalized.csv"
 
