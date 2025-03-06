@@ -85,8 +85,8 @@ class BaseRegressionModel:
             self.model.fit(X_train_kf, y_train_kf)
             pred = self.model.predict(X_val_kf)
             mse = mean_squared_error(y_val_kf, pred)
-            r, p = pearsonr(y_val_kf, pred)
-            r2 = r**2
+            r2, p = pearsonr(y_val_kf, pred)
+            #r2 = r**2
             cv_p_values.append(p)
             cv_r2_scores.append(r2)
             preds.append(pred)
@@ -174,17 +174,17 @@ class BaseRegressionModel:
                  color='red', linestyle='--', linewidth=2)
         plt.text(self.metrics['y_test'].min(), 
                 self.metrics['y_pred'].max(), 
-                f'R^2: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.2e}', 
+                f'R: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.2e}', 
                 fontsize=12, 
                 verticalalignment='top', 
                 bbox=dict(facecolor='white', 
                 alpha=0.5))
-        plt.xlabel('BDI Ratio')
-        plt.ylabel('Predicted BDI Ratio')
+        plt.xlabel('BDI Efficacy')
+        plt.ylabel('Predicted BDI Efficacy')
         plt.title(title)
         plt.grid(True)
         plt.savefig(f'{self.save_path}/{self.identifier}_actual_vs_predicted.png')
-        plt.show()
+        #plt.show()
         plt.close()
 
 class LinearRegressionModel(BaseRegressionModel):
@@ -239,7 +239,7 @@ if __name__ == "__main__":
     data_df = data_df.drop(columns=['Pat_ID'])
     test_split_size= 0.2
     Feature_Selection = {}
-    Feature_Selection['target'] = 'BDI_ratio'
+    Feature_Selection['target'] = 'BDI_efficacy'
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
     safe_path_linear= folder_path + "/results/LinearRegression"
     if not os.path.exists(safe_path_linear):
@@ -251,7 +251,7 @@ if __name__ == "__main__":
     identifier_rf = "bdi"
     RandomForest_Hparams = {
         'n_estimators': 100,
-        'max_depth': 10,
+        'max_depth': 6,
         'random_state': 42
     }
     n_top_features = 15

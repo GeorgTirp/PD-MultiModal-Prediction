@@ -70,25 +70,24 @@ def plot_stim_positions(positions: pd.DataFrame, safe_path: str = "") -> None:
 
 def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, safe_path: str = "") -> None:
     """Create a refined raincloud plot using seaborn for better aesthetics."""
-    fig, ax = plt.subplots(figsize=(6, 6))
+    sns.set_theme(style="white", context="paper")
+    fig, ax = plt.subplots(figsize=(7, 7))
     
     # Prepare data
     data_list = [data[col].dropna().values for col in data.columns]
     x_positions = np.arange(1, len(data_list) + 1)
     
     # Define colors based on modality
-    if modality_name == "UPDRS":
-        boxplots_colors = ['#FFCA3A', '#8AC926', '#1982C4']
-        violin_colors = ['#FFCA3A', '#8AC926', '#1982C4']
-        scatter_colors = ['#FF595E', '#FF595E', '#FF595E']
-    else:
-        boxplots_colors = ['#FFCA3A', '#8AC926']
-        violin_colors = ['#FFCA3A', '#8AC926', ]
-        scatter_colors = ['#FF595E', '#FF595E',]
+
+    boxplots_colors = sns.color_palette("deep")
+    violin_colors = sns.color_palette("deep")
+    scatter_color = 'black'
     
+    # color palette from DL project:
+    #custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
     # Set width parameters
-    box_width = 0.8
-    violin_width = 0.6
+    box_width = 0.15
+    violin_width = 0.5
     violin_shift = box_width / 2  # Align violin to inner edge of boxplot
 
     # Violin plot (half-violin) aligned to boxplot
@@ -101,19 +100,45 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
             color=violin_colors[idx],
             ax=ax,
             width=violin_width,
-            split=True
+            #split=False
         )
-
-        # Adjust the position of the violin plot
-        for collection in ax.collections[-1:]:  # Get the last added violin
+        for collection in ax.collections[-1:]:
+            if not isinstance(collection, PolyCollection):
+                continue  # skip non-violin objects
             for path in collection.get_paths():
-                path.vertices[:, 0] += (x - violin_shift)  # Shift violin
+                verts = path.vertices
+                mean_x = np.mean(verts[:, 0])
+                
+                if modality_name == "MDS-UPDRS III":
+                    #
+                    # Keep your existing "all-same-side" logic here.
+                    # For simplicity, let's do "left half" for all.
+                    #
+                    verts[:, 0] = np.clip(verts[:, 0], -np.inf, mean_x)
+                    # Shift everything to x - violin_shift
+                    shift_amount = x - violin_shift
 
+                else:
+                    # We have 2 columns. For idx=0 => left half, idx=1 => right half
+                    if idx == 0:
+                        # Clip to left half
+                        verts[:, 0] = np.clip(verts[:, 0], -np.inf, mean_x)
+                        # Shift to left
+                        shift_amount = x - violin_shift
+                    else:
+                        # Clip to right half
+                        verts[:, 0] = np.clip(verts[:, 0], mean_x, np.inf)
+                        # Shift to right
+                        shift_amount = x + violin_shift
+
+                # Apply the shift
+                path.vertices[:, 0] += (shift_amount)
+        
     
     # Boxplot (make it slimmer)
     bp = sns.boxplot(
         data=data,
-        width=0.2,
+        width=box_width,
         showcaps=True,
         whiskerprops={'color': 'black'},
         medianprops={'color': 'black'},
@@ -123,26 +148,49 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
     for patch, color in zip(bp.artists, boxplots_colors):
         patch.set_facecolor(color)
         patch.set_alpha(0.5)
+   
     
     # Scatter plot (overlay on boxplot)
     for idx, (x, values) in enumerate(zip(x_positions, data_list)):
-        x_jitter = np.random.uniform(low=-0.05, high=0.05, size=len(values)) + x
-        ax.scatter(x_jitter, values, s=10, color=scatter_colors[idx], alpha=0.7)
-    
+        if modality_name == "BDI":
+            x_jitter = np.full(len(values), x)  # No jitter for BDI
+        else:
+            x_jitter = np.random.uniform(low=-0.005, high=0.05, size=len(values)) + x
+        ax.scatter(x_jitter, values, s=10, color=scatter_color , alpha=0.9, zorder=2)  # Set zorder to 2 to plot scatter points in front of boxplot
+        
+        # Draw lines for BDI modality
+        if modality_name == "BDI" and idx < len(x_positions) - 1:
+            next_values = data_list[idx + 1]
+            for i in range(len(values)):
+                if i < len(next_values):
+                    x_start, y_start = x_jitter[i], values[i]
+                    x_end, y_end = x_positions[idx + 1], next_values[i]
+                    slope = y_end - y_start
+                    if slope > 0:
+                        line_color = "red"
+                    elif slope < 0:
+                        line_color = "green"
+                    else:
+                        line_color = "grey"
+                    ax.add_line(Line2D([x_start, x_end], [y_start, y_end], color=line_color, alpha=0.4))
+
     # Labels
     ax.set_xticks(x_positions)
-    ax.set_xticklabels(features_list)
-    ax.set_ylabel(modality_name)
-    ax.set_title(f"{modality_name} Raincloud Plot")
-    
+    ax.set_xticklabels(features_list, fontsize=11)
+    ax.set_yticklabels([f'{int(tick)}' for tick in ax.get_yticks()], fontsize=10)
+    ax.set_ylabel(modality_name, fontsize=11)
+    ax.set_title(f"{modality_name} Raincloud Plot", fontsize=14)
+    ax.set_xlim(0.5, x_positions[-1] + 0.5)
+
     # Add legend for BDI
     if modality_name == "BDI":
-        line_colors = {"increase": "blue", "decrease": "red", "no change": "grey"}
+        line_colors = {"increase": "red", "decrease": "green", "no change": "grey"}
         legend_elements = [
-            Line2D([0], [0], color=line_colors["increase"], lw=2, label="Increase (Post > Pre)"),
-            Line2D([0], [0], color=line_colors["decrease"], lw=2, label="Decrease (Post < Pre)")
+            Line2D([0], [0], color=line_colors["increase"], lw=2, label="Deterioration"),
+            Line2D([0], [0], color=line_colors["decrease"], lw=2, label="Improvement"),
+            Line2D([0], [0], color=line_colors["no change"], lw=2, label="No change"),
         ]
-        ax.legend(handles=legend_elements, loc="upper right")
+        ax.legend(handles=legend_elements, loc="upper left")
     
     plt.savefig(safe_path + modality_name + "_raincloud_plot.png")
     plt.show()
@@ -164,7 +212,7 @@ def demographics_pre_post(modality_path: str, model_data_path: str, modality_nam
         data = data.drop(columns=['BDI_diff'])
         
 
-    if modality_name == "UPDRS":
+    if modality_name == "MDS-UPDRS III":
         data = data.rename(columns={'MDS_UPDRS_III_sum_pre': 'Pre', 'MDS_UPDRS_III_sum_post': 'Post'})
         data_pre_off = data[data['MEDICATION'] == 'OFF'].rename(columns={'Pre': 'Pre_OFF'})
         data_pre_on = data[data['MEDICATION'] == 'ON'].rename(columns={'Pre': 'Pre_ON'})
@@ -178,13 +226,31 @@ def demographics_pre_post(modality_path: str, model_data_path: str, modality_nam
         data = data.drop(columns=['OP_DATUM'])
 
     # Plotting demographic data before and after treatment
-    if modality_name == "UPDRS":
+    if modality_name == "MDS-UPDRS III":
         raincloud_plot(data, modality_name , ['Pre OFF', 'Pre ON', 'Post ON/Stim On'], save_path)
     else:
         raincloud_plot(data, modality_name , ['Pre', 'Post'], save_path)
     
     
-
+def histoplot(input_path: str , save_path: str) -> None:
+    """ Plot the demographic data before and after the treatment as raincloud plot"""
+    # Load the data
+    data = pd.read_csv(input_path)
+    sns.set_theme(style="white", context="paper")
+    sns.set_palette("deep")
+    # Create a figure with two subplots
+    plt.figure(figsize=(10, 6))
+    print(data['TimeSinceSurgery'].mean())
+    print(data['TimeSinceSurgery'].std())
+    sns.histplot(data['TimeSinceSurgery'], kde=True, bins=30, color='blue')
+    plt.title('Distribution of Time Since Surgery', fontsize=16)
+    plt.xlabel('Time Since Surgery (years)', fontsize=14)
+    plt.ylabel('Frequency', fontsize=14)
+    plt.xticks(fontsize=11)
+    plt.yticks(fontsize=11)
+    plt.savefig(save_path + "time_since_surgery_histoplot.png")
+    plt.show()
+    plt.close()
 
 if __name__ == "__main__":
     # Example usage
@@ -197,10 +263,12 @@ if __name__ == "__main__":
     ledd_prepost_path = root_dir + "/data/ledd_pre_vs_post.csv"
     bdi_prepost_path = root_dir + "/data/bdi_pre_vs_post.csv"
     op_dates_path = root_dir + "/data/op_dates.csv"
+    bdi = root_dir + "/data/bdi_df.csv"
 
-    demographics_pre_post(mds_prepost_path, op_dates_path, "UPDRS", save_path)
+    demographics_pre_post(mds_prepost_path, op_dates_path, "MDS-UPDRS III", save_path)
     demographics_pre_post(ledd_prepost_path, op_dates_path, "LEDD", save_path)
     demographics_pre_post(bdi_prepost_path, op_dates_path, "BDI", save_path)
+    histoplot(bdi, save_path)
     # Ensure save path exists
     os.makedirs(save_path, exist_ok=True)
     

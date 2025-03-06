@@ -16,7 +16,10 @@ from tqdm import tqdm
 import torch
 from scipy.stats import pearsonr
 import os
-
+import warnings
+warnings.resetwarnings()
+warnings.simplefilter("ignore", ResourceWarning)
+warnings.simplefilter("ignore")
 
 class TabPFNRegression():
     """ Fit, evaluate, and get attributions regression models (current: Random Forest and Linear Regression)"""
@@ -89,8 +92,7 @@ class TabPFNRegression():
             self.model.fit(X_train_kf, y_train_kf)
             pred = self.model.predict(X_val_kf)
             mse = mean_squared_error(y_val_kf, pred)
-            r, p = pearsonr(y_val_kf, pred)
-            r2 = r**2
+            r2, p = pearsonr(y_val_kf, pred)
             cv_p_values.append(p)
             cv_r2_scores.append(r2)
             preds.append(pred)
@@ -215,13 +217,13 @@ class TabPFNRegression():
                  color='red', linestyle='--', linewidth=2)
         plt.text(self.metrics['y_test'].min(), 
                 self.metrics['y_pred'].max(), 
-                f'R^2: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.2e}', 
+                f'R: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.2e}', 
                 fontsize=12, 
                 verticalalignment='top', 
                 bbox=dict(facecolor='white', 
                 alpha=0.5))
-        plt.xlabel('Actual BDI Ratio')
-        plt.ylabel('Predicted BDI Ratio')
+        plt.xlabel('Actual BDI Efficacy')
+        plt.ylabel('Predicted BDI Efficacy')
         plt.title(title)
         plt.grid(True)
         plt.savefig(f'{self.save_path}/{self.identifier}_actual_vs_predicted.png')
@@ -236,7 +238,7 @@ if __name__ == "__main__":
     data_df = data_df.drop(columns=['Pat_ID'])
     test_split_size = 0.2
     Feature_Selection = {}
-    Feature_Selection['target'] = 'BDI_ratio'
+    Feature_Selection['target'] = 'BDI_efficacy'
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
     safe_path = folder_path + "/results/TabPFN"
     identifier = "bdi"
