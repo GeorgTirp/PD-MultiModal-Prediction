@@ -41,7 +41,7 @@ class BaseRegressionModel:
         self.save_path = save_path
         self.identifier = identifier
         self.metrics = None
-
+        self.model_name = None
         if not os.path.exists(save_path):
             os.makedirs(save_path)
         logging.info("Finished initializing BaseRegressionModel class.")
@@ -55,18 +55,20 @@ class BaseRegressionModel:
         X = X.fillna(X.mean())
         X = X.apply(pd.to_numeric, errors='coerce')
         logging.info("Finished model-specific preprocessing.")
-        # Z-score normalization for numerical features
-        print(len(X), len(y))
         return X, y
 
-    def predict(self, X: pd.DataFrame, y: pd.DataFrame = None, save_results=False) -> np.ndarray:
+    def fit(self) -> None:
+        """ Train the model """
+        logging.info(f"Starting {self.model_name} model training...")
+        X_train, X_test, y_train, y_test = self.train_split
+        self.model.fit(X_train, y_train)
+        logging.info(f"Finished {self.model_name} model training.")
+
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
         """ Predict using the trained model"""
         logging.info("Starting prediction...")
         pred = self.model.predict(X)
-        
-        if save_results:
-            results_df = pd.DataFrame({'y_test': y, 'y_pred': pred})
-            results_df.to_csv(f'{self.save_path}/{self.identifier}_results.csv', index=False)
         logging.info("Finished prediction.")
         return pred
 
@@ -164,7 +166,7 @@ class BaseRegressionModel:
         logging.info("Finished feature importance evaluation.")
         return top_features
 
-    def plot(self, title) -> None:
+    def plot(self, title, modality='') -> None:
         """ Plot feature importances"""
         results_df = pd.read_csv(f'{self.save_path}/{self.identifier}_results.csv')
         plt.figure(figsize=(10, 6))
@@ -179,8 +181,8 @@ class BaseRegressionModel:
                 verticalalignment='top', 
                 bbox=dict(facecolor='white', 
                 alpha=0.5))
-        plt.xlabel('BDI Efficacy')
-        plt.ylabel('Predicted BDI Efficacy')
+        plt.xlabel(modality+' Efficacy')
+        plt.ylabel('Predicted '+ modality +' Efficacy')
         plt.title(title)
         plt.grid(True)
         plt.savefig(f'{self.save_path}/{self.identifier}_actual_vs_predicted.png')
@@ -200,13 +202,7 @@ class LinearRegressionModel(BaseRegressionModel):
         
         super().__init__(data_df, feature_selection, test_split_size, save_path, identifier, top_n)
         self.model = LinearRegression()
-
-    def fit(self) -> None:
-        """ Train the Linear Regression model"""
-        logging.info("Starting Linear Regression model training...")
-        X_train, X_test, y_train, y_test = self.train_split
-        self.model.fit(X_train, y_train)
-        logging.info("Finished Linear Regression model training.")
+        self.model_name = "Linear Regression"
 
 class RandomForestModel(BaseRegressionModel):
     """ Random Forest Model """
@@ -223,11 +219,7 @@ class RandomForestModel(BaseRegressionModel):
         super().__init__(data_df, feature_selection, test_split_size, save_path, identifier, top_n)
         self.rf_hparams = rf_hparams
         self.model = RandomForestRegressor(**self.rf_hparams)
+        self.model_name = "Random Forest"
 
-    def fit(self) -> None:
-        """ Train the Random Forest model"""
-        logging.info("Starting Random Forest model training...")
-        X_train, X_test, y_train, y_test = self.train_split
-        self.model.fit(X_train, y_train)
-        logging.info("Finished Random Forest model training.")
+    
 

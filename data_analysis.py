@@ -152,14 +152,14 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
     
     # Scatter plot (overlay on boxplot)
     for idx, (x, values) in enumerate(zip(x_positions, data_list)):
-        if modality_name == "BDI":
+        if modality_name == "BDI" or modality_name == "MoCA":
             x_jitter = np.full(len(values), x)  # No jitter for BDI
         else:
             x_jitter = np.random.uniform(low=-0.005, high=0.05, size=len(values)) + x
         ax.scatter(x_jitter, values, s=10, color=scatter_color , alpha=0.9, zorder=2)  # Set zorder to 2 to plot scatter points in front of boxplot
         
         # Draw lines for BDI modality
-        if modality_name == "BDI" and idx < len(x_positions) - 1:
+        if (modality_name == "BDI" or modality_name == "MoCA") and idx < len(x_positions) - 1:
             next_values = data_list[idx + 1]
             for i in range(len(values)):
                 if i < len(next_values):
@@ -191,7 +191,16 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
             Line2D([0], [0], color=line_colors["no change"], lw=2, label="No change"),
         ]
         ax.legend(handles=legend_elements, loc="upper left")
-    
+
+    # Add legend for MoCA
+    if modality_name == "MoCA":
+        line_colors = {"increase": "green", "decrease": "red", "no change": "grey"}
+        legend_elements = [
+            Line2D([0], [0], color=line_colors["increase"], lw=2, label="Improvement"),
+            Line2D([0], [0], color=line_colors["decrease"], lw=2, label="Deterioration"),
+            Line2D([0], [0], color=line_colors["no change"], lw=2, label="No change"),
+        ]
+        ax.legend(handles=legend_elements, loc="upper left")
     plt.savefig(safe_path + modality_name + "_raincloud_plot.png")
     plt.show()
     plt.close()
@@ -210,7 +219,9 @@ def demographics_pre_post(modality_path: str, model_data_path: str, modality_nam
 
     if modality_name == "BDI":
         data = data.drop(columns=['BDI_diff'])
-        
+
+    if modality_name == "MoCA":
+        data = data.drop(columns=['MoCA_diff'])  
 
     if modality_name == "MDS-UPDRS III":
         data = data.rename(columns={'MDS_UPDRS_III_sum_pre': 'Pre', 'MDS_UPDRS_III_sum_post': 'Post'})
@@ -252,39 +263,51 @@ def histoplot(input_path: str , save_path: str) -> None:
     plt.show()
     plt.close()
 
-if __name__ == "__main__":
+
+
+def visualize_demographics(questionnaire, root_dir):
     # Example usage
     #root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
     root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction"
-    data_path = root_dir + "/data/bdi_df_normalized.csv"
-    stim_path = root_dir + "/data/stim_positions.csv"
-    save_path = root_dir + "/results/data_analysis/"
-    mds_prepost_path = root_dir + "/data/mupdrs3_pre_vs_post.csv"
-    ledd_prepost_path = root_dir + "/data/ledd_pre_vs_post.csv"
-    bdi_prepost_path = root_dir + "/data/bdi_pre_vs_post.csv"
-    op_dates_path = root_dir + "/data/op_dates.csv"
-    bdi = root_dir + "/data/bdi_df.csv"
+    data_path = root_dir + "/data/" + questionnaire 
+    stim_path = data_path + "/stim_positions.csv"
+    save_path = root_dir + "/results/data_analysis/" + questionnaire + "/"
+    mds_prepost_path = data_path+ "/mupdrs3_pre_vs_post.csv"
+    ledd_prepost_path = data_path + "/ledd_pre_vs_post.csv"
+    if questionnaire == "MoCA":  
+        quest_prepost_path = data_path + "/moca_pre_vs_post.csv"
+        quest = data_path + "/moca_df.csv"
+    elif questionnaire == "BDI":
+        quest_prepost_path = data_path + "/bdi_pre_vs_post.csv"
+        quest = data_path + "/bdi_df.csv"
 
-    demographics_pre_post(mds_prepost_path, op_dates_path, "MDS-UPDRS III", save_path)
-    demographics_pre_post(ledd_prepost_path, op_dates_path, "LEDD", save_path)
-    demographics_pre_post(bdi_prepost_path, op_dates_path, "BDI", save_path)
-    histoplot(bdi, save_path)
+    op_dates_path = data_path + "/op_dates.csv"
+
     # Ensure save path exists
     os.makedirs(save_path, exist_ok=True)
-    
+    demographics_pre_post(mds_prepost_path, op_dates_path, "MDS-UPDRS III", save_path)
+    demographics_pre_post(ledd_prepost_path, op_dates_path, "LEDD", save_path)
+    demographics_pre_post(quest_prepost_path, op_dates_path, questionnaire, save_path)
+    histoplot(quest, save_path)
+
     # Load data
-    data = pd.read_csv(data_path)
-    X = data.drop(columns=['BDI_ratio','Pat_ID'])
-    stim_positions = pd.read_csv(stim_path).drop(columns=['OP_DATUM'])
+    #data = pd.read_csv(data_path)
+    #X = data.drop(columns=['BDI_ratio','Pat_ID'])
+    #stim_positions = pd.read_csv(stim_path).drop(columns=['OP_DATUM'])
     # Perform PCA
-    pca_result = pca(X, n_components=10, safe_path=save_path)
-    print("PCA safed into {}".format(save_path))
-    
+    #pca_result = pca(X, n_components=10, safe_path=save_path)
+    #print("PCA safed into {}".format(save_path))
+    #
     # Calculate and plot covariance matrix
-    cov_matrix = covariance_matrix(X, safe_path=save_path)
-    print("Covariance Matrix safed into {}".format(save_path))
+    #cov_matrix = covariance_matrix(X, safe_path=save_path)
+    #print("Covariance Matrix safed into {}".format(save_path))
     
     
     # Plot stimulation positions
-    plot_stim_positions(stim_positions, safe_path=save_path)
-    print("Stimulation positions plotted and safed into {}".format(save_path))
+    #plot_stim_positions(stim_positions, safe_path=save_path)
+    #print("Stimulation positions plotted and safed into {}".format(save_path))
+
+if __name__ == "__main__":
+    root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction"
+    visualize_demographics("BDI", root_dir)
+    visualize_demographics("MoCA", root_dir)

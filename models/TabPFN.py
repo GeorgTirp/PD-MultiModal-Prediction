@@ -62,19 +62,12 @@ class TabPFNRegression():
         self.model = reg
         return self.model
        
-    def predict(self, X_in: pd.DataFrame, save_results=False) -> Dict:
+    def predict(self, X_in: pd.DataFrame) -> Dict:
         """Predict using the trained model"""
         if self.model is None:
             raise ValueError("Model not fitted yet")
         #X_in = X_in[Feature_Selection['features']]
         predictions = self.model.predict(X_in)
-
-        if save_results == True:
-            # Optionally save predictions
-            results_df = pd.DataFrame({'y_test': y, 'y_pred': predictions})
-            results_df.to_csv(f'{self.save_path}/{self.identifier}_results.csv', index=False)
-        
-
         return predictions
 
     def evaluate(self, n_splits, folds=10) -> Tuple:
@@ -207,9 +200,9 @@ class TabPFNRegression():
     
         return loco_attributions, shap_attributions
 
-    def plot(self, title):
+    def plot(self, title, modality='') -> None:
         """ Plot """
-        results_df = pd.read_csv(f'{self.save_path}/{self.identifier}_results.csv')
+        #results_df = pd.read_csv(f'{self.save_path}/{self.identifier}_results.csv')
         plt.figure(figsize=(10, 6))
         plt.scatter(self.metrics['y_test'], self.metrics['y_pred'], alpha=0.5)
         plt.plot([self.metrics['y_test'].min(), self.metrics['y_test'].max()], 
@@ -222,8 +215,8 @@ class TabPFNRegression():
                 verticalalignment='top', 
                 bbox=dict(facecolor='white', 
                 alpha=0.5))
-        plt.xlabel('Actual BDI Efficacy')
-        plt.ylabel('Predicted BDI Efficacy')
+        plt.xlabel(modality+' Efficacy')
+        plt.ylabel('Predicted '+ modality +' Efficacy')
         plt.title(title)
         plt.grid(True)
         plt.savefig(f'{self.save_path}/{self.identifier}_actual_vs_predicted.png')
