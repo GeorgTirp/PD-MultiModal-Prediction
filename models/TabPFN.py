@@ -27,6 +27,7 @@ class TabPFNRegression():
             self,
             data_df: pd.DataFrame, 
             Feature_Selection: dict, 
+            target_name: str,
             test_split_size:float = 0.2,
             save_path: str = None,
             identifier: str = None):
@@ -34,7 +35,7 @@ class TabPFNRegression():
         self.save_path = save_path
         self.identifier = identifier
         self.Feature_Selection = Feature_Selection
-
+        self.target_name = target_name
         self.model = None
         self.X, self.y = self.model_specific_preprocess(data_df)
         self.train_split = train_test_split(self.X, self.y, test_size=test_split_size, random_state=42)
@@ -70,7 +71,7 @@ class TabPFNRegression():
         predictions = self.model.predict(X_in)
         return predictions
 
-    def evaluate(self, n_splits, folds=10) -> Tuple:
+    def evaluate(self, folds=10) -> Tuple:
         """ Evaluate the models using mean squared error, r2 score and cross validation"""
 
         # Cross-validation for TabPFN
@@ -149,7 +150,7 @@ class TabPFNRegression():
 
             # Create KernelExplainer with a small background sample
             background = shap.sample(self.X, 20)  # Sample a small background set
-            explainer = shap.KernelExplainer(lambda x: model.predict(pd.DataFrame(x, columns=self.X.columns)), self.X, background)
+            explainer = shap.KernelExplainer(lambda x: self.model.predict(pd.DataFrame(x, columns=self.X.columns)), self.X, background)
 
             # Define batch size
             batch_size
@@ -215,8 +216,8 @@ class TabPFNRegression():
                 verticalalignment='top', 
                 bbox=dict(facecolor='white', 
                 alpha=0.5))
-        plt.xlabel(modality+' Efficacy')
-        plt.ylabel('Predicted '+ modality +' Efficacy')
+        plt.xlabel(modality + self.target_name)
+        plt.ylabel('Predicted '+ modality + self.target_name)
         plt.title(title)
         plt.grid(True)
         plt.savefig(f'{self.save_path}/{self.identifier}_actual_vs_predicted.png')

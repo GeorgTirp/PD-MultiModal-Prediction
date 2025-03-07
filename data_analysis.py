@@ -153,27 +153,56 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
     # Scatter plot (overlay on boxplot)
     for idx, (x, values) in enumerate(zip(x_positions, data_list)):
         if modality_name == "BDI" or modality_name == "MoCA":
-            x_jitter = np.full(len(values), x)  # No jitter for BDI
+        #    x_jitter =   # No jitter for BDI
+            np.random.seed(42)
+            y_noise = np.random.uniform(low=-0.4, high=0.4, size=len(values))
+            y_jitter = values + y_noise
+            
         else:
-            x_jitter = np.random.uniform(low=-0.005, high=0.05, size=len(values)) + x
-        ax.scatter(x_jitter, values, s=10, color=scatter_color , alpha=0.9, zorder=2)  # Set zorder to 2 to plot scatter points in front of boxplot
+            y_jitter = values
+        x_noise = np.random.uniform(low=-0.05, high=0.05, size=len(values))
+        x_jitter = x + x_noise
+       
+        
+        ax.scatter(x_jitter, y_jitter, s=10, color=scatter_color , alpha=0.9, zorder=2)  # Set zorder to 2 to plot scatter points in front of boxplot
         
         # Draw lines for BDI modality
-        if (modality_name == "BDI" or modality_name == "MoCA") and idx < len(x_positions) - 1:
+        if modality_name == "BDI"  and idx < len(x_positions) - 1:
             next_values = data_list[idx + 1]
             for i in range(len(values)):
                 if i < len(next_values):
-                    x_start, y_start = x_jitter[i], values[i]
-                    x_end, y_end = x_positions[idx + 1], next_values[i]
+                    x_start, y_start = x_jitter[i], y_jitter[i]
+                    x_end, y_end = x_positions[idx + 1] + x_noise[i]  , next_values[i] + y_noise[i]
                     slope = y_end - y_start
-                    if slope > 0:
+                    if np.isclose(y_start, y_end, atol=0.9):
+                            line_color = "grey"
+                    elif slope > 0:
                         line_color = "red"
                     elif slope < 0:
                         line_color = "green"
                     else:
-                        line_color = "grey"
+                        line_color = "black" 
+                        
+                             # Default color if not equal
                     ax.add_line(Line2D([x_start, x_end], [y_start, y_end], color=line_color, alpha=0.4))
-
+        if modality_name == "MoCA" and idx < len(x_positions) - 1:
+            next_values = data_list[idx + 1]
+            for i in range(len(values)):
+                if i < len(next_values):
+                    x_start, y_start = x_jitter[i], y_jitter[i]
+                    x_end, y_end = x_positions[idx + 1] + x_noise[i]  , next_values[i] + y_noise[i]
+                    slope = y_end - y_start
+                    if np.isclose(y_start, y_end, atol=1e-2):
+                            line_color = "grey"
+                    elif slope > 0:
+                        line_color = "green"
+                    elif slope < 0:
+                        line_color = "red"
+                    else:
+                        line_color = "black" 
+                        
+                             # Default color if not equal
+                    ax.add_line(Line2D([x_start, x_end], [y_start, y_end], color=line_color, alpha=0.4))
     # Labels
     ax.set_xticks(x_positions)
     ax.set_xticklabels(features_list, fontsize=11)
@@ -193,7 +222,7 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
         ax.legend(handles=legend_elements, loc="upper left")
 
     # Add legend for MoCA
-    if modality_name == "MoCA":
+    elif modality_name == "MoCA":
         line_colors = {"increase": "green", "decrease": "red", "no change": "grey"}
         legend_elements = [
             Line2D([0], [0], color=line_colors["increase"], lw=2, label="Improvement"),
