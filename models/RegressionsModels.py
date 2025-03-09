@@ -79,7 +79,7 @@ class BaseRegressionModel:
 
         preds = []
         y_vals = []
-        for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(), desc="Cross-validation"):
+        for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation"):
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
             self.model.fit(X_train_kf, y_train_kf)
@@ -156,7 +156,7 @@ class LinearRegressionModel(BaseRegressionModel):
         indices = np.argsort(attribution)[-top_n:][::-1]
         top_features = {feature_names[i]: attribution[i] for i in indices}
         if save_results:
-            np.save(f'{self.save_path}/{self.identifier}_feature_importance.npy', top_features)
+            np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_feature_importance.npy', top_features)
         
         self.importances = top_features
 
@@ -170,10 +170,10 @@ class LinearRegressionModel(BaseRegressionModel):
         plt.title(f'{self.identifier} SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
-            plt.savefig(f'{self.save_path}/{self.identifier}_shap_aggregated_beeswarm.png')
+            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm.png')
             plt.close()
             shap.summary_plot(shap_values, self.X, plot_type="bar", show=False)
-            plt.savefig(f'{self.save_path}/{self.identifier}_shap_aggregated_bar.png')
+            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_bar.png')
             plt.close()
         
         logging.info("Finished feature importance evaluation for Linear Regression.")
@@ -207,7 +207,7 @@ class RandomForestModel(BaseRegressionModel):
         indices = np.argsort(attribution)[-top_n:][::-1]
         top_features = {feature_names[i]: attribution[i] for i in indices}
         if save_results:
-            np.save(f'{self.save_path}/{self.identifier}_feature_importance.npy', top_features)
+            np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_feature_importance.npy', top_features)
         
         self.importances = top_features
 
@@ -227,10 +227,10 @@ class RandomForestModel(BaseRegressionModel):
         plt.title(f'{self.identifier} SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
-            plt.savefig(f'{self.save_path}/{self.identifier}_shap_aggregated_beeswarm.png')
+            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm.png')
             plt.close()
             shap.summary_plot(shap_values, self.X, plot_type="bar", show=False)
-            plt.savefig(f'{self.save_path}/{self.identifier}_shap_aggregated_bar.png')
+            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_bar.png')
             plt.close()
         
         logging.info("Finished feature importance evaluation for Random Forest.")
@@ -252,7 +252,7 @@ class RandomForestModel(BaseRegressionModel):
             estimator=self.model,
             param_grid=param_grid,
             cv=folds,
-            scoring='r2',
+            scoring='neg_mean_squared_error',
             n_jobs=-1
         )
         grid_search.fit(self.X, self.y)
@@ -290,7 +290,7 @@ class XGBoostRegressionModel(BaseRegressionModel):
         indices = np.argsort(attribution)[-top_n:][::-1]
         top_features = {feature_names[i]: attribution[i] for i in indices}
         if save_results:
-            np.save(f'{self.save_path}/{self.identifier}_feature_importance.npy', top_features)
+            np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_feature_importance.npy', top_features)
         
         self.importances = top_features
 
@@ -309,10 +309,10 @@ class XGBoostRegressionModel(BaseRegressionModel):
         plt.title(f'{self.identifier} XGBoost SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
-            plt.savefig(f'{self.save_path}/{self.identifier}_xgb_shap_aggregated_beeswarm.png')
+            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm.png')
             plt.close()
             shap.summary_plot(shap_values, self.X, plot_type="bar", show=False)
-            plt.savefig(f'{self.save_path}/{self.identifier}_xgb_shap_aggregated_bar.png')
+            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_bar.png')
             plt.close()
         
         logging.info("Finished feature importance evaluation for XGBoost Regression.")
@@ -334,7 +334,7 @@ class XGBoostRegressionModel(BaseRegressionModel):
             estimator=self.model,
             param_grid=param_grid,
             cv=folds,
-            scoring='r2',
+            scoring='neg_mean_squared_error',
             n_jobs=-1
         )
         grid_search.fit(self.X, self.y)

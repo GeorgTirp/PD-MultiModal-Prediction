@@ -8,6 +8,7 @@ from sklearn.metrics import mean_squared_error
 from sklearn.metrics import r2_score
 from sklearn.model_selection import cross_val_score
 from typing import Tuple, Dict
+import shapiq
 import shap
 import matplotlib.pyplot as plt
 import logging
@@ -85,7 +86,7 @@ class TabPFNRegression():
 
         preds = []
         y_vals = []
-        for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(), desc="Cross-validation"):
+        for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation"):
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
             self.model.fit(X_train_kf, y_train_kf)
@@ -137,25 +138,37 @@ class TabPFNRegression():
             return importances
 
         def shap_importances(batch_size):
-            logging.info("Starting SHAP importance evaluation...")
+            logging.info("Starting SHAP importance evaluation using shapiq for TabPFN...")
 
+            # Initialize the SHAP JavaScript visualization (if needed)
             shap.initjs()
-            background = shap.sample(self.X, 20)
-            explainer = shap.KernelExplainer(lambda x: self.model.predict(pd.DataFrame(x, columns=self.X.columns)), self.X, background)
+
+            # Create the shapiq explainer; it directly leverages TabPFN's internal probabilistic model
+            explainer = shapiq.TabPFNExplainer(self.model, self.X, feature_names=self.X.columns)
 
             num_samples = len(self.X)
             all_shap_values = []
 
             for i in range(0, num_samples, batch_size):
                 batch = self.X[i:i+batch_size]
-                shap_values_batch = explainer.shap_values(batch, nsamples=300)
+                # Compute SHAP values for the current batch using shapiq.
+                # (The nsamples parameter is omitted here as shapiq handles sampling internally.)
+                shap_values_batch = explainer.shap_values(batch)
                 all_shap_values.append(shap_values_batch)
 
             shap_values = np.concatenate(all_shap_values, axis=0)
-            logging.info("SHAP values computed.")
+            logging.info("SHAP values computed using shapiq.")
 
-            shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=top_n)
+            # Generate the summary plots
+            shap.summary_plot(
+                shap_values,
+                features=self.X,
+                feature_names=self.X.columns,
+                show=False,
+                max_display=top_n
+            )
             plt.title(f'{self.identifier} SHAP Summary Plot (Aggregated)', fontsize=16)
+
             if save_results:
                 plt.subplots_adjust(top=0.90)
                 plt.savefig(f'{self.save_path}/{self.identifier}_shap_aggregated_beeswarm.png')
@@ -164,14 +177,15 @@ class TabPFNRegression():
                 shap.summary_plot(shap_values, self.X, plot_type="bar", show=False)
                 plt.savefig(f'{self.save_path}/{self.identifier}_shap_aggregated_bar.png')
                 plt.close()
+
             logging.info("SHAP summary plot generated.")
-        
             return shap_values
+
 
         logging.info("Evaluating SHAP feature importances...")
         shap_attributions = shap_importances(batch_size)
         logging.info("SHAP importance evaluation completed.")
-    
+
         logging.info("Evaluating LOCO feature importances...")
         loco_attributions = loco_importances(X_train, y_test)
         logging.info("LOCO importance evaluation completed.")

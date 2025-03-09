@@ -2,7 +2,7 @@ import os
 from RegressionsModels import XGBoostRegressionModel
 import pandas as pd
 
-def main(folder_path, data_path, target, identifier):
+def main(folder_path, data_path, target, identifier, folds=10):
     target_col = identifier + "_" + target
     possible_targets = ["efficacy", "ratio", "diff"] 
     ignored_targets = [t for t in possible_targets if t != target]
@@ -43,13 +43,13 @@ def main(folder_path, data_path, target, identifier):
         identifier)
     model.fit()
     preds = model.predict(model.X)
-    model.tune_haparams(param_grid_xgb)
-    metrics = model.evaluate(folds=10)
+    model.tune_haparams(param_grid_xgb, folds)
+    metrics = model.evaluate(folds=folds)
     importances = model.feature_importance(19)
     model.plot(f"Actual vs. Prediction (XGBoost) - {identifier}")
 
 if __name__ == "__main__":
     possible_targets = ["BDI_efficacy", "MoCA_efficacy"]
     folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    main(folder_path, "data/BDI/bdi_df.csv", "efficacy", "BDI")
-    main(folder_path, "data/MoCA/moca_df.csv", "efficacy", "MoCA")
+    main(folder_path, "data/BDI/bdi_df.csv", "efficacy", "BDI", -1)
+    main(folder_path, "data/MoCA/moca_df.csv", "efficacy", "MoCA", -1)
