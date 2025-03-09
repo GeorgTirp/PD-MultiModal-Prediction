@@ -19,11 +19,11 @@ def main(folder_path, data_path, target, identifier):
     # Random Forest Model
      #XGBoost hyperparameters grid    
     param_grid_xgb = {
-        'n_estimators': [150, 200, 300, 100, 50],
-        'learning_rate': [0.001, 0.01, 0.1],
-        'max_depth': [3, 5, 6, 7, 8, 4],
-        'subsample': [0.9, 0.8, 1.0],
-        'colsample_bytree': [0.9, 0.8, 1.0]
+        'n_estimators': [50, 100, 150, 200, 250, 300 ,350],
+        'learning_rate': [0.001, 0.005,  0.01, 0.1],
+        'max_depth': [4, 5, 6, 7, 8, 9, 10],
+        'subsample': [0.7, 0.9, 0.8, 1.0],
+        'colsample_bytree': [0.7, 0.9, 0.8, 1.0]
     }
     XGB_Hparams = {
         'n_estimators': param_grid_xgb['n_estimators'][0],

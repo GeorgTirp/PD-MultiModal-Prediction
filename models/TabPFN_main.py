@@ -1,7 +1,10 @@
 import os
+#from RegressionsModels import TabPFNRegression
 from TabPFN import TabPFNRegression
 import pandas as pd
-def main(folder_path, data_path, target, identifier):
+
+
+def main(folder_path, data_path, target, identifier, folds=10):
     target_col = identifier + "_" + target
     possible_targets = ["efficacy", "ratio", "diff"] 
     ignored_targets = [t for t in possible_targets if t != target]
@@ -23,12 +26,12 @@ def main(folder_path, data_path, target, identifier):
         safe_path, 
         identifier)
     model.fit()
-    X, y = model.model_specific_preprocess(data_df, Feature_Selection)
-    metrics = model.evaluate(folds=10)
+    X, y = model.model_specific_preprocess(data_df)
+    metrics = model.evaluate(folds=folds)
     model.plot(f"Actual vs. Prediction (TabPFN) - {identifier}", identifier)
 
 if __name__ == "__main__":
     possible_targets = ["BDI_efficacy", "MoCA_efficacy"]
     folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    main(folder_path, "data/BDI/bdi_df.csv", "efficacy", "BDI")
-    main(folder_path, "data/MoCA/moca_df.csv", "efficacy", "MoCA")
+    main(folder_path, "data/BDI/bdi_df.csv", "efficacy", "BDI", folds=-1)
+    main(folder_path, "data/MoCA/moca_df.csv", "efficacy", "MoCA", folds=-1)

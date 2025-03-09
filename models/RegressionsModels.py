@@ -1,6 +1,6 @@
 import pandas as pd
 from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split, KFold, GridSearchCV
+from sklearn.model_selection import train_test_split, KFold, GridSearchCV, LeaveOneOut
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.ensemble import RandomForestRegressor
 from scipy.stats import pearsonr
@@ -13,6 +13,7 @@ import shap
 import logging
 from tqdm import tqdm
 from xgboost import XGBRegressor
+from tabpfn import TabPFNRegressor
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -71,31 +72,29 @@ class BaseRegressionModel:
     def evaluate(self, folds=10) -> Dict:
         """ Evaluate the model using cross-validation """
         logging.info("Starting model evaluation...")
-        kf = KFold(n_splits=folds, shuffle=True, random_state=42)
-        cv_p_values = []
-        cv_r2_scores = []
+        if folds == -1:
+            kf = LeaveOneOut()
+        else:
+            kf = KFold(n_splits=folds, shuffle=True, random_state=42)
+
         preds = []
         y_vals = []
-        for train_index, val_index in kf.split(self.X):
+        for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(), desc="Cross-validation"):
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
             self.model.fit(X_train_kf, y_train_kf)
             pred = self.model.predict(X_val_kf)
-            mse = mean_squared_error(y_val_kf, pred)
-            r2, p = pearsonr(y_val_kf, pred)
-            cv_p_values.append(p)
-            cv_r2_scores.append(r2)
             preds.append(pred)
             y_vals.append(y_val_kf)
 
         preds = np.concatenate(preds)
         y_vals = np.concatenate(y_vals)
-        avg_cv_mse = np.mean(cv_p_values)
-        avg_cv_r2 = np.mean(cv_r2_scores)
+        r2, p = pearsonr(y_vals, preds)
+        mse = mean_squared_error(y_vals, preds)
 
         metrics = {
-            'mse': avg_cv_mse,
-            'r2': avg_cv_r2,
+            'mse': mse,
+            'r2': r2,
             'p_value': p,
             'y_pred': preds,
             'y_test': y_vals
@@ -124,11 +123,11 @@ class BaseRegressionModel:
                  fontsize=12, 
                  verticalalignment='top', 
                  bbox=dict(facecolor='white', alpha=0.5))
-        plt.xlabel('Actual ' + modality + self.target_name)
-        plt.ylabel('Predicted ' + modality + self.target_name)
+        plt.xlabel('Actual '+ modality + ' ' + self.target_name)
+        plt.ylabel('Predicted '+ modality + ' '+ self.target_name)
         plt.title(title)
         plt.grid(True)
-        plt.savefig(f'{self.save_path}/{self.identifier}_actual_vs_predicted.png')
+        plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_actual_vs_predicted.png')
         plt.close()
 
 class LinearRegressionModel(BaseRegressionModel):
@@ -237,7 +236,7 @@ class RandomForestModel(BaseRegressionModel):
         logging.info("Finished feature importance evaluation for Random Forest.")
         return top_features
 
-    def tune_haparams(self, param_grid: dict) -> Dict:
+    def tune_haparams(self, param_grid: dict, folds=5) -> Dict:
         """Tune hyperparameters using GridSearchCV with 5-fold cross-validation.
 
         Args:
@@ -246,12 +245,14 @@ class RandomForestModel(BaseRegressionModel):
         Returns:
             dict: Best hyperparameters found.
         """
-        logging.info("Starting hyperparameter tuning using GridSearchCV with 5-fold CV...")
+        if folds == -1:
+            folds = len(self.X)
+        logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
-            cv=5,
-            scoring='neg_mean_squared_error',
+            cv=folds,
+            scoring='r2',
             n_jobs=-1
         )
         grid_search.fit(self.X, self.y)
@@ -317,7 +318,7 @@ class XGBoostRegressionModel(BaseRegressionModel):
         logging.info("Finished feature importance evaluation for XGBoost Regression.")
         return top_features
     
-    def tune_haparams(self, param_grid: dict) -> Dict:
+    def tune_haparams(self, param_grid: dict, folds=5) -> Dict:
         """Tune hyperparameters using GridSearchCV with 5-fold cross-validation.
 
         Args:
@@ -326,12 +327,14 @@ class XGBoostRegressionModel(BaseRegressionModel):
         Returns:
             dict: Best hyperparameters found.
         """
-        logging.info("Starting hyperparameter tuning using GridSearchCV with 5-fold CV...")
+        if folds == -1:
+            folds = len(self.X)
+        logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
-            cv=10,
-            scoring='neg_mean_squared_error',
+            cv=folds,
+            scoring='r2',
             n_jobs=-1
         )
         grid_search.fit(self.X, self.y)
@@ -339,3 +342,101 @@ class XGBoostRegressionModel(BaseRegressionModel):
         self.xgb_hparams.update(best_params)
         logging.info(f"Best parameters found: {best_params}")
         return best_params
+    
+
+class TabPFNRegression(BaseRegressionModel):
+    """ TabPFN Regression Model """
+    def __init__(
+            self,
+            data_df: pd.DataFrame, 
+            feature_selection: dict, 
+            target_name: str,
+            test_split_size: float = 0.2,
+            save_path: str = None,
+            identifier: str = None,
+            top_n: int = 10):
+        
+        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n)
+        self.model = TabPFNRegressor()
+        self.model_name = "TabPFN Regression"
+
+    def model_specific_preprocess(self, data_df: pd.DataFrame) -> Tuple:
+        """ Preprocess the data for the TabPFN model """
+        logging.info("Starting TabPFN model-specific preprocessing...")
+        # Drop rows with missing values for features and target
+        data_df = data_df.dropna(subset=self.feature_selection['features'] + [self.feature_selection['target']])
+        X = data_df[self.feature_selection['features']]
+        y = data_df[self.feature_selection['target']]
+        # Ensure features are numeric
+        X = X.apply(pd.to_numeric, errors='coerce')
+        logging.info("Finished TabPFN model-specific preprocessing.")
+        return X, y
+
+    def feature_importance(self, top_n: int = 10, batch_size: int = 10, save_results=True) -> Tuple:
+        """ Compute feature importance for TabPFN using LOCO and SHAP evaluations """
+        logging.info("Starting feature importance evaluation for TabPFN Regression.")
+        X_train, X_test, y_train, y_test = self.train_split
+
+        def loco_importances(X_train, y_test):
+            logging.info("Starting LOCO importance evaluation...")
+            importances = {}
+            for i, feature in enumerate(X_train.columns):
+                logging.info(f"Evaluating LOCO importance for feature {i + 1}/{len(X_train.columns)}: {feature}")
+                # Remove the feature from the training and test sets
+                X_train_loco = X_train.drop(columns=[feature])
+                X_test_loco = X_test.drop(columns=[feature])
+                # Fit the model on the modified data and predict
+                self.model.fit(X_train_loco, y_train)
+                loco_pred = self.model.predict(X_test_loco)
+                # Compute the MSE and record the relative change
+                loco_mse = mean_squared_error(y_test, loco_pred)
+                importances[feature] = abs(loco_mse - self.metrics['mse']) / self.metrics['mse']
+                if (i + 1) % 10 == 0 or (i + 1) == len(X_train.columns):
+                    logging.info(f"Progress: {i + 1}/{len(X_train.columns)} features evaluated.")
+            logging.info("Finished LOCO importance evaluation.")
+            return importances
+
+        def shap_importances(batch_size):
+            logging.info("Starting SHAP importance evaluation for TabPFN...")
+            shap.initjs()
+            # Use a small background sample for the KernelExplainer
+            background = shap.sample(self.X, 20)
+            explainer = shap.KernelExplainer(
+                lambda x: self.model.predict(pd.DataFrame(x, columns=self.X.columns)),
+                self.X, background
+            )
+            num_samples = len(self.X)
+            all_shap_values = []
+            # Process the data in batches
+            for i in range(0, num_samples, batch_size):
+                batch = self.X.iloc[i:i+batch_size]
+                shap_values_batch = explainer.shap_values(batch, nsamples=300)
+                all_shap_values.append(shap_values_batch)
+            shap_values = np.concatenate(all_shap_values, axis=0)
+            logging.info(f"SHAP values shape: {shap_values.shape}")
+            # Plot aggregated SHAP values (beeswarm and bar plots)
+            shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=top_n)
+            plt.title(f'{self.identifier} SHAP Summary Plot (Aggregated)', fontsize=16)
+            if save_results:
+                plt.subplots_adjust(top=0.90)
+                plt.savefig(f'{self.save_path}/{self.identifier}_tabpfn_shap_aggregated_beeswarm.png')
+                plt.close()
+                shap.summary_plot(shap_values, self.X, plot_type="bar", show=False)
+                plt.savefig(f'{self.save_path}/{self.identifier}_tabpfn_shap_aggregated_bar.png')
+                plt.close()
+            logging.info("Finished SHAP importance evaluation for TabPFN.")
+            return shap_values
+
+        logging.info("Evaluating SHAP feature importances for TabPFN...")
+        shap_attributions = shap_importances(batch_size)
+        logging.info("SHAP importance evaluation completed for TabPFN.")
+    
+        logging.info("Evaluating LOCO feature importances for TabPFN...")
+        loco_attributions = loco_importances(X_train, y_test)
+        logging.info("LOCO importance evaluation completed for TabPFN.")
+    
+        if save_results:
+            logging.info(f"Saving SHAP attributions to {self.save_path}/{self.identifier}_tabpfn_mean_shap_values.npy")
+            np.save(f'{self.save_path}/{self.identifier}_tabpfn_mean_shap_values.npy', shap_attributions)
+    
+        return loco_attributions, shap_attributions
