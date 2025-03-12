@@ -8,7 +8,7 @@ from sklearn.metrics import mean_squared_error
 from sklearn.metrics import r2_score
 from sklearn.model_selection import cross_val_score
 from typing import Tuple, Dict
-import shapiq
+from shapiq import TabPFNExplainer
 import shap
 import matplotlib.pyplot as plt
 import logging
@@ -17,6 +17,7 @@ import torch
 from scipy.stats import pearsonr
 import os
 import warnings
+import seaborn as sns
 
 warnings.resetwarnings()
 warnings.simplefilter("ignore", ResourceWarning)
@@ -39,10 +40,11 @@ class TabPFNRegression():
         self.identifier = identifier
         self.Feature_Selection = Feature_Selection
         self.target_name = target_name
-        self.model = TabPFNRegressor()
         self.X, self.y = self.model_specific_preprocess(data_df)
         self.train_split = train_test_split(self.X, self.y, test_size=test_split_size, random_state=42)
         self.metrics = None
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = TabPFNRegressor(device=self.device, n_jobs=4)
         logging.info("Initialized TabPFNRegression with identifier: %s", self.identifier)
 
     def model_specific_preprocess(self, data_df: pd.DataFrame, y: pd.DataFrame = None, Feature_Selection: dict = None) -> Tuple:
@@ -61,7 +63,7 @@ class TabPFNRegression():
         """ Train and predict using Linear Regression and Random Forest"""
         logging.info("Starting model training.")
         X_train, X_test, y_train, y_test = self.train_split
-        reg = TabPFNRegressor()
+        reg = self.model
         reg.fit(X_train, y_train)
         self.model = reg
         logging.info("Model training completed.")
@@ -78,11 +80,13 @@ class TabPFNRegression():
 
     def evaluate(self, folds=10) -> Tuple:
         """ Evaluate the models using mean squared error, r2 score and cross validation"""
-        logging.info("Starting model evaluation with %d folds.", folds)
+        
         if folds == -1:
             kf = LeaveOneOut()
+            logging.info("Starting model evaluation with Leave-One-Out cross-validation.")
         else:
             kf = KFold(n_splits=folds, shuffle=True, random_state=42)
+            logging.info("Starting model evaluation with %d folds.", folds)
 
         preds = []
         y_vals = []
@@ -107,7 +111,7 @@ class TabPFNRegression():
             'y_test': y_vals
         }
         self.metrics = metrics
-        logging.info("Model evaluation completed with metrics: %s", metrics)
+        logging.info("Model evaluation completed")
         return metrics
 
     def feature_importance(self, top_n: int = 10, batch_size=10, save_results=True) -> Dict:
@@ -137,48 +141,59 @@ class TabPFNRegression():
             logging.info("Finished Loco importance evaluation.")
             return importances
 
-        def shap_importances(batch_size):
-            logging.info("Starting SHAP importance evaluation using shapiq for TabPFN...")
-
-            # Initialize the SHAP JavaScript visualization (if needed)
-            shap.initjs()
-
-            # Create the shapiq explainer; it directly leverages TabPFN's internal probabilistic model
-            explainer = shapiq.TabPFNExplainer(self.model, self.X, feature_names=self.X.columns)
-
+        def shap_importances(top_n=10, save_results=True):
+            logging.info("Starting feature importance evaluation using shapiq for TabPFN...")
+        
+            # Initialize the TabPFNExplainer
+            # Note: Ensure that self.model is your TabPFN regressor,
+            # self.X is your feature DataFrame, and self.y is your target vector.
+            explainer = TabPFNExplainer(
+                model=self.model,
+                data=self.X.values,  # pass data as a NumPy array for compatibility
+                labels=self.y,       # target values; for regression, these are continuous
+                index="SV",          # using standard Shapley Values
+                max_order=1
+            )
+        
             num_samples = len(self.X)
             all_shap_values = []
-
-            for i in range(0, num_samples, batch_size):
-                batch = self.X[i:i+batch_size]
-                # Compute SHAP values for the current batch using shapiq.
-                # (The nsamples parameter is omitted here as shapiq handles sampling internally.)
-                shap_values_batch = explainer.shap_values(batch)
-                all_shap_values.append(shap_values_batch)
-
-            shap_values = np.concatenate(all_shap_values, axis=0)
-            logging.info("SHAP values computed using shapiq.")
-
-            # Generate the summary plots
-            shap.summary_plot(
-                shap_values,
-                features=self.X,
-                feature_names=self.X.columns,
-                show=False,
-                max_display=top_n
-            )
-            plt.title(f'{self.identifier} SHAP Summary Plot (Aggregated)', fontsize=16)
-
+        
+            # Iterate over each sample individually
+            for i in tqdm(range(num_samples), desc="SHAP feature importance evaluation"):
+                # Extract a single sample as a 1D NumPy array
+                sample = self.X.values[i]
+                # Explain the sample. The demo you saw uses this pattern.
+                shap_values_sample = explainer.explain(sample)
+                # Append the shap_values to the list
+                all_shap_values.append(shap_values_sample)
+        
+            # Convert list of dict_values (assumed to be arrays) into a NumPy array.
+            # This array should have shape (n_samples, n_features).
+            shap_values = np.vstack(all_shap_values)
+            logging.info("Feature importance computed using shapiq.")
+        
+            # Compute mean absolute importance across samples
+            mean_importance = np.mean(np.abs(shap_values), axis=0)
+        
+            # Sort by importance and select top_n features
+            sorted_indices = np.argsort(mean_importance)[::-1][:top_n]
+            sorted_features = np.array(self.X.columns)[sorted_indices]
+            sorted_importance = mean_importance[sorted_indices]
+        
+            # Bar plot of feature importances
+            plt.figure(figsize=(10, 6))
+            plt.barh(sorted_features[::-1], sorted_importance[::-1], color='skyblue')
+            plt.xlabel("Mean Absolute Importance")
+            plt.title(f"{self.identifier} Feature Importance (Top {top_n})")
+            plt.grid(axis="x", linestyle="--", alpha=0.7)
+        
             if save_results:
-                plt.subplots_adjust(top=0.90)
-                plt.savefig(f'{self.save_path}/{self.identifier}_shap_aggregated_beeswarm.png')
+                plt.savefig(f'{self.save_path}/{self.identifier}_shapiq_feature_importance.png')
                 plt.show()
-                plt.close()
-                shap.summary_plot(shap_values, self.X, plot_type="bar", show=False)
-                plt.savefig(f'{self.save_path}/{self.identifier}_shap_aggregated_bar.png')
-                plt.close()
-
-            logging.info("SHAP summary plot generated.")
+            else:
+                plt.show()
+        
+            logging.info("Feature importance plot generated.")
             return shap_values
 
 
@@ -197,24 +212,51 @@ class TabPFNRegression():
         return loco_attributions, shap_attributions
 
     def plot(self, title, modality='') -> None:
-        """ Plot """
+        """ Plot predicted vs. actual values """
         logging.info("Starting plot generation.")
-        plt.figure(figsize=(10, 6))
-        plt.scatter(self.metrics['y_test'], self.metrics['y_pred'], alpha=0.5)
-        plt.plot([self.metrics['y_test'].min(), self.metrics['y_test'].max()], 
-                 [self.metrics['y_test'].min(), self.metrics['y_test'].max()], 
-                 color='red', linestyle='--', linewidth=2)
-        plt.text(self.metrics['y_test'].min(), 
-                self.metrics['y_pred'].max(), 
-                f'R: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.2e}', 
-                fontsize=12, 
-                verticalalignment='top', 
-                bbox=dict(facecolor='white', 
-                alpha=0.5))
-        plt.xlabel('Actual '+ modality + ' ' + self.target_name)
-        plt.ylabel('Predicted '+ modality + ' '+ self.target_name)
-        plt.title(title)
+         # Use a context suitable for publication-quality figures
+        sns.set_context("paper")
+        # Optionally choose a style you like
+        sns.set_style("whitegrid")  
+        # Create a wider (landscape) figure
+        plt.figure(figsize=(10, 6)) 
+        # Create a DataFrame for Seaborn
+        plot_df = pd.DataFrame({
+            'Actual': self.metrics['y_test'],
+            'Predicted': self.metrics['y_pred']
+        })  
+        # Scatter plot only (no regression line)
+        sns.scatterplot(
+            x='Actual', 
+            y='Predicted', 
+            data=plot_df, 
+            alpha=0.7
+        )
+
+        # Plot a reference line with slope = 1
+        min_val = min(plot_df['Actual'].min(), plot_df['Predicted'].min())
+        max_val = max(plot_df['Actual'].max(), plot_df['Predicted'].max())
+        plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--')   
+        # Add text (R and p-value) in the top-left corner inside the plot
+        # using axis coordinates (0–1 range) so it doesn't get cut off
+        plt.text(
+            0.05, 0.95, 
+            f'R: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.6f}', 
+            fontsize=12, 
+            transform=plt.gca().transAxes,  # use axis coordinates
+            verticalalignment='top',
+            bbox=dict(facecolor='white', alpha=0.5)
+        )   
+        # Label axes and set title
+        plt.xlabel(f'Actual {modality} {self.target_name}', fontsize=12)
+        plt.ylabel(f'Predicted {modality} {self.target_name}', fontsize=12)
+        plt.title(title, fontsize=14)   
+        # Show grid and ensure everything fits nicely
         plt.grid(True)
+        plt.tight_layout()  
+        # Save and close
         plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_actual_vs_predicted.png')
-        plt.close()
-        logging.info("Plot saved to %s/%s_%s_actual_vs_predicted.png", self.save_path, self.identifier, self.target_name)
+        plt.close() 
+        # Log info (optional)
+        logging.info("Plot saved to %s/%s_%s_actual_vs_predicted.png", 
+                 self.save_path, self.identifier, self.target_name)

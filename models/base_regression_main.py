@@ -37,15 +37,12 @@ def main(folder_path, data_path, target, identifier, folds=10):
         safe_path_linear, 
         identifier, 
         n_top_features)
-    linear_model.fit()
-    linear_preds = linear_model.predict(linear_model.X)
-    linear_metrics = linear_model.evaluate(folds=folds)
-    linear_importances = linear_model.feature_importance(19)
+    linear_metrics = linear_model.evaluate(folds=folds, get_shap=True)
     linear_model.plot(f"Actual vs. Prediction (Linear Regression) - {identifier}", identifier)
 
     rf_hparams  = {
-        'n_estimators': [50, 100, 150, 200, 250, 300 ,350, 400],
-        'max_depth': [3, 4, 5, 6, 7, 8, 9, 10],
+        'n_estimators': [50, 100, 150, 200, 250, 300],
+        'max_depth': [4, 5, 6, 7, 8, 9],
     }
 
     # Random Forest Model
@@ -57,12 +54,10 @@ def main(folder_path, data_path, target, identifier, folds=10):
         test_split_size, 
         safe_path_rf, 
         identifier, 
-        n_top_features)
+        n_top_features,
+        param_grid=rf_hparams)
     rf_model.fit()
-    rf_preds = rf_model.predict(rf_model.X)
-    #rf_model.tune_haparams(rf_hparams, folds)
-    rf_metrics = rf_model.evaluate(folds=folds)
-    rf_importances = rf_model.feature_importance(19)
+    rf_metrics = rf_model.evaluate(folds=folds, get_shap=True, tune=True, nested=True)
     rf_model.plot(f"Actual vs. Prediction (Random Forest) - {identifier}", identifier)
 
     logging.info("Finished main execution.")
@@ -70,5 +65,9 @@ def main(folder_path, data_path, target, identifier, folds=10):
 
 if __name__ == "__main__":
     folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+    main(folder_path, "data/BDI/bdi_df.csv", "diff", "BDI", -1)
+    main(folder_path, "data/MoCA/moca_df.csv", "diff", "MoCA", -1)
     main(folder_path, "data/BDI/bdi_df.csv", "ratio", "BDI", -1)
     main(folder_path, "data/MoCA/moca_df.csv", "ratio", "MoCA", -1)
+    main(folder_path, "data/BDI/bdi_df.csv", "efficacy", "BDI", -1)
+    main(folder_path, "data/MoCA/moca_df.csv", "efficacy", "MoCA", -1)

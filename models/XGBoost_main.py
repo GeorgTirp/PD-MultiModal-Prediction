@@ -40,16 +40,17 @@ def main(folder_path, data_path, target, identifier, folds=10):
         XGB_Hparams, 
         test_split_size, 
         safe_path, 
-        identifier)
-    model.fit()
-    preds = model.predict(model.X)
-    model.tune_haparams(param_grid_xgb, folds)
-    metrics = model.evaluate(folds=folds)
-    importances = model.feature_importance(19)
+        identifier,
+        param_grid_xgb)
+    metrics = model.evaluate(folds=folds, tune=True, nested=True)
     model.plot(f"Actual vs. Prediction (XGBoost) - {identifier}")
 
 if __name__ == "__main__":
     possible_targets = ["BDI_efficacy", "MoCA_efficacy"]
     folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+    main(folder_path, "data/BDI/bdi_df.csv", "diff", "BDI", -1)
+    main(folder_path, "data/MoCA/moca_df.csv", "diff", "MoCA", -1)
+    main(folder_path, "data/BDI/bdi_df.csv", "ratio", "BDI", -1)
+    main(folder_path, "data/MoCA/moca_df.csv", "ratio", "MoCA", -1)
     main(folder_path, "data/BDI/bdi_df.csv", "efficacy", "BDI", -1)
     main(folder_path, "data/MoCA/moca_df.csv", "efficacy", "MoCA", -1)

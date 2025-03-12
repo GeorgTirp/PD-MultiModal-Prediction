@@ -14,8 +14,12 @@ import logging
 from tqdm import tqdm
 from xgboost import XGBRegressor
 from tabpfn import TabPFNRegressor
+import seaborn as sns
+from contextlib import contextmanager#
+from IPython.utils import io
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 class BaseRegressionModel:
     """ Base class for regression models """
@@ -69,9 +73,20 @@ class BaseRegressionModel:
         logging.info("Finished prediction.")
         return pred
 
-    def evaluate(self, folds=10) -> Dict:
+    def evaluate(self, folds=10, get_shap=True, tune=False, nested=False) -> Dict:
+        if nested==True:
+            return self.nested_eval(folds, get_shap, tune)
+        else:
+            return self.sequential_eval(folds, get_shap, tune)
+        
+    def sequential_eval(self, folds=10, get_shap=True, tune=False) -> Dict:
         """ Evaluate the model using cross-validation """
         logging.info("Starting model evaluation...")
+        if tune:
+            if self.param_grid is None:
+                raise ValueError("When calling tune=True, a param_grid has to be passed when initializing the model.")
+            self.tune_hparams(self.X, self.y,  self.param_grid, folds)
+
         if folds == -1:
             kf = LeaveOneOut()
         else:
@@ -79,13 +94,19 @@ class BaseRegressionModel:
 
         preds = []
         y_vals = []
-        for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation"):
+        all_shap_values = []
+        for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation", leave=True):
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
             self.model.fit(X_train_kf, y_train_kf)
             pred = self.model.predict(X_val_kf)
             preds.append(pred)
             y_vals.append(y_val_kf)
+            if get_shap:             
+                 # Compute SHAP values on the whole dataset per fold
+                with io.capture_output():
+                    shap_values = self.feature_importance(top_n=-1, save_results=True, iter_idx=val_index)
+                all_shap_values.append(shap_values) 
 
         preds = np.concatenate(preds)
         y_vals = np.concatenate(y_vals)
@@ -102,6 +123,77 @@ class BaseRegressionModel:
         self.metrics = metrics
         metrics_df = pd.DataFrame([metrics])
         metrics_df.to_csv(f'{self.save_path}/{self.identifier}_metrics.csv', index=False)
+
+        if get_shap:
+            all_shap_values_array = np.stack(all_shap_values, axis=0)
+            # Average over the folds to get an aggregated array of shape (n_samples, n_features)
+            mean_shap_values = np.mean(all_shap_values_array, axis=0)
+            np.save(f'{self.save_path}/{self.identifier}_mean_shap_values.npy', mean_shap_values)
+            shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+            plt.title(f'{self.identifier} XGBoost SHAP Summary Plot (Aggregated)', fontsize=16)
+            plt.subplots_adjust(top=0.90)
+            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm.png')
+            plt.close()
+
+        logging.info("Finished model evaluation.")
+        return metrics
+
+    def nested_eval(self, folds=10, get_shap=True, tune=False) -> Dict:
+        """ Evaluate the model using cross-validation """
+        logging.info("Starting model evaluation...")
+        if folds == -1:
+            kf = LeaveOneOut()
+        else:
+            kf = KFold(n_splits=folds, shuffle=True, random_state=42)
+
+        if tune and self.param_grid is None:
+                raise ValueError("When calling tune=True, a param_grid has to be passed when initializing the model.")
+        preds = []
+        y_vals = []
+        all_shap_values = []
+        for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation", leave=False):
+            X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
+            y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
+            if tune:
+                self.tune_hparams(X_train_kf, y_train_kf, self.param_grid, folds)
+            else :
+                self.model.fit(X_train_kf, y_train_kf)
+            pred = self.model.predict(X_val_kf)
+            preds.append(pred)
+            y_vals.append(y_val_kf)
+            if get_shap:             
+                 # Compute SHAP values on the whole dataset per fold
+                with io.capture_output():
+                    shap_values = self.feature_importance(top_n=-1, save_results=True, iter_idx=val_index)
+                all_shap_values.append(shap_values) 
+
+        preds = np.concatenate(preds)
+        y_vals = np.concatenate(y_vals)
+        r2, p = pearsonr(y_vals, preds)
+        mse = mean_squared_error(y_vals, preds)
+
+        metrics = {
+            'mse': mse,
+            'r2': r2,
+            'p_value': p,
+            'y_pred': preds,
+            'y_test': y_vals
+        }
+        self.metrics = metrics
+        metrics_df = pd.DataFrame([metrics])
+        metrics_df.to_csv(f'{self.save_path}/{self.identifier}_metrics.csv', index=False)
+
+        if get_shap:
+            all_shap_values_array = np.stack(all_shap_values, axis=0)
+            # Average over the folds to get an aggregated array of shape (n_samples, n_features)
+            mean_shap_values = np.mean(all_shap_values_array, axis=0)
+            np.save(f'{self.save_path}/{self.identifier}_mean_shap_values.npy', mean_shap_values)
+            shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+            plt.title(f'{self.identifier} XGBoost SHAP Summary Plot (Aggregated)', fontsize=16)
+            plt.subplots_adjust(top=0.90)
+            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm.png')
+            plt.close()
+
         logging.info("Finished model evaluation.")
         return metrics
 
@@ -111,24 +203,61 @@ class BaseRegressionModel:
 
     def plot(self, title, modality='') -> None:
         """ Plot predicted vs. actual values """
-        
+        logging.info("Starting plot generation.")
+         # Use a context suitable for publication-quality figures
+        sns.set_context("paper")
+        # Optionally choose a style you like
+        sns.set_style("whitegrid")
+
+        # Create a wider (landscape) figure
         plt.figure(figsize=(10, 6))
-        plt.scatter(self.metrics['y_test'], self.metrics['y_pred'], alpha=0.5)
-        plt.plot([self.metrics['y_test'].min(), self.metrics['y_test'].max()], 
-                 [self.metrics['y_test'].min(), self.metrics['y_test'].max()], 
-                 color='red', linestyle='--', linewidth=2)
-        plt.text(self.metrics['y_test'].min(), 
-                 self.metrics['y_pred'].max(), 
-                 f'R: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.2e}', 
-                 fontsize=12, 
-                 verticalalignment='top', 
-                 bbox=dict(facecolor='white', alpha=0.5))
-        plt.xlabel('Actual '+ modality + ' ' + self.target_name)
-        plt.ylabel('Predicted '+ modality + ' '+ self.target_name)
-        plt.title(title)
+
+        # Create a DataFrame for Seaborn
+        plot_df = pd.DataFrame({
+            'Actual': self.metrics['y_test'],
+            'Predicted': self.metrics['y_pred']
+        })
+
+        # Scatter plot only (no regression line)
+        sns.scatterplot(
+            x='Actual', 
+            y='Predicted', 
+            data=plot_df, 
+            alpha=0.7
+        )
+        
+        # Plot a reference line with slope = 1
+        min_val = min(plot_df['Actual'].min(), plot_df['Predicted'].min())
+        max_val = max(plot_df['Actual'].max(), plot_df['Predicted'].max())
+        plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--')
+
+        # Add text (R and p-value) in the top-left corner inside the plot
+        # using axis coordinates (0–1 range) so it doesn't get cut off
+        plt.text(
+            0.05, 0.95, 
+            f'R: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.6f}', 
+            fontsize=12, 
+            transform=plt.gca().transAxes,  # use axis coordinates
+            verticalalignment='top',
+            bbox=dict(facecolor='white', alpha=0.5)
+        )
+
+        # Label axes and set title
+        plt.xlabel(f'Actual {modality} {self.target_name}', fontsize=12)
+        plt.ylabel(f'Predicted {modality} {self.target_name}', fontsize=12)
+        plt.title(title, fontsize=14)
+
+        # Show grid and ensure everything fits nicely
         plt.grid(True)
+        plt.tight_layout()
+
+        # Save and close
         plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_actual_vs_predicted.png')
         plt.close()
+
+        # Log info (optional)
+        logging.info("Plot saved to %s/%s_%s_actual_vs_predicted.png", 
+                 self.save_path, self.identifier, self.target_name)
 
 class LinearRegressionModel(BaseRegressionModel):
     """ Linear Regression Model """
@@ -146,10 +275,12 @@ class LinearRegressionModel(BaseRegressionModel):
         self.model = LinearRegression()
         self.model_name = "Linear Regression"
 
-    def feature_importance(self, top_n: int = None, save_results=True) -> Dict:
+    def feature_importance(self, top_n: int = None, save_results=True, iter_idx=None) -> Dict:
         """ Compute feature importance using coefficients for Linear Regression """
-        top_n = top_n or self.top_n
-        logging.info("Starting feature importance evaluation for Linear Regression...")
+        top_n = len(self.feature_selection['features']) if top_n == -1 else top_n or self.top_n
+        
+        if iter_idx is None:
+            logging.info("Starting feature importance evaluation for Linear Regression...")
         # Use absolute value of coefficients (normalized)
         attribution = np.abs(self.model.coef_) / np.sum(np.abs(self.model.coef_))
         feature_names = self.feature_selection['features']
@@ -170,14 +301,17 @@ class LinearRegressionModel(BaseRegressionModel):
         plt.title(f'{self.identifier} SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
-            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm.png')
+            if iter_idx is not None:
+                save_path = self.save_path + "/singleSHAPs"
+                os.makedirs(save_path, exist_ok=True)
+                plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm_{iter_idx}.png')
+            else:
+                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm.png')
             plt.close()
-            shap.summary_plot(shap_values, self.X, plot_type="bar", show=False)
-            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_bar.png')
-            plt.close()
-        
-        logging.info("Finished feature importance evaluation for Linear Regression.")
-        return top_features
+            
+        if iter_idx is None:
+            logging.info("Finished feature importance evaluation for Linear Regression.")
+        return shap_values
 
 class RandomForestModel(BaseRegressionModel):
     """ Random Forest Model """
@@ -190,17 +324,20 @@ class RandomForestModel(BaseRegressionModel):
             test_split_size: float = 0.2,
             save_path: str = None,
             identifier: str = None,
-            top_n: int = 10):
+            top_n: int = 10,
+            param_grid: dict = None):
         
         super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n)
         self.rf_hparams = rf_hparams
+        self.param_grid = param_grid
         self.model = RandomForestRegressor(**self.rf_hparams)
         self.model_name = "Random Forest"
 
-    def feature_importance(self, top_n: int = None, save_results=True) -> Dict:
+    def feature_importance(self, top_n: int = None, save_results=True, iter_idx=None) -> Dict:
         """ Compute feature importance using the built-in attribute for Random Forest """
-        top_n = top_n or self.top_n
-        logging.info("Starting feature importance evaluation for Random Forest...")
+        top_n = len(self.feature_selection['features']) if top_n == -1 else top_n or self.top_n
+        if iter_idx is None:
+            logging.info("Starting feature importance evaluation for Random Forest...")
         # Use the feature_importances_ attribute of RandomForest
         attribution = self.model.feature_importances_
         feature_names = self.feature_selection['features']
@@ -213,30 +350,26 @@ class RandomForestModel(BaseRegressionModel):
 
         # Compute SHAP values using a tree explainer
         shap.initjs()
-        background_data = self.X.sample(25, random_state=42)
         explainer = shap.TreeExplainer(self.model)
-        shap_values = []
-        for row in tqdm(self.X.itertuples(index=False), total=len(self.X), desc="Computing SHAP values"):
-            row_df = pd.DataFrame([row], columns=self.X.columns)
-            row_shap = explainer.shap_values(row_df)
-            shap_values.append(row_shap)
-        # Convert list of arrays to a single array
-        shap_values = np.array(shap_values).squeeze()
+        shap_values = explainer.shap_values(self.X)
         # Plot aggregated SHAP values (beeswarm and bar plots)
         shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=top_n)
         plt.title(f'{self.identifier} SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
-            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm.png')
+            if iter_idx is not None:
+                save_path = self.save_path + "/singleSHAPs"
+                os.makedirs(save_path, exist_ok=True)
+                plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm_{iter_idx}.png')
+            else:
+                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm.png')
             plt.close()
-            shap.summary_plot(shap_values, self.X, plot_type="bar", show=False)
-            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_bar.png')
-            plt.close()
-        
-        logging.info("Finished feature importance evaluation for Random Forest.")
-        return top_features
+            
+        if iter_idx is None:
+            logging.info("Finished feature importance evaluation for Random Forest.")
+        return shap_values
 
-    def tune_haparams(self, param_grid: dict, folds=5) -> Dict:
+    def tune_hparams(self, X, y, param_grid: dict, folds=5) -> Dict:
         """Tune hyperparameters using GridSearchCV with 5-fold cross-validation.
 
         Args:
@@ -246,8 +379,8 @@ class RandomForestModel(BaseRegressionModel):
             dict: Best hyperparameters found.
         """
         if folds == -1:
-            folds = len(self.X)
-        logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
+            folds = len(X)
+        #logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
@@ -255,8 +388,9 @@ class RandomForestModel(BaseRegressionModel):
             scoring='neg_mean_squared_error',
             n_jobs=-1
         )
-        grid_search.fit(self.X, self.y)
+        grid_search.fit(X, y)
         best_params = grid_search.best_params_
+        self.model.set_params(**best_params)
         self.rf_hparams.update(best_params)
         logging.info(f"Best parameters found: {best_params}")
         return best_params
@@ -273,17 +407,20 @@ class XGBoostRegressionModel(BaseRegressionModel):
             test_split_size: float = 0.2,
             save_path: str = None,
             identifier: str = None,
-            top_n: int = 10):
+            top_n: int = 10,
+            param_grid: dict = None):
         
         super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n)
         self.xgb_hparams = xgb_hparams
         self.model = XGBRegressor(**self.xgb_hparams)
         self.model_name = "XGBoost Regression"
+        self.param_grid = param_grid
 
-    def feature_importance(self, top_n: int = None, save_results=True) -> Dict:
+    def feature_importance(self, top_n: int = None, save_results=True, iter_idx = None) -> Dict:
         """ Compute feature importance using the built-in attribute for XGBoost """
-        top_n = top_n or self.top_n
-        logging.info("Starting feature importance evaluation for XGBoost Regression...")
+        top_n = len(self.feature_selection['features']) if top_n == -1 else top_n or self.top_n
+        if iter_idx is None:
+            logging.info("Starting feature importance evaluation for XGBoost Regression...")
         # Use the feature_importances_ attribute of XGBoost
         attribution = self.model.feature_importances_
         feature_names = self.feature_selection['features']
@@ -296,29 +433,26 @@ class XGBoostRegressionModel(BaseRegressionModel):
 
         # Compute SHAP values using a tree explainer
         shap.initjs()
-        background_data = self.X.sample(25, random_state=42)
         explainer = shap.TreeExplainer(self.model)
-        shap_values = []
-        for row in tqdm(self.X.itertuples(index=False), total=len(self.X), desc="Computing SHAP values for XGBoost"):
-            row_df = pd.DataFrame([row], columns=self.X.columns)
-            row_shap = explainer.shap_values(row_df)
-            shap_values.append(row_shap)
-        shap_values = np.array(shap_values).squeeze()
+        shap_values = explainer.shap_values(self.X)
         # Plot aggregated SHAP values (beeswarm and bar plots)
         shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=top_n)
         plt.title(f'{self.identifier} XGBoost SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
-            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm.png')
+            if iter_idx is not None:
+                save_path = self.save_path + "/singleSHAPs"
+                os.make_dirs(save_path, exist_ok=True)
+                plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm_{iter_idx}.png')
+            else:
+                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm.png')
             plt.close()
-            shap.summary_plot(shap_values, self.X, plot_type="bar", show=False)
-            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_bar.png')
-            plt.close()
-        
-        logging.info("Finished feature importance evaluation for XGBoost Regression.")
-        return top_features
+            
+        if iter_idx is None:  
+            logging.info("Finished feature importance evaluation for XGBoost Regression.")
+        return shap_values
     
-    def tune_haparams(self, param_grid: dict, folds=5) -> Dict:
+    def tune_hparams(self, param_grid: dict, folds=5) -> Dict:
         """Tune hyperparameters using GridSearchCV with 5-fold cross-validation.
 
         Args:
@@ -337,9 +471,11 @@ class XGBoostRegressionModel(BaseRegressionModel):
             scoring='neg_mean_squared_error',
             n_jobs=-1
         )
+
         grid_search.fit(self.X, self.y)
         best_params = grid_search.best_params_
         self.xgb_hparams.update(best_params)
+        self.model.set_params(**best_params)
         logging.info(f"Best parameters found: {best_params}")
         return best_params
     
