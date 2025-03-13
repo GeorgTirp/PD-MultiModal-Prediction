@@ -17,6 +17,7 @@ from tabpfn import TabPFNRegressor
 import seaborn as sns
 from contextlib import contextmanager#
 from IPython.utils import io
+import torch
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -73,19 +74,19 @@ class BaseRegressionModel:
         logging.info("Finished prediction.")
         return pred
 
-    def evaluate(self, folds=10, get_shap=True, tune=False, nested=False) -> Dict:
+    def evaluate(self, folds=10, get_shap=True, tune=False, tune_folds=10, nested=False) -> Dict:
         if nested==True:
-            return self.nested_eval(folds, get_shap, tune)
+            return self.nested_eval(folds, get_shap, tune, tune_folds)
         else:
-            return self.sequential_eval(folds, get_shap, tune)
+            return self.sequential_eval(folds, get_shap, tune, tune_folds)
         
-    def sequential_eval(self, folds=10, get_shap=True, tune=False) -> Dict:
+    def sequential_eval(self, folds=10, get_shap=True, tune=False, tune_folds=10) -> Dict:
         """ Evaluate the model using cross-validation """
         logging.info("Starting model evaluation...")
         if tune:
             if self.param_grid is None:
                 raise ValueError("When calling tune=True, a param_grid has to be passed when initializing the model.")
-            self.tune_hparams(self.X, self.y,  self.param_grid, folds)
+            self.tune_hparams(self.X, self.y,  self.param_grid, tune_folds)
 
         if folds == -1:
             kf = LeaveOneOut()
@@ -130,15 +131,15 @@ class BaseRegressionModel:
             mean_shap_values = np.mean(all_shap_values_array, axis=0)
             np.save(f'{self.save_path}/{self.identifier}_mean_shap_values.npy', mean_shap_values)
             shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-            plt.title(f'{self.identifier} XGBoost SHAP Summary Plot (Aggregated)', fontsize=16)
+            plt.title(f'{self.identifier} Summary Plot (Aggregated)', fontsize=16)
             plt.subplots_adjust(top=0.90)
-            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm.png')
+            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm.png')
             plt.close()
 
         logging.info("Finished model evaluation.")
         return metrics
 
-    def nested_eval(self, folds=10, get_shap=True, tune=False) -> Dict:
+    def nested_eval(self, folds=10, get_shap=True, tune=False, tune_folds=10) -> Dict:
         """ Evaluate the model using cross-validation """
         logging.info("Starting model evaluation...")
         if folds == -1:
@@ -155,9 +156,8 @@ class BaseRegressionModel:
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
             if tune:
-                self.tune_hparams(X_train_kf, y_train_kf, self.param_grid, folds)
-            else :
-                self.model.fit(X_train_kf, y_train_kf)
+                self.tune_hparams(X_train_kf, y_train_kf, self.param_grid, tune_folds)
+            self.model.fit(X_train_kf, y_train_kf)
             pred = self.model.predict(X_val_kf)
             preds.append(pred)
             y_vals.append(y_val_kf)
@@ -189,9 +189,9 @@ class BaseRegressionModel:
             mean_shap_values = np.mean(all_shap_values_array, axis=0)
             np.save(f'{self.save_path}/{self.identifier}_mean_shap_values.npy', mean_shap_values)
             shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-            plt.title(f'{self.identifier} XGBoost SHAP Summary Plot (Aggregated)', fontsize=16)
+            plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
             plt.subplots_adjust(top=0.90)
-            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm.png')
+            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm.png')
             plt.close()
 
         logging.info("Finished model evaluation.")
@@ -229,8 +229,29 @@ class BaseRegressionModel:
         # Plot a reference line with slope = 1
         min_val = min(plot_df['Actual'].min(), plot_df['Predicted'].min())
         max_val = max(plot_df['Actual'].max(), plot_df['Predicted'].max())
-        plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--')
+        plt.plot([min_val, max_val], [min_val, max_val], color='grey', alpha=0.4, linestyle='--')
 
+        # Fit a regression line
+        sns.regplot(
+            x='Actual', 
+            y='Predicted', 
+            data=plot_df, 
+            scatter=False, 
+            color='red', 
+            line_kws={'label': 'Regression Line'}
+        )
+
+        # Plot confidence intervals
+        ci = 95  # Confidence interval percentage
+        sns.regplot(
+            x='Actual', 
+            y='Predicted', 
+            data=plot_df, 
+            scatter=False, 
+            color='red', 
+            ci=ci, 
+            line_kws={'label': f'{ci}% Confidence Interval'}
+        )
         # Add text (R and p-value) in the top-left corner inside the plot
         # using axis coordinates (0–1 range) so it doesn't get cut off
         plt.text(
@@ -354,15 +375,15 @@ class RandomForestModel(BaseRegressionModel):
         shap_values = explainer.shap_values(self.X)
         # Plot aggregated SHAP values (beeswarm and bar plots)
         shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=top_n)
-        plt.title(f'{self.identifier} SHAP Summary Plot (Aggregated)', fontsize=16)
+        plt.title(f'{self.identifier} {self.target_name}  SHAP Summary Plot (aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
             if iter_idx is not None:
                 save_path = self.save_path + "/singleSHAPs"
                 os.makedirs(save_path, exist_ok=True)
-                plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm_{iter_idx}.png')
+                plt.savefig(f'{save_path}{self.identifier}_{self.target_name}_rf_shap_aggregated_beeswarm_{iter_idx}.png')
             else:
-                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm.png')
+                plt.savefig(f'{self.save_path}{self.identifier}_{self.target_name}_rf_shap_aggregated_beeswarm.png')
             plt.close()
             
         if iter_idx is None:
@@ -392,7 +413,7 @@ class RandomForestModel(BaseRegressionModel):
         best_params = grid_search.best_params_
         self.model.set_params(**best_params)
         self.rf_hparams.update(best_params)
-        logging.info(f"Best parameters found: {best_params}")
+        #logging.info(f"Best parameters found: {best_params}")
         return best_params
     
 
@@ -412,7 +433,16 @@ class XGBoostRegressionModel(BaseRegressionModel):
         
         super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n)
         self.xgb_hparams = xgb_hparams
-        self.model = XGBRegressor(**self.xgb_hparams)
+        if torch.cuda.is_available():
+            device = torch.device("cuda:0")
+            props = torch.cuda.get_device_properties(device)
+            print("Device name:", props.name)
+            print("Number of SMs:", props.multi_processor_count)
+            print("Total GPU memory (bytes):", props.total_memory)
+            self.model = XGBRegressor(**self.xgb_hparams, tree_method='gpu_hist', predictor='gpu_predictor')
+        else:
+            print("No CUDA device found.")
+            self.model = XGBRegressor(**self.xgb_hparams)
         self.model_name = "XGBoost Regression"
         self.param_grid = param_grid
 
@@ -437,12 +467,12 @@ class XGBoostRegressionModel(BaseRegressionModel):
         shap_values = explainer.shap_values(self.X)
         # Plot aggregated SHAP values (beeswarm and bar plots)
         shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=top_n)
-        plt.title(f'{self.identifier} XGBoost SHAP Summary Plot (Aggregated)', fontsize=16)
+        plt.title(f'{self.identifier} {self.target_name}  SHAP Summary Plot (aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
             if iter_idx is not None:
                 save_path = self.save_path + "/singleSHAPs"
-                os.make_dirs(save_path, exist_ok=True)
+                os.makedirs(save_path, exist_ok=True)
                 plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm_{iter_idx}.png')
             else:
                 plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm.png')
@@ -452,7 +482,7 @@ class XGBoostRegressionModel(BaseRegressionModel):
             logging.info("Finished feature importance evaluation for XGBoost Regression.")
         return shap_values
     
-    def tune_hparams(self, param_grid: dict, folds=5) -> Dict:
+    def tune_hparams(self, X, y, param_grid: dict, folds=5) -> Dict:
         """Tune hyperparameters using GridSearchCV with 5-fold cross-validation.
 
         Args:
@@ -462,8 +492,8 @@ class XGBoostRegressionModel(BaseRegressionModel):
             dict: Best hyperparameters found.
         """
         if folds == -1:
-            folds = len(self.X)
-        logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
+            folds = len(X)
+        #logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
@@ -472,11 +502,11 @@ class XGBoostRegressionModel(BaseRegressionModel):
             n_jobs=-1
         )
 
-        grid_search.fit(self.X, self.y)
+        grid_search.fit(X, y)
         best_params = grid_search.best_params_
         self.xgb_hparams.update(best_params)
         self.model.set_params(**best_params)
-        logging.info(f"Best parameters found: {best_params}")
+        #logging.info(f"Best parameters found: {best_params}")
         return best_params
     
 

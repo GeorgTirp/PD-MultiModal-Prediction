@@ -15,10 +15,10 @@ def main(folder_path, data_path, target, identifier, folds=10):
     Feature_Selection = {}
     Feature_Selection['target'] = target_col
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
-    safe_path_linear = folder_path + "/results/LinearRegression"
+    safe_path_linear = folder_path + "/results/LinearRegression/"
     if not os.path.exists(safe_path_linear):
         os.makedirs(safe_path_linear)
-    safe_path_rf = folder_path + "/results/RandomForest"
+    safe_path_rf = folder_path + "/results/RandomForest/"
     if not os.path.exists(safe_path_rf):
         os.makedirs(safe_path_rf)
     RandomForest_Hparams = {
@@ -57,7 +57,7 @@ def main(folder_path, data_path, target, identifier, folds=10):
         n_top_features,
         param_grid=rf_hparams)
     rf_model.fit()
-    rf_metrics = rf_model.evaluate(folds=folds, get_shap=True, tune=True, nested=True)
+    rf_metrics = rf_model.evaluate(folds=folds, get_shap=True, tune=True, nested=True, tune_folds=10)
     rf_model.plot(f"Actual vs. Prediction (Random Forest) - {identifier}", identifier)
 
     logging.info("Finished main execution.")

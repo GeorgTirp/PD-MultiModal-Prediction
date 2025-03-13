@@ -97,6 +97,7 @@ class TabPFNRegression():
             pred = self.model.predict(X_val_kf)
             preds.append(pred)
             y_vals.append(y_val_kf)
+            
 
         preds = np.concatenate(preds)
         y_vals = np.concatenate(y_vals)
@@ -217,14 +218,17 @@ class TabPFNRegression():
          # Use a context suitable for publication-quality figures
         sns.set_context("paper")
         # Optionally choose a style you like
-        sns.set_style("whitegrid")  
+        sns.set_style("whitegrid")
+
         # Create a wider (landscape) figure
-        plt.figure(figsize=(10, 6)) 
+        plt.figure(figsize=(10, 6))
+
         # Create a DataFrame for Seaborn
         plot_df = pd.DataFrame({
             'Actual': self.metrics['y_test'],
             'Predicted': self.metrics['y_pred']
-        })  
+        })
+
         # Scatter plot only (no regression line)
         sns.scatterplot(
             x='Actual', 
@@ -232,11 +236,33 @@ class TabPFNRegression():
             data=plot_df, 
             alpha=0.7
         )
-
+        
         # Plot a reference line with slope = 1
         min_val = min(plot_df['Actual'].min(), plot_df['Predicted'].min())
         max_val = max(plot_df['Actual'].max(), plot_df['Predicted'].max())
-        plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--')   
+        plt.plot([min_val, max_val], [min_val, max_val], color='grey', alpha=0.4, linestyle='--')
+
+        # Fit a regression line
+        sns.regplot(
+            x='Actual', 
+            y='Predicted', 
+            data=plot_df, 
+            scatter=False, 
+            color='red', 
+            line_kws={'label': 'Regression Line'}
+        )
+
+        # Plot confidence intervals
+        ci = 95  # Confidence interval percentage
+        sns.regplot(
+            x='Actual', 
+            y='Predicted', 
+            data=plot_df, 
+            scatter=False, 
+            color='red', 
+            ci=ci, 
+            line_kws={'label': f'{ci}% Confidence Interval'}
+        )
         # Add text (R and p-value) in the top-left corner inside the plot
         # using axis coordinates (0–1 range) so it doesn't get cut off
         plt.text(
@@ -246,17 +272,23 @@ class TabPFNRegression():
             transform=plt.gca().transAxes,  # use axis coordinates
             verticalalignment='top',
             bbox=dict(facecolor='white', alpha=0.5)
-        )   
+        )
+
         # Label axes and set title
         plt.xlabel(f'Actual {modality} {self.target_name}', fontsize=12)
         plt.ylabel(f'Predicted {modality} {self.target_name}', fontsize=12)
-        plt.title(title, fontsize=14)   
+        plt.title(title, fontsize=14)
+
         # Show grid and ensure everything fits nicely
         plt.grid(True)
-        plt.tight_layout()  
+        plt.tight_layout()
+
         # Save and close
         plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_actual_vs_predicted.png')
-        plt.close() 
+        plt.close()
+
         # Log info (optional)
         logging.info("Plot saved to %s/%s_%s_actual_vs_predicted.png", 
                  self.save_path, self.identifier, self.target_name)
+
+        #

@@ -19,11 +19,12 @@ def main(folder_path, data_path, target, identifier, folds=10):
     # Random Forest Model
      #XGBoost hyperparameters grid    
     param_grid_xgb = {
-        'n_estimators': [50, 100, 150, 200, 250, 300 ,350],
-        'learning_rate': [0.001, 0.005,  0.01, 0.1],
-        'max_depth': [4, 5, 6, 7, 8, 9, 10],
-        'subsample': [0.7, 0.9, 0.8, 1.0],
-        'colsample_bytree': [0.7, 0.9, 0.8, 1.0]
+        'n_estimators': [100, 150, 200, 250, 300],
+        'learning_rate': [0.01, 0.1],
+        'max_depth': [5, 6, 7, 8],
+        'subsample': [0.8, 1.0],
+        'colsample_bytree': [ 0.8, 1.0],
+        'gamma': [0, 0.1]
     }
     XGB_Hparams = {
         'n_estimators': param_grid_xgb['n_estimators'][0],
@@ -41,8 +42,9 @@ def main(folder_path, data_path, target, identifier, folds=10):
         test_split_size, 
         safe_path, 
         identifier,
+        -1,
         param_grid_xgb)
-    metrics = model.evaluate(folds=folds, tune=True, nested=True)
+    metrics = model.evaluate(folds=folds, tune=True, nested=True, tune_folds=10)
     model.plot(f"Actual vs. Prediction (XGBoost) - {identifier}")
 
 if __name__ == "__main__":
