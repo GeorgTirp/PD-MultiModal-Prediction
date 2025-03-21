@@ -99,7 +99,8 @@ class BaseRegressionModel:
         for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation", leave=True):
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
-            self.model.fit(X_train_kf, y_train_kf)
+            if not tune:
+                self.model.fit(X_train_kf, y_train_kf)
             pred = self.model.predict(X_val_kf)
             preds.append(pred)
             y_vals.append(y_val_kf)
@@ -157,7 +158,8 @@ class BaseRegressionModel:
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
             if tune:
                 self.tune_hparams(X_train_kf, y_train_kf, self.param_grid, tune_folds)
-            self.model.fit(X_train_kf, y_train_kf)
+            else:
+                self.model.fit(X_train_kf, y_train_kf)
             pred = self.model.predict(X_val_kf)
             preds.append(pred)
             y_vals.append(y_val_kf)
@@ -381,9 +383,9 @@ class RandomForestModel(BaseRegressionModel):
             if iter_idx is not None:
                 save_path = self.save_path + "/singleSHAPs"
                 os.makedirs(save_path, exist_ok=True)
-                plt.savefig(f'{save_path}{self.identifier}_{self.target_name}_rf_shap_aggregated_beeswarm_{iter_idx}.png')
+                plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_rf_shap_aggregated_beeswarm_{iter_idx}.png')
             else:
-                plt.savefig(f'{self.save_path}{self.identifier}_{self.target_name}_rf_shap_aggregated_beeswarm.png')
+                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_rf_shap_aggregated_beeswarm.png')
             plt.close()
             
         if iter_idx is None:
@@ -411,6 +413,7 @@ class RandomForestModel(BaseRegressionModel):
         )
         grid_search.fit(X, y)
         best_params = grid_search.best_params_
+        self.model = grid_search.best_estimator_
         self.model.set_params(**best_params)
         self.rf_hparams.update(best_params)
         #logging.info(f"Best parameters found: {best_params}")
