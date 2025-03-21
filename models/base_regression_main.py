@@ -2,6 +2,8 @@ import os
 import logging
 import pandas as pd
 from RegressionsModels import LinearRegressionModel, RandomForestModel
+#from sklearn.datasets import load_diabetes
+
 
 def main(folder_path, data_path, target, identifier, folds=10):
     logging.info("Starting main execution...")
@@ -13,6 +15,12 @@ def main(folder_path, data_path, target, identifier, folds=10):
     data_df = data_df.drop(columns=['Pat_ID']+ ignored_target_cols)
     test_split_size = 0.2
     Feature_Selection = {}
+    ### test
+    #X, y = load_diabetes(return_X_y=True, as_frame=True)
+    #data_df = pd.concat([X, y.rename("target")], axis=1)
+    #Feature_Selection['target'] = "target"
+    #Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
+    ### test ende
     Feature_Selection['target'] = target_col
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
     safe_path_linear = folder_path + "/results/LinearRegression/"

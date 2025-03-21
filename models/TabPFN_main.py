@@ -2,7 +2,7 @@ import os
 #from RegressionsModels import TabPFNRegression
 from TabPFN import TabPFNRegression
 import pandas as pd
-
+#sfrom sklearn.datasets import load_diabetes
 
 def main(folder_path, data_path, target, identifier, folds=10):
     target_col = identifier + "_" + target
@@ -13,8 +13,14 @@ def main(folder_path, data_path, target, identifier, folds=10):
     data_df = data_df.drop(columns=['Pat_ID']+ ignored_target_cols)
     test_split_size = 0.2
     Feature_Selection = {}
+    ### test
+    #X, y = load_diabetes(return_X_y=True, as_frame=True)
+    #data_df = pd.concat([X, y.rename("target")], axis=1)
+    #Feature_Selection['target'] = "target"
+    #Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
+    #safe_path = os.path.join(folder_path, "test/results/TabPFN")
+    ### test ende
     Feature_Selection['target'] = target_col
-    print(Feature_Selection['target'])
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
     safe_path = os.path.join(folder_path, "results/TabPFN")
     if not os.path.exists(safe_path):
@@ -38,7 +44,7 @@ if __name__ == "__main__":
     folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     main(folder_path, "data/BDI/bdi_df(2).csv", "diff", "BDI", -1)
     main(folder_path, "data/MoCA/moca_df.csv", "diff", "MoCA", -1)
-    main(folder_path, "data/BDI/bdi_df(2).csv", "ratio", "BDI", -1)
+    main(folder_path, "data/BDI/bdi_df.csv", "ratio", "BDI", -1)
     main(folder_path, "data/MoCA/moca_df.csv", "ratio", "MoCA", -1)
-    main(folder_path, "data/BDI/bdi_df(2).csv", "efficacy", "BDI", -1)
+    main(folder_path, "data/BDI/bdi_df.csv", "efficacy", "BDI", -1)
     main(folder_path, "data/MoCA/moca_df.csv", "efficacy", "MoCA", -1)
