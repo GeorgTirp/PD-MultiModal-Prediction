@@ -142,7 +142,7 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
         showcaps=True,
         whiskerprops={'color': 'black'},
         medianprops={'color': 'black'},
-        flierprops={'marker': 'o', 'markersize': 5, 'markerfacecolor': 'red', 'alpha': 0.5},
+        flierprops={'marker': 'o', 'markersize': 5, 'markerfacecolor': 'none', 'alpha': 0.5},
         ax=ax
     )
     for patch, color in zip(bp.artists, boxplots_colors):
