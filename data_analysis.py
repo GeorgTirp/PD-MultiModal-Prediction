@@ -142,9 +142,10 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
         showcaps=True,
         whiskerprops={'color': 'black'},
         medianprops={'color': 'black'},
-        flierprops={'marker': 'o', 'markersize': 5, 'markerfacecolor': 'none', 'alpha': 0.5},
+        flierprops={'marker': ''},  # Do not mark outliers
         ax=ax
     )
+
     for patch, color in zip(bp.artists, boxplots_colors):
         patch.set_facecolor(color)
         patch.set_alpha(0.5)
@@ -296,8 +297,8 @@ def histoplot(input_path: str , save_path: str) -> None:
 
 def visualize_demographics(questionnaire, root_dir):
     # Example usage
-    #root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
-    root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction"
+    root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+    #root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction"
     data_path = root_dir + "/data/" + questionnaire 
     stim_path = data_path + "/stim_positions.csv"
     save_path = root_dir + "/results/data_analysis/" + questionnaire + "/"

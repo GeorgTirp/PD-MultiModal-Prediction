@@ -59,10 +59,11 @@ def main(folder_path, data_path, target, identifier, folds=10):
 
 if __name__ == "__main__":
     possible_targets = ["BDI_efficacy", "MoCA_efficacy"]
-    folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    main(folder_path, "data/BDI/bdi_df_normalized.csv", "diff", "BDI", -1)
-    main(folder_path, "data/MoCA/moca_df_normalized.csv", "diff", "MoCA", -1)
-    main(folder_path, "data/BDI/bdi_df_normalized.csv.", "ratio", "BDI", -1)
-    main(folder_path, "data/MoCA/moca_df_normalized.csv", "ratio", "MoCA", -1)
-    main(folder_path, "data/BDI/bdi_df_normalized.csv", "efficacy", "BDI", -1)
-    main(folder_path, "data/MoCA/moca_df_normalized.csv", "efficacy", "MoCA", -1)
+    #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    main(folder_path, "data/BDI/bdi_df.csv", "diff", "BDI", -1)
+    main(folder_path, "data/MoCA/moca_df.csv", "diff", "MoCA", -1)
+    main(folder_path, "data/BDI/bdi_df.csv", "ratio", "BDI", -1)
+    main(folder_path, "data/MoCA/moca_df.csv", "ratio", "MoCA", -1)
+    main(folder_path, "data/BDI/bdi_df.csv", "efficacy", "BDI", -1)
+    main(folder_path, "data/MoCA/moca_df.csv", "efficacy", "MoCA", -1)
