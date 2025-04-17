@@ -277,7 +277,7 @@ class TabPFNRegression():
         # Label axes and set title
         plt.xlabel(f'Actual {modality} {self.target_name}', fontsize=12)
         plt.ylabel(f'Predicted {modality} {self.target_name}', fontsize=12)
-        plt.title(title, fontsize=14)
+        plt.title(title  + "  N=" + str(len(self.y)), fontsize=14)
 
         # Show grid and ensure everything fits nicely
         plt.grid(True)
