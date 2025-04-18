@@ -202,7 +202,7 @@ class BaseRegressionModel:
                         shap_values = self.feature_importance(top_n=-1, save_results=True, iter_idx=val_index)
                         all_shap_values.append(shap_values) 
 
-        pred_dists = np.hstack(pred_dists)
+        #pred_dists = np.hstack(pred_dists)
         preds = np.concatenate(preds)
         y_vals = np.concatenate(y_vals)
         r2, p = pearsonr(y_vals, preds)
@@ -250,16 +250,16 @@ class BaseRegressionModel:
             # Save feature importances to a file
             
 
-            metrics = {
-            'mse': mse,
-            'r2': r2,
-            'p_value': p,
-            'y_pred': preds,
-            'y_test': y_vals,
-            'pred_dist': pred_dists,
-            'epistemic': epistemic_uncertainty if uncertainty else None,
-            'aleatoric': aleatoric_uncertainty if uncertainty else None,
-            'feature_importance': feature_importances if get_shap else None
+        metrics = {
+        'mse': mse,
+        'r2': r2,
+        'p_value': p,
+        'y_pred': preds,
+        'y_test': y_vals,
+        'pred_dist': pred_dists,
+        'epistemic': epistemic_uncertainty if uncertainty else None,
+        'aleatoric': aleatoric_uncertainty if uncertainty else None,
+        'feature_importance': feature_importances if get_shap else None
         }
         self.metrics = metrics
         metrics_df = pd.DataFrame([metrics])
@@ -271,7 +271,8 @@ class BaseRegressionModel:
         """ Compute the feature ablation"""
         r2s = []
         p_values = []
-        for feature in self.feature_selection['features']:
+        number_of_features = len(self.feature_selection['features'])
+        for i in range(number_of_features):
             metrics = self.nested_eval(folds=10, get_shap=True, tune=False)
             r2s.append(metrics['r2'])
             p_values.append(metrics['p_value'])
@@ -281,6 +282,35 @@ class BaseRegressionModel:
             self.X = self.X.drop(columns=[least_important_feature])
             self.y = self.y.drop(columns=[least_important_feature])
             self.feature_selection['features'].remove(least_important_feature)
+        
+        # Define the custom color palette from your image
+        custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
+                # Set Seaborn style, context, and custom palette
+        sns.set_theme(style="whitegrid", context="paper")
+        sns.set_palette(custom_palette)
+        path = self.save_path + 'feature_ablation.png'
+                # Read in the CSV
+        
+        
+        # Create a figure
+        plt.figure(figsize=(6, 4))
+        x = np.arange(number_of_features)
+                # Create a figure
+        plt.figure(figsize=(6, 4))
+                # Plot each model's R² scores in a loop, using sample_sizes on the x-axis
+        #for model_name, r2_scores in results.items():
+        plot_df = pd.DataFrame({'x': x, 'r2s': r2s})
+        sns.lineplot(data=plot_df, x='x', y='r2s', label="R Score", marker='o')
+
+                # Optionally use a log scale for the x-axis if you want to emphasize the “logarithmic” nature
+        # Label the axes and set the title
+        plt.xlabel("Number of removed features")
+        plt.ylabel("R Score")
+        plt.title("R Scores Over Feature Ablation")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(path, dpi=300, bbox_inches='tight')
+        plt.close()
         return r2s, p_values
             
 
@@ -706,8 +736,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
         # Use a small random sample as background
         background = shap.sample(self.X, 20)
 
-        explainer = shap.TreeExplainer(self.model, background, model_output=0)
-        shap_values = explainer.shap_values(self.X)
+        explainer = shap.TreeExplainer(self.model, model_output=0)
+        shap_values = explainer.shap_values(self.X, check_additivity=True)
         shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
         plt.title(f'{self.identifier} NGBoost Mean SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
@@ -726,7 +756,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
         shap.initjs()
         background = shap.sample(self.X, 20)
 
-        explainer = shap.TreeExplainer(self.model, background, model_output=1)
+        explainer = shap.TreeExplainer(self.model, model_output=1)
         shap_values = explainer.shap_values(self.X)
         shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
         plt.title(f'{self.identifier} NGBoost Variance SHAP Summary Plot (Aggregated)', fontsize=16)
@@ -759,7 +789,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
 
         mean_predictions = []
         variance_predictions = []
-
+        members = 2
         for i in range(members):
             # Shuffle data with different random seed
             shuffled_df = self.X.copy()

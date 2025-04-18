@@ -5,6 +5,7 @@ from evidential_boost import NormalInverseGamma
 from sklearn.tree import DecisionTreeRegressor
 from matplotlib import pyplot as plt
 import numpy as np
+import logging
 #from sklearn.datasets import load_diabetes
 
 def main(folder_path, data_path, target, identifier, out, folds=10):
@@ -43,7 +44,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     NGB_Hparams = {
         #'Dist': NormalInverseGamma,
         'n_estimators': 150, 
-        'learning_rate': 0.01, 
+        'learning_rate': 0.1, 
         'natural_gradient': True,
         #'minibatch_frac': 0.1,
         'verbose': False,
@@ -60,12 +61,23 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         identifier,
         -1,
         param_grid_ngb)
-    metrics = model.evaluate(folds=folds, tune=False, nested=True, tune_folds=20, get_shap=False, uncertainty=True)
-    # Save metrics as a CSV file
-    metrics_df = pd.DataFrame(metrics)
-    metrics_df.to_csv(os.path.join(safe_path, "metrics.csv"), index=False)
-    r2s, p_values = model.feature_ablation()
+    metrics = model.evaluate(
+        folds=folds, 
+        tune=False, 
+        nested=True, 
+        tune_folds=20, 
+        get_shap=False,
+        uncertainty=True)
+    
+    # Set up logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    
+    # Log the metrics
+    logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
+    logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
+    r2s, p_values = model.feature_ablation()
+    
 
     #param_names  = ["mu", "lambda", "alpha", "beta"]
     #for i in range(len(param_names)):
@@ -83,8 +95,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     
 
 if __name__ == "__main__":
-    #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "results/level2/NGBoost", -1)
