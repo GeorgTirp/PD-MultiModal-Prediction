@@ -22,6 +22,7 @@ from ngboost import NGBRegressor
 from ngboost.distns import Normal
 from sklearn.tree import DecisionTreeRegressor
 from evidential_boost import NormalInverseGamma
+from joblib import Parallel, delayed
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -79,9 +80,9 @@ class BaseRegressionModel:
         logging.info("Finished prediction.")
         return pred
 
-    def evaluate(self, folds=10, get_shap=True, tune=False, tune_folds=10, nested=False) -> Dict:
+    def evaluate(self, folds=10, get_shap=True, tune=False, tune_folds=10, nested=False, uncertainty=False) -> Dict:
         if nested==True:
-            return self.nested_eval(folds, get_shap, tune, tune_folds)
+            return self.nested_eval(folds, get_shap, tune, tune_folds, uncertainty=uncertainty)
         else:
             return self.sequential_eval(folds, get_shap, tune, tune_folds)
         
@@ -145,7 +146,7 @@ class BaseRegressionModel:
         logging.info("Finished model evaluation.")
         return metrics
 
-    def nested_eval(self, folds=10, get_shap=True, tune=False, tune_folds=10) -> Dict:
+    def nested_eval(self, folds=10, get_shap=True, tune=False, tune_folds=10, uncertainty=False) -> Dict:
         """ Evaluate the model using cross-validation """
         logging.info("Starting model evaluation...")
         if folds == -1:
@@ -156,11 +157,14 @@ class BaseRegressionModel:
         if tune and self.param_grid is None:
                 raise ValueError("When calling tune=True, a param_grid has to be passed when initializing the model.")
         preds = []
+        epistemics = []
+        aleatorics = []
         pred_dists = []
         y_vals = []
         all_shap_values = []
         all_shap_mean = []
         all_shap_variance = []
+
         for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation", leave=False):
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
@@ -169,12 +173,23 @@ class BaseRegressionModel:
                 #tune = False
             else:
                 self.model.fit(X_train_kf, y_train_kf)
+
             pred = self.model.predict(X_val_kf)
-            if isinstance(self, NGBoostRegressionModel):
-                pred_dist = self.model.pred_dist(X_val_kf)._params
             preds.append(pred)
-            pred_dists.append(pred_dist)
             y_vals.append(y_val_kf)
+
+            # Get uncertainties
+            if uncertainty == True:
+                _ ,epistemic, aleatoric = self.compute_uncertainties(X_val_kf)
+                epistemics.append(epistemic)
+                aleatorics.append(aleatoric)
+
+            # Get paramters of predictive Distribution
+            #if isinstance(self, NGBoostRegressionModel):
+            #    pred_dist = self.model.pred_dist(X_val_kf)._params
+            #    pred_dists.append(pred_dist)
+            
+            # Get eplanations
             if get_shap:             
                  # Compute SHAP values on the whole dataset per fold
                 with io.capture_output():
@@ -191,19 +206,11 @@ class BaseRegressionModel:
         preds = np.concatenate(preds)
         y_vals = np.concatenate(y_vals)
         r2, p = pearsonr(y_vals, preds)
+        
+        if uncertainty == True:
+            epistemic_uncertainty = np.mean(np.concatenate(epistemics))
+            aleatoric_uncertainty = np.mean(np.concatenate(aleatorics))
         mse = mean_squared_error(y_vals, preds)
-
-        metrics = {
-            'mse': mse,
-            'r2': r2,
-            'p_value': p,
-            'y_pred': preds,
-            'y_test': y_vals,
-            'pred_dist': pred_dists
-        }
-        self.metrics = metrics
-        metrics_df = pd.DataFrame([metrics])
-        metrics_df.to_csv(f'{self.save_path}/{self.identifier}_metrics.csv', index=False)
 
         if get_shap:
             if isinstance(self, NGBoostRegressionModel):
@@ -236,20 +243,57 @@ class BaseRegressionModel:
                 plt.subplots_adjust(top=0.90)
                 plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm.png')
                 plt.close()
+            
+            # Compute the mean of the absolute SHAP values for each feature
+            feature_importances = np.mean(np.abs(mean_shap_values), axis=0)
+            feature_importance_dict = dict(zip(self.X.columns, feature_importances))
+            # Save feature importances to a file
+            
 
+            metrics = {
+            'mse': mse,
+            'r2': r2,
+            'p_value': p,
+            'y_pred': preds,
+            'y_test': y_vals,
+            'pred_dist': pred_dists,
+            'epistemic': epistemic_uncertainty if uncertainty else None,
+            'aleatoric': aleatoric_uncertainty if uncertainty else None,
+            'feature_importance': feature_importances if get_shap else None
+        }
+        self.metrics = metrics
+        metrics_df = pd.DataFrame([metrics])
+        metrics_df.to_csv(f'{self.save_path}/{self.identifier}_metrics.csv', index=False)
         logging.info("Finished model evaluation.")
         return metrics
     
     def feature_ablation(self) -> Dict:
-        pass
+        """ Compute the feature ablation"""
+        r2s = []
+        p_values = []
+        for feature in self.feature_selection['features']:
+            metrics = self.nested_eval(folds=10, get_shap=True, tune=False)
+            r2s.append(metrics['r2'])
+            p_values.append(metrics['p_value'])
+            importance = metrics['feature_importance']
+            importance_indices = np.argsort(importance)
+            least_important_feature = self.feature_selection['features'][importance_indices[0]]
+            self.X = self.X.drop(columns=[least_important_feature])
+            self.y = self.y.drop(columns=[least_important_feature])
+            self.feature_selection['features'].remove(least_important_feature)
+        return r2s, p_values
+            
+
     
     def feature_importance(self, top_n: int = 10, batch_size=None, save_results=True) -> Dict:
         """ To be implemented in the subclass """
         raise NotImplementedError("Subclasses must implement feature_importance method")
 
-    def compute_unertainties(self, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+    def compute_uncertainties(self, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """ Compute uncertainties using the model """
         raise NotImplementedError("Uncertainty computation not implemented for this model.")
+    
+    
         
 
     def plot(self, title, modality='') -> None:
@@ -697,8 +741,54 @@ class NGBoostRegressionModel(BaseRegressionModel):
             plt.close()
         return shap_values
     
-    def compute_unertainties(self, X: pd.DataFrame, y: pd.DataFrame, members: int = 10) -> Tuple[np.ndarray, np.ndarray]:
-        """ Compute uncertainties using the NGBoost model """
+    def compute_uncertainties(self, X: pd.DataFrame, members: int = 10) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Compute aleatoric and epistemic uncertainty using an ensemble of NGBoost models.
+
+        Parameters:
+            X (pd.DataFrame): Input data for prediction.
+            members (int): Number of ensemble members.
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                - mean_prediction: Ensemble mean predictions
+                - aleatoric_uncertainty: Mean of predicted variances across ensemble
+                - epistemic_uncertainty: Variance of predicted means across ensemble
+        """
+
+
+        mean_predictions = []
+        variance_predictions = []
+
+        for i in range(members):
+            # Shuffle data with different random seed
+            shuffled_df = self.X.copy()
+            shuffled_df['target'] = self.y
+            shuffled_df = shuffled_df.sample(frac=1.0, random_state=i).reset_index(drop=True)
+            X_shuffled = shuffled_df[self.feature_selection['features']]
+            y_shuffled = shuffled_df['target']
+
+            # Fit a new NGBoost model with different seed
+            ngb_model = NGBRegressor(**self.ngb_hparams, random_state=i)
+            ngb_model.fit(X_shuffled, y_shuffled)
+
+            dist = ngb_model.pred_dist(X)
+            mean_pred = dist.loc  # mean
+            var_pred = dist.scale**2  # variance
+
+            mean_predictions.append(mean_pred)
+            variance_predictions.append(var_pred)
+
+        mean_predictions = np.array(mean_predictions)  # shape (members, n_samples)
+        variance_predictions = np.array(variance_predictions)
+
+        # Compute uncertainties
+        mean_prediction = np.mean(mean_predictions, axis=0)
+        aleatoric_uncertainty = np.mean(variance_predictions, axis=0)
+        epistemic_uncertainty = np.var(mean_predictions, axis=0)
+
+        return mean_prediction, aleatoric_uncertainty, epistemic_uncertainty
+
         
 
 

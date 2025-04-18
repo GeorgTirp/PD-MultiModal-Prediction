@@ -41,9 +41,11 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     # Initialize NGBoost hyperparameters using default values from the grid
     
     NGB_Hparams = {
-        'Dist': NormalInverseGamma,
-        'n_estimators': 100, 
+        #'Dist': NormalInverseGamma,
+        'n_estimators': 150, 
         'learning_rate': 0.01, 
+        'natural_gradient': True,
+        #'minibatch_frac': 0.1,
         'verbose': False,
         'Base': DecisionTreeRegressor(max_depth=3)  # specify the depth here
     }
@@ -58,28 +60,32 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         identifier,
         -1,
         param_grid_ngb)
-    metrics = model.evaluate(folds=folds, tune=False, nested=True, tune_folds=20, get_shap=False)
+    metrics = model.evaluate(folds=folds, tune=False, nested=True, tune_folds=20, get_shap=False, uncertainty=True)
+    # Save metrics as a CSV file
+    metrics_df = pd.DataFrame(metrics)
+    metrics_df.to_csv(os.path.join(safe_path, "metrics.csv"), index=False)
+    r2s, p_values = model.feature_ablation()
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
 
-    param_names  = ["mu", "lambda", "alpha", "beta"]
-    for i in range(len(param_names)):
-        param = metrics["pred_dist"][i]
-        plt.figure()
-        plt.hist(param, bins=20, alpha=0.7, color='blue', edgecolor='black')
-        plt.title(f"Histogram of {param_names[i]} - Sample {i+1}")
-        plt.xlabel(f"{param_names[i]} values")
-        plt.ylabel("Frequency")
-        plt.grid(True)
-        plt.savefig(os.path.join(safe_path, f"histogram_{param_names[i]}_sample.png"))
-        plt.close()
+    #param_names  = ["mu", "lambda", "alpha", "beta"]
+    #for i in range(len(param_names)):
+    #    param = metrics["pred_dist"][i]
+    #    plt.figure()
+    #    plt.hist(param, bins=20, alpha=0.7, color='blue', edgecolor='black')
+    #    plt.title(f"Histogram of {param_names[i]} - Sample {i+1}")
+    #    plt.xlabel(f"{param_names[i]} values")
+    #    plt.ylabel("Frequency")
+    #    plt.grid(True)
+    #    plt.savefig(os.path.join(safe_path, f"histogram_{param_names[i]}_sample.png"))
+    #    plt.close()
         
         
     
 
 if __name__ == "__main__":
     #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
+    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "results/level2/NGBoost", -1)
     main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", -1)

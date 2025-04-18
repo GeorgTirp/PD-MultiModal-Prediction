@@ -12,6 +12,9 @@ import scipy.stats as st
 def softplus(x):
         return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
 
+def positive(x, eps=1e-3):
+    return np.log1p(np.exp(x)) + eps
+
 # Custom score for Normal-Inverse-Gamma.
 class NIGLogScore(LogScore):
 
@@ -27,7 +30,7 @@ class NIGLogScore(LogScore):
 
         return np.mean(kl + kl_lam)
 
-    def score(self, Y, params=None, reg_strength=0.01):
+    def score(self, Y, params=None, reg_strength=0.1):
         if params is None:
             params = [self.mu, self.lam, self.alpha, self.beta]
 
@@ -83,14 +86,23 @@ class NIGLogScore(LogScore):
         return np.stack([grad_mu, grad_lambda, grad_alpha, grad_beta], axis=1) 
 
     def metric(self):
-        #params = np.stack(params, axis=-1)
-        #mu, lam, alpha, beta = params.T
-        #I_mu = lam * (alpha + 0.5) / beta  # Diagonal term for μ
-        #I_lam = (alpha + 0.5) / (2 * lam**2)  # Diagonal term for λ
-        #I_alpha = digamma(alpha) - digamma(alpha + 0.5)  # Diagonal term for α
-        #I_beta = alpha / beta**2  # Diagonal term for β
-        return np.identity(4)
-        return np.diag([I_mu, I_lam, I_alpha, I_beta])
+        mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
+
+        # These all have shape (N,)
+        I_mu    = lam * (alpha + 0.5) / beta
+        I_lam   = (alpha + 0.5) / (2 * lam**2)
+        I_alpha = digamma(alpha + 0.5) - digamma(alpha)
+        I_beta  = alpha / beta**2
+
+        # Stack into shape (N, 4)
+        fisher_diags = np.stack([I_mu, I_lam, I_alpha, I_beta], axis=1)
+
+        # Turn into batch of diagonal matrices: shape (N, 4, 4)
+        FIM = np.array([np.diag(f) for f in fisher_diags])
+        FIM = np.identity(4)
+        return FIM
+
+
     
     
 
@@ -202,18 +214,27 @@ class NormalInverseGamma(RegressionDistn):
         """
         For the Normal-Inverse Gamma, the variance can be derived from the parameters.
         """
-        return self.lam * (self.alpha + 0.5)  # This might need adjustment depending on the definition
+        # Aleatoric variance (σ²) = β / (α - 1)
+        aleatoric =  self.beta / (self.alpha - 1)
+        # epistemic variance (σ²) = β² / (λ * (α - 1)² * (α - 2))
+        # Note: Which one should be put out depeends on interests of the user
+        epistemic = self.beta / (self.alpha - 1) + self.beta**2 / (self.lam * (self.alpha - 1)**2 * (self.alpha - 2))
+        predictive = epistemic + aleatoric
+        return predictive
+        #return aleatoric
 
     def logpdf(self, Y):
-        """
-        Compute the log of the probability density function (logpdf) for Normal-Inverse Gamma.
-        """
         mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
-        logpdf = (
-            -0.5 * np.log(np.pi / lam) 
-            - alpha * np.log(2 * beta) 
-            + gammaln(alpha) 
-            - gammaln(alpha + 0.5)
-            + (alpha + 0.5) * np.log(beta + 0.5 * lam * (Y - mu) ** 2)
-        )
-        return logpdf
+
+        # Degrees of freedom
+        nu = 2 * alpha
+        # Scale (variance of Student-t)
+        var = beta / (lam * alpha)
+
+        # Compute the log-pdf of the Student-t distribution
+        coeff = gammaln((nu + 1) / 2) - gammaln(nu / 2)
+        norm = -0.5 * np.log(nu * np.pi * var)
+        sq_term = (Y - mu) ** 2 / (nu * var)
+        log_prob = coeff + norm - 0.5 * (nu + 1) * np.log1p(sq_term)
+
+        return log_prob
