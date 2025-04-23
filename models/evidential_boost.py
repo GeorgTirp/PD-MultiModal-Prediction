@@ -2,6 +2,7 @@ import numpy as np
 from ngboost.distns.distn import RegressionDistn
 from ngboost.scores import LogScore
 from scipy.special import gammaln, digamma
+from scipy.special import polygamma
 
 import numpy as np
 from ngboost.distns.distn import RegressionDistn
@@ -18,89 +19,152 @@ def positive(x, eps=1e-3):
 # Custom score for Normal-Inverse-Gamma.
 class NIGLogScore(LogScore):
 
-    def kl_regularizer(self, params, prior_alpha=1.0, prior_beta=1.0, prior_lam=1.0):
+    def kl_divergence_nig(self, mu, lam, alpha, beta,
+                      mu0=0.0, lam0=1.0, alpha0=2.0, beta0=1.0,
+                      eps=1e-8):
+        
+
+        # Clip to avoid division by zero or log of zero
+        lam = np.clip(lam, eps, 1e6)
+        alpha = np.clip(alpha, 1.0 + eps, 1e6)
+        beta = np.clip(beta, eps, 1e6)
+
+        # Individual terms
+        term1 = 0.5 * np.log(lam0 / lam)
+        term2 = alpha0 * np.log(beta / beta0)
+        term3 = -gammaln(alpha) + gammaln(alpha0)
+        term4 = (alpha - alpha0) * digamma(alpha)
+        term5 = alpha0 * (lam * (mu - mu0) ** 2 / (2 * beta))
+        term6 = alpha0 * (lam / lam0 - 1)
+        term7 = alpha * (beta0 / beta - 1)
+
+        kl = term1 + term2 + term3 + term4 + term5 + term6 + term7
+        return np.mean(kl)
+
+    def evidential_regularizer(self, Y, mu, lam, alpha):
+        
+        error = np.abs(Y - mu)
+        penalty = error * (2 * alpha + lam)
+        return np.mean(penalty)
+    
+
+    def score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
+       
+        self._last_Y = Y
+        if params is None:
+            params = [self.mu, self.lam, self.alpha, self.beta]
+
         mu, lam, alpha, beta = np.stack(params, axis=-1).T
 
-        kl = (alpha - prior_alpha) * digamma(alpha) - gammaln(alpha) + gammaln(prior_alpha) \
-             + prior_alpha * (np.log(beta) - np.log(prior_beta)) \
-             + (prior_beta / beta) - prior_alpha
+        Omega = 2 * beta * (1 + lam)
+        term1 = 0.5*( np.log(np.pi) - np.log(lam) )
+        term2 = -alpha * np.log( Omega )
+        term3 = (alpha + 0.5) * np.log( lam*(Y-mu)**2 + Omega )
+        term4 = gammaln(alpha) - gammaln(alpha + 0.5)
+        nll = term1 + term2 + term3 + term4
 
-        # Include KL divergence on lam (optional)
-        kl_lam = lam - np.log(lam / prior_lam) - 1
-
-        return np.mean(kl + kl_lam)
-
-    def score(self, Y, params=None, reg_strength=0.1):
+        evidential_reg = self.evidential_regularizer(Y, mu, lam, alpha)
+        kl_reg = self.kl_divergence_nig(mu, lam, alpha, beta)
+        return nll + evid_strength * evidential_reg + kl_strength * kl_reg
+   
+     
+    def d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
+    # Unpack or use stored
         if params is None:
-            params = [self.mu, self.lam, self.alpha, self.beta]
+            mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
+        else:
+            mu, lam, alpha, beta = np.stack(params, axis=-1).T
 
+        # Stabilize
+        eps = 1e-8
+        lam   = np.clip(lam, eps, None)
+        alpha = np.clip(alpha, 1.0+eps, None)
+        beta  = np.clip(beta, eps, None)
+
+        # Shorthands
+        nu      = 2 * alpha
+        Omega   = 2 * beta * (1 + lam)
+        resid   = Y - mu
+        term    = lam * resid**2 + Omega
+
+        # 1) ∂ℓ/∂μ
+        d_mu = lam*(nu+1)*(-resid) / term
+
+        # 2) ∂ℓ/∂λ
+        d_lam = (
+            -0.5/lam
+            - alpha * (2*beta)/Omega
+            + (alpha+0.5)*(resid**2) / term
+        )
+
+        # 3) ∂ℓ/∂α
+        from scipy.special import psi  # digamma
+        d_alpha = (
+            -np.log(Omega)
+            + np.log(term)
+            + psi(alpha)
+            - psi(alpha + 0.5)
+        )
+        # 4) ∂ℓ/∂β
+        d_beta = (
+            -alpha/beta
+            + (alpha+0.5)*(2*(1+lam)) / term
+        )
+
+        # --- evidential reg grads ---
+        sign = np.sign(Y - mu)                       # vector
+        grad_ev_mu    = np.mean(-sign * (2*alpha + lam))
+        grad_ev_lam   = np.mean( np.abs(Y - mu) )
+        grad_ev_alpha = np.mean( 2 * np.abs(Y - mu) )
+        grad_ev_beta  = 0.0
+
+        # --- KL regularization grads ---
+        mu0, lam0, alpha0, beta0 = (0, 1, 2, 1)
+        # d_mu_KL
+        gk_mu = alpha0 * lam * (mu - mu0) / beta
+        # d_lam_KL
+        gk_lam = -0.5 / lam + alpha0 * ((mu - mu0) ** 2 / (2 * beta) + 1 / lam0)
+        # d_alpha_KL
+        gk_alpha = (alpha - alpha0) * polygamma(1, alpha) + (beta0 / beta - 1)
+        # d_beta_KL
+        gk_beta = alpha0 * (1 / beta - beta0 / beta**2) - alpha / beta**2 - alpha0 * lam * (mu - mu0) ** 2 / (2 * beta**2)
+
+
+        # combine
+        d_mu   += evid_strength * grad_ev_mu     + kl_strength * gk_mu
+        d_lam  += evid_strength * grad_ev_lam    + kl_strength * gk_lam
+        d_alpha+= evid_strength * grad_ev_alpha  + kl_strength * gk_alpha
+        d_beta += evid_strength * grad_ev_beta   + kl_strength * gk_beta
+
+        # chain‐rule back to raw‐space
+        raw_mu_grad   = d_mu
+        raw_lam_grad   = d_lam   * lam
+        raw_alpha_grad = d_alpha * (alpha-1)
+        raw_beta_grad = d_beta  * beta
         
-        params = np.stack(params, axis=-1)
-        epsilon = 1e-8
-        mu, lam, alpha, beta = params.T
-        lam = np.maximum(lam, epsilon)
-        beta = np.maximum(beta, epsilon)
+        return np.stack([
+            raw_mu_grad,
+            raw_lam_grad,
+            raw_alpha_grad,
+            raw_beta_grad
+        ], axis=1)
 
-        term1 = np.maximum(np.pi / lam, epsilon)
-        term2 = np.maximum(2 * beta, epsilon)
-        term3 = np.maximum(beta + 0.5 * lam * (Y - mu)**2, epsilon)
-
-        nll = (0.5 * np.log(term1)
-               - alpha * np.log(term2)
-               + gammaln(alpha)
-               - gammaln(alpha + 0.5)
-               + (alpha + 0.5) * np.log(term3))
-
-        reg = self.kl_regularizer([mu, lam, alpha, beta]) if reg_strength > 0 else 0.0
-
-        return -nll + reg_strength * reg
-
-
-    def d_score(self, Y, params=None):
-        """
-        Compute the gradients of the NLL with respect to the parameters.
-        """
-        # If params is None, use the class attributes
+    
+    def metric(self, Y=None, params=None,
+               evid_strength: float = 0.2,
+               kl_strength:    float = 0.01):
+        """ Empirical FIM from full‐loss gradients """
         if params is None:
-            params = [self.mu, self.lam, self.alpha, self.beta]
-
-        # Stack the parameters into a 2D array (shape: (N, 4)) where each row is [mu, lam, alpha, beta] for a sample
-        params = np.stack(params, axis=-1)  # Shape: (N, 4)
-
-        # Extract parameters
-        mu, lam, alpha, beta = params.T  # Transpose to get shape (N,) for each parameter
-
-        # Stabilize the calculation by ensuring no term inside the logarithms becomes invalid
-        epsilon = 1e-8
-        term1 = np.clip(beta + 0.5 * lam * (Y - mu)**2, 1e-6, 1e6)  # Prevent extremes
-
-
-        # Compute gradients with respect to each parameter
-        grad_mu = (alpha + 0.5) * lam * (Y - mu) / term1
-        grad_lambda = (alpha + 0.5) * (Y - mu)**2 / term1
-        grad_alpha = -np.log(2 * beta) + digamma(alpha) - digamma(alpha + 0.5) \
-                     + np.log(term1)
-        grad_beta = np.clip(-alpha / beta + (alpha + 0.5) / term1, -1e3, 1e3) 
-
-        # Return gradients for each parameter (mu, lambda, alpha, beta)
-        return np.stack([grad_mu, grad_lambda, grad_alpha, grad_beta], axis=1) 
-
-    def metric(self):
-        mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
-
-        # These all have shape (N,)
-        I_mu    = lam * (alpha + 0.5) / beta
-        I_lam   = (alpha + 0.5) / (2 * lam**2)
-        I_alpha = digamma(alpha + 0.5) - digamma(alpha)
-        I_beta  = alpha / beta**2
-
-        # Stack into shape (N, 4)
-        fisher_diags = np.stack([I_mu, I_lam, I_alpha, I_beta], axis=1)
-
-        # Turn into batch of diagonal matrices: shape (N, 4, 4)
-        FIM = np.array([np.diag(f) for f in fisher_diags])
-        FIM = np.identity(4)
+            mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
+            params = [mu, lam, alpha, beta]
+        else:
+            params = np.stack(params, axis=-1).T
+        if Y is None:
+            Y = self._last_Y
+        grads = self.d_score(Y, params=params)
+        FIM = np.array([np.outer(g, g) + 1e-5*np.eye(g.shape[0]) for g in grads])
         return FIM
+
 
 
     
@@ -132,10 +196,10 @@ class NormalInverseGamma(RegressionDistn):
         """
         super().__init__(params)
         self.mu    = params[0]
-        self.lam   = softplus(params[1]) + 1e-6      # Avoid zero
-        self.alpha = softplus(params[2]) + 2.0       # Enforce α > 1
-        self.beta  = softplus(params[3]) + 1e-6      # Avoid zero
-        
+        self.lam   = np.exp(params[1])     # Avoid zero
+        self.alpha = np.exp(params[2]) + 1      # Enforce α > 1
+        self.beta  = np.exp(params[3])     # Avoid zero
+
 
     @staticmethod
     def fit(Y):
@@ -150,7 +214,7 @@ class NormalInverseGamma(RegressionDistn):
         """
         m = np.mean(Y)
         s = np.std(Y)
-        return np.array([m, 0.0, np.log(3.0), np.log(s**2)])  
+        return np.array([m, 0.0, np.log(1.0), np.log(s**2)])  
 
     def sample(self, m):
         """
@@ -192,19 +256,19 @@ class NormalInverseGamma(RegressionDistn):
         params = [self.mu, self.lam, self.alpha, self.beta]
         return NIGLogScore().d_score(Y, params=params)
     
-    def metric(self):
+    def metric(self, Y):
         """
         Calculate the metric for the parameters.
         """
         params = [self.mu, self.lam, self.alpha, self.beta]
-        return NIGLogScore().metric(params=params)
+        return NIGLogScore().metric(Y, params=params)
     
     @property
     def is_regression(self):
         return True
 
     @property
-    def params_dict(self):
+    def params(self):
         return {"mu": self.mu, "lam": self.lam, "alpha": self.alpha, "beta": self.beta}
 
     def mean(self):
@@ -215,11 +279,9 @@ class NormalInverseGamma(RegressionDistn):
         For the Normal-Inverse Gamma, the variance can be derived from the parameters.
         """
         # Aleatoric variance (σ²) = β / (α - 1)
-        aleatoric =  self.beta / (self.alpha - 1)
-        # epistemic variance (σ²) = β² / (λ * (α - 1)² * (α - 2))
-        # Note: Which one should be put out depeends on interests of the user
-        epistemic = self.beta / (self.alpha - 1) + self.beta**2 / (self.lam * (self.alpha - 1)**2 * (self.alpha - 2))
-        predictive = epistemic + aleatoric
+        aleatoric = self.beta / (self.alpha - 1)
+        epistemic = self.beta / (self.lam * (self.alpha - 1))
+        predictive = aleatoric + epistemic
         return predictive
         #return aleatoric
 

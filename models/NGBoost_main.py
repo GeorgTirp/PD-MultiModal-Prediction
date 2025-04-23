@@ -2,11 +2,15 @@ import os
 from RegressionsModels import NGBoostRegressionModel
 import pandas as pd
 from evidential_boost import NormalInverseGamma
+from evidential_boost import NIGLogScore
 from sklearn.tree import DecisionTreeRegressor
 from matplotlib import pyplot as plt
 import numpy as np
 import logging
+from functools import partial
 #from sklearn.datasets import load_diabetes
+def softplus(x):
+        return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
 
 def main(folder_path, data_path, target, identifier, out, folds=10):
     target_col = identifier + "_" + target
@@ -39,11 +43,10 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     'Base__max_depth': [3, 4, 5]
     }  
     
-    # Initialize NGBoost hyperparameters using default values from the grid
-    
+
     NGB_Hparams = {
-        #'Dist': NormalInverseGamma,
-        'n_estimators': 150, 
+        'Dist': NormalInverseGamma,
+        'n_estimators': 350, 
         'learning_rate': 0.1, 
         'natural_gradient': True,
         #'minibatch_frac': 0.1,
@@ -66,8 +69,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         tune=False, 
         nested=True, 
         tune_folds=20, 
-        get_shap=False,
-        uncertainty=True)
+        get_shap=True,
+        uncertainty=False)
     
     # Set up logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -76,20 +79,23 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
-    r2s, p_values = model.feature_ablation()
+    #r2s, p_values = model.feature_ablation()
     
-
-    #param_names  = ["mu", "lambda", "alpha", "beta"]
-    #for i in range(len(param_names)):
-    #    param = metrics["pred_dist"][i]
-    #    plt.figure()
-    #    plt.hist(param, bins=20, alpha=0.7, color='blue', edgecolor='black')
-    #    plt.title(f"Histogram of {param_names[i]} - Sample {i+1}")
-    #    plt.xlabel(f"{param_names[i]} values")
-    #    plt.ylabel("Frequency")
-    #    plt.grid(True)
-    #    plt.savefig(os.path.join(safe_path, f"histogram_{param_names[i]}_sample.png"))
-    #    plt.close()
+    summands = [0, 0, 1, 0]
+    param_names  = ["mu", "lambda", "alpha", "beta"]
+    for i in range(len(param_names)):
+        if i == 0:
+            param = metrics["pred_dist"][i] + summands[i]
+        param = np.exp(metrics["pred_dist"][i]) + summands[i]
+        print(metrics["pred_dist"][i].shape)
+        plt.figure()
+        plt.hist(param, bins=20, alpha=0.7, color='blue', edgecolor='black')
+        plt.title(f"Histogram of {param_names[i]} - Sample {i+1}")
+        plt.xlabel(f"{param_names[i]} values")
+        plt.ylabel("Frequency")
+        plt.grid(True)
+        plt.savefig(os.path.join(safe_path, f"histogram_{param_names[i]}_sample.png"))
+        plt.close()
         
         
     
