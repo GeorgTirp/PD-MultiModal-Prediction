@@ -242,6 +242,15 @@ class NormalInverseGamma(RegressionDistn):
         epistemic = self.beta**2 / (self.lam * (self.alpha - 1)**2 * (self.alpha - 2))
         return {"mean": self.mu, "aleatoric": aleatoric, "epistemic": epistemic}
 
+    def pred_dist(self):
+        """
+        Computes predictive statistics and returns them as a dictionary.
+          - "mean": μ,
+          - "aleatoric": β/(α - 1),
+          - "epistemic": β²/(λ*(α - 1)²*(α - 2)).
+        """
+        return self.mu, self.lam, self.alpha, self.beta
+    
     def score(self, Y):
         """
         Calculate the negative log-likelihood and return it.
