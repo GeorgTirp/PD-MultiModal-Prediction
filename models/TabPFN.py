@@ -97,6 +97,7 @@ class TabPFNRegression():
             pred = self.model.predict(X_val_kf)
             preds.append(pred)
             y_vals.append(y_val_kf)
+            # No tuning or shap for TabPFN
             
 
         preds = np.concatenate(preds)
