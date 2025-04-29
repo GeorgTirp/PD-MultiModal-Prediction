@@ -54,15 +54,24 @@ class BaseRegressionModel:
             os.makedirs(save_path)
         logging.info("Finished initializing BaseRegressionModel class.")
 
-    def model_specific_preprocess(self, data_df: pd.DataFrame) -> Tuple:
+    def model_specific_preprocess(self, data_df: pd.DataFrame, ceiling: list =["BDI", "MoCA"]) -> Tuple:
         """ Preprocess the data for the model """
         logging.info("Starting model-specific preprocessing...")
         # Drop rows with missing values for features and target
         data_df = data_df.dropna(subset=self.feature_selection['features'] + [self.feature_selection['target']])
         X = data_df[self.feature_selection['features']]
+        if ceiling == "BDI":
+            if "BDI_sum_pre" in X.columns:
+                X["Distance_ceiling"] = 63 - X["BDI_sum_pre"]  
+                self.feature_selection["features"].append("Distance_ceiling")  
+            elif "MoCA_sum_pre" in X.columns:
+                X["Distance_ceiling"] = 30 - X["BDI_sum"]
+            else:
+                raise ValueError("Neither BDI_sum_pre nor MoCA_sum_pre found in the DataFrame.")
         y = data_df[self.feature_selection['target']]
         X = X.fillna(X.mean())
         X = X.apply(pd.to_numeric, errors='coerce')
+        
         logging.info("Finished model-specific preprocessing.")
         return X, y
 

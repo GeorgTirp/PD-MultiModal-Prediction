@@ -9,6 +9,7 @@ from ngboost.distns.distn import RegressionDistn
 from ngboost.scores import LogScore
 from scipy.special import gammaln
 import scipy.stats as st
+from scipy.special import psi  # digamma
 
 def softplus(x):
         return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
@@ -18,6 +19,22 @@ def positive(x, eps=1e-3):
 
 # Custom score for Normal-Inverse-Gamma.
 class NIGLogScore(LogScore):
+
+    
+    lower_bound = None
+    upper_bound = None
+
+    #def __init__(self, lower_bound=None, upper_bound=None):
+    #    
+    #    if lower_bound is not None:
+    #        self.lower_bound = np.asarray(lower_bound, float)
+    #    if upper_bound is not None:
+    #        self.upper_bound = np.asarray(upper_bound, float)
+
+    @classmethod
+    def set_bounds(cls, lower, upper):
+        cls.lower_bound = lower
+        cls.upper_bound = upper
 
     def kl_divergence_nig(self, mu, lam, alpha, beta,
                       mu0=0.0, lam0=1.0, alpha0=2.0, beta0=1.0,
@@ -63,12 +80,113 @@ class NIGLogScore(LogScore):
         term4 = gammaln(alpha) - gammaln(alpha + 0.5)
         nll = term1 + term2 + term3 + term4
 
+        if self.lower_bound is not None or self.upper_bound is not None:
+            nu = 2*alpha
+            scale = np.sqrt(Omega/(lam*nu))
+            td = st.t(df=nu, loc=mu, scale=scale)
+            if self.lower_bound is not None:
+                mask_low = (Y <= self.lower_bound)
+                if mask_low.any():
+                    cdf_l = np.clip(td.cdf(self.lower_bound), 1e-8, 1.0)
+                    nll[mask_low] = -np.log(cdf_l[mask_low])
+            if self.upper_bound is not None:
+                mask_up = (Y >= self.upper_bound)
+                if mask_up.any():
+                    sf_u = np.clip(td.sf(self.upper_bound), 1e-8, 1.0)
+                    nll[mask_up] = -np.log(sf_u[mask_up])
+
         evidential_reg = self.evidential_regularizer(Y, mu, lam, alpha)
         kl_reg = self.kl_divergence_nig(mu, lam, alpha, beta)
         return nll + evid_strength * evidential_reg + kl_strength * kl_reg
    
-     
+    
     def d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
+        # Unpack or use stored
+        if params is None:
+            mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
+        else:
+            mu, lam, alpha, beta = np.stack(params, axis=-1).T
+        
+        # Stabilize
+        eps = 1e-8
+        lam   = np.clip(lam,   eps, None)
+        alpha = np.clip(alpha, 1.0+eps, None)
+        beta  = np.clip(beta,  eps, None)
+        nu    = 2*alpha
+        Omega = 2*beta*(1+lam)
+
+        # --- corrected helper for the uncensored part ---
+        def comps(r):
+            t = lam*r*r + Omega
+            g_mu    = lam*(nu+1)*(-r)/t
+            g_lam   = (
+                -0.5/lam
+                - alpha*(2*beta)/Omega
+                + (alpha+0.5)*(r*r + 2*beta)/t
+            )
+            g_alpha = -np.log(Omega) + np.log(t) + psi(alpha) - psi(alpha+0.5)
+            g_beta  = -alpha/beta + (alpha+0.5)*(2*(1+lam))/t
+            return g_mu, g_lam, g_alpha, g_beta
+
+        # Uncensored gradients
+        resid = Y - mu
+        d_mu, d_lam, d_alpha, d_beta = comps(resid)
+
+        # Tobit override
+        if self.lower_bound is not None or self.upper_bound is not None:
+            scale = np.sqrt(Omega/(lam*nu))
+            td    = st.t(df=nu, loc=mu, scale=scale)
+
+            if self.lower_bound is not None:
+                low = (Y <= self.lower_bound)
+                if low.any():
+                    pdf_l = np.clip(td.pdf(self.lower_bound), eps, None)
+                    cdf_l = np.clip(td.cdf(self.lower_bound), eps, 1.0)
+                    f = pdf_l / cdf_l
+                    gl, ll, al, bl = comps(self.lower_bound - mu)
+                    d_mu[low]    = gl[low] * f[low]
+                    d_lam[low]   = ll[low] * f[low]
+                    d_alpha[low] = al[low] * f[low]
+                    d_beta[low]  = bl[low] * f[low]
+
+            if self.upper_bound is not None:
+                up = (Y >= self.upper_bound)
+                if up.any():
+                    pdf_u = np.clip(td.pdf(self.upper_bound), eps, None)
+                    sf_u  = np.clip(td.sf(self.upper_bound), eps, 1.0)
+                    f = pdf_u / sf_u
+                    gu, lu, au, bu = comps(self.upper_bound - mu)
+                    d_mu[up]    = gu[up] * f[up]
+                    d_lam[up]   = lu[up] * f[up]
+                    d_alpha[up] = au[up] * f[up]
+                    d_beta[up]  = bu[up] * f[up]
+
+        # Regularizer gradients (unchanged)
+        sign = np.sign(Y - mu)
+        gev_mu    = np.mean(-sign*(2*alpha+lam))
+        gev_lam   = np.mean(np.abs(Y-mu))
+        gev_alpha = np.mean(2*np.abs(Y-mu))
+        gev_beta  = 0.0
+        mu0, lam0, alpha0, beta0 = 0,1,2,1
+        gk_mu    = alpha0*lam*(mu-mu0)/beta
+        gk_lam   = -0.5/lam + alpha0*((mu-mu0)**2/(2*beta)+1/lam0)
+        gk_alpha = (alpha-alpha0)*polygamma(1,alpha)+(beta0/beta-1)
+        gk_beta  = alpha0*(1/beta-beta0/beta**2) - alpha/beta**2 - alpha0*lam*(mu-mu0)**2/(2*beta**2)
+
+        d_mu    += evid_strength*gev_mu    + kl_strength*gk_mu
+        d_lam   += evid_strength*gev_lam   + kl_strength*gk_lam
+        d_alpha += evid_strength*gev_alpha + kl_strength*gk_alpha
+        d_beta  += evid_strength*gev_beta  + kl_strength*gk_beta
+
+        # Chain‐rule to raw space
+        raw_mu    = d_mu
+        raw_lam   = d_lam*lam
+        raw_alpha = d_alpha*(alpha-1)
+        raw_beta  = d_beta*beta
+        return np.stack([raw_mu, raw_lam, raw_alpha, raw_beta], axis=1)
+    
+
+    def old_d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
     # Unpack or use stored
         if params is None:
             mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
@@ -90,15 +208,14 @@ class NIGLogScore(LogScore):
         # 1) ∂ℓ/∂μ
         d_mu = lam*(nu+1)*(-resid) / term
 
-        # 2) ∂ℓ/∂λ
+        # 2) ∂ℓ/∂λ (corrected)
         d_lam = (
             -0.5/lam
             - alpha * (2*beta)/Omega
-            + (alpha+0.5)*(resid**2) / term
+            + (alpha+0.5)*((resid**2) + 2*beta) / term
         )
 
         # 3) ∂ℓ/∂α
-        from scipy.special import psi  # digamma
         d_alpha = (
             -np.log(Omega)
             + np.log(term)
@@ -194,7 +311,6 @@ class NormalInverseGamma(RegressionDistn):
             params[2]: raw parameter for α (we use exp and add 1 to enforce α > 1)
             params[3]: raw parameter for β (we use exp to enforce β > 0)
         """
-        super().__init__(params)
         self.mu    = params[0]
         self.lam   = np.exp(params[1])     # Avoid zero
         self.alpha = np.exp(params[2]) + 1      # Enforce α > 1
@@ -251,19 +367,19 @@ class NormalInverseGamma(RegressionDistn):
         """
         return self.mu, self.lam, self.alpha, self.beta
     
-    def score(self, Y):
-        """
-        Calculate the negative log-likelihood and return it.
-        """
-        params = [self.mu, self.lam, self.alpha, self.beta]
-        return NIGLogScore().score(Y, params=params)
-
-    def d_score(self, Y):
-        """
-        Calculate the gradients of the NLL with respect to parameters.
-        """
-        params = [self.mu, self.lam, self.alpha, self.beta]
-        return NIGLogScore().d_score(Y, params=params)
+    #def score(self, Y):
+    #    """
+    #    Calculate the negative log-likelihood and return it.
+    #    """
+    #    params = [self.mu, self.lam, self.alpha, self.beta]
+    #    return NIGLogScore().score(Y, params=params)
+#
+    #def d_score(self, Y):
+    #    """
+    #    Calculate the gradients of the NLL with respect to parameters.
+    #    """
+    #    params = [self.mu, self.lam, self.alpha, self.beta]
+    #    return NIGLogScore().d_score(Y, params=params)
     
     def metric(self, Y):
         """

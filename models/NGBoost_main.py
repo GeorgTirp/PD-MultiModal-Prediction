@@ -1,26 +1,28 @@
 import os
 from RegressionsModels import NGBoostRegressionModel
 import pandas as pd
-from evidential_boost import NormalInverseGamma
-from evidential_boost import NIGLogScore
+from evidential_boost import NormalInverseGamma, NIGLogScore
+
 from sklearn.tree import DecisionTreeRegressor
 from matplotlib import pyplot as plt
 import numpy as np
 import logging
-from functools import partial
+
+
 #from sklearn.datasets import load_diabetes
-def softplus(x):
-        return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
+# --- Dynamic Tobit bound functions ---
+
 
 def main(folder_path, data_path, target, identifier, out, folds=10):
     target_col = identifier + "_" + target
-    possible_targets = ["ratio", "diff"] 
+    possible_targets = ["ratio", "diff", "sum_post"] 
     ignored_targets = [t for t in possible_targets if t != target]
     ignored_target_cols = [identifier + "_" + t for t in ignored_targets]
     data_df = pd.read_csv(folder_path + data_path)
     data_df = data_df.drop(columns=['Pat_ID']+ ignored_target_cols)
     test_split_size = 0.2
     Feature_Selection = {}
+    
     ### test
     #X, y = load_diabetes(return_X_y=True, as_frame=True)
     #data_df = pd.concat([X, y.rename("target")], axis=1)
@@ -36,7 +38,14 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     # Random Forest Model
      #XGBoost hyperparameters grid    
     # Define the parameter grid for NGBoost
+    #define bounds
+    if identifier == "BDI":
+        NIGLogScore.set_bounds(0, 63)
+    elif identifier == "MoCA":
+        NIGLogScore.set_bounds(0, 30)
     
+    
+
     param_grid_ngb = {
     'n_estimators': [50, 100, 150],
     'learning_rate': [0.01, 0.05, 0.1],
@@ -46,6 +55,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
 
     NGB_Hparams = {
         'Dist': NormalInverseGamma,
+        'Score' : NIGLogScore,
         'n_estimators': 350, 
         'learning_rate': 0.1, 
         'natural_gradient': True,
@@ -101,11 +111,11 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     
 
 if __name__ == "__main__":
-    folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "results/level2/NGBoost", -1)
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", -1)
+    main(folder_path, "data/BDI/post/bdi_df.csv", "sum_post", "BDI", "results/post/NGBoost", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA","results/level2/NGBoost", -1)
     
