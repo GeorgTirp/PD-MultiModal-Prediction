@@ -10,6 +10,26 @@ from ngboost.scores import LogScore
 from scipy.special import gammaln
 import scipy.stats as st
 from scipy.special import psi  # digamma
+from scipy.optimize import approx_fprime
+
+def grad_logcdf_bound(Yi, mu, lam, alpha, beta, bound, which='lower'):
+    eps = np.sqrt(np.finfo(float).eps)
+    def loss_fn(x):
+        m, l, a, b = x
+        lam_nat = np.exp(l)
+        alpha_nat = np.exp(a) + 1
+        beta_nat = np.exp(b)
+        nu = 2 * alpha_nat
+        Omega = 2 * beta_nat * (1 + lam_nat)
+        scale = np.sqrt(Omega / (lam_nat * nu))
+        td = st.t(df=nu, loc=m, scale=scale)
+        if which == 'lower':
+            return -np.log(np.clip(td.cdf(bound), 1e-8, 1.0))
+        else:
+            return -np.log(np.clip(td.sf(bound), 1e-8, 1.0))
+    x0 = np.array([mu, np.log(lam), np.log(alpha - 1), np.log(beta)])
+    return approx_fprime(x0, loss_fn, epsilon=eps)
+
 
 def softplus(x):
         return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
@@ -132,34 +152,16 @@ class NIGLogScore(LogScore):
         resid = Y - mu
         d_mu, d_lam, d_alpha, d_beta = comps(resid)
 
-        # Tobit override
+        # Tobit override using numerical derivatives
         if self.lower_bound is not None or self.upper_bound is not None:
-            scale = np.sqrt(Omega/(lam*nu))
-            td    = st.t(df=nu, loc=mu, scale=scale)
-
-            if self.lower_bound is not None:
-                low = (Y <= self.lower_bound)
-                if low.any():
-                    pdf_l = np.clip(td.pdf(self.lower_bound), eps, None)
-                    cdf_l = np.clip(td.cdf(self.lower_bound), eps, 1.0)
-                    f = pdf_l / cdf_l
-                    gl, ll, al, bl = comps(self.lower_bound - mu)
-                    d_mu[low]    = gl[low] * f[low]
-                    d_lam[low]   = ll[low] * f[low]
-                    d_alpha[low] = al[low] * f[low]
-                    d_beta[low]  = bl[low] * f[low]
-
-            if self.upper_bound is not None:
-                up = (Y >= self.upper_bound)
-                if up.any():
-                    pdf_u = np.clip(td.pdf(self.upper_bound), eps, None)
-                    sf_u  = np.clip(td.sf(self.upper_bound), eps, 1.0)
-                    f = pdf_u / sf_u
-                    gu, lu, au, bu = comps(self.upper_bound - mu)
-                    d_mu[up]    = gu[up] * f[up]
-                    d_lam[up]   = lu[up] * f[up]
-                    d_alpha[up] = au[up] * f[up]
-                    d_beta[up]  = bu[up] * f[up]
+            for i in range(len(Y)):
+                if self.lower_bound is not None and Y[i] <= self.lower_bound:
+                    grad = grad_logcdf_bound(Y[i], mu[i], lam[i], alpha[i], beta[i], self.lower_bound, which='lower')
+                    d_mu[i], d_lam[i], d_alpha[i], d_beta[i] = grad
+                elif self.upper_bound is not None and Y[i] >= self.upper_bound:
+                    grad = grad_logcdf_bound(Y[i], mu[i], lam[i], alpha[i], beta[i], self.upper_bound, which='upper')
+                    d_mu[i], d_lam[i], d_alpha[i], d_beta[i] = grad
+                # uncensored points keep their original values
 
         # Regularizer gradients (unchanged)
         sign = np.sign(Y - mu)

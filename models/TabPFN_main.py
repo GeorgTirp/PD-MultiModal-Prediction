@@ -6,7 +6,7 @@ import pandas as pd
 
 def main(folder_path, data_path, target, identifier, out, folds=10):
     target_col = identifier + "_" + target
-    possible_targets = ["ratio", "diff"] 
+    possible_targets = ["ratio", "diff", "sum_post"] 
     ignored_targets = [t for t in possible_targets if t != target]
     ignored_target_cols = [identifier + "_" + t for t in ignored_targets]
     data_df = pd.read_csv(folder_path + data_path)
@@ -45,5 +45,6 @@ if __name__ == "__main__":
     folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/TabPFN", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "results/level2/TabPFN", -1)
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/TabPFN", -1)
+    #main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/TabPFN", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA", "results/level2/TabPFN", -1)
+    main(folder_path, "data/BDI/post/bdi_df.csv", "ratio", "BDI", "results/post/TabPFN", -1)
