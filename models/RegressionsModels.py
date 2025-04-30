@@ -23,6 +23,8 @@ from ngboost.distns import Normal
 from sklearn.tree import DecisionTreeRegressor
 from evidential_boost import NormalInverseGamma
 from joblib import Parallel, delayed
+import scipy.stats as st
+from properscoring import crps_ensemble
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -189,14 +191,14 @@ class BaseRegressionModel:
 
             # Get uncertainties
             if uncertainty == True:
-                _ ,epistemic, aleatoric = self.compute_uncertainties(X_val_kf)
+                _ ,epistemic, aleatoric = self.compute_uncertainties(mode="nig", X=X_val_kf)
                 epistemics.append(epistemic)
                 aleatorics.append(aleatoric)
 
             # Get paramters of predictive Distribution
-            #if isinstance(self, NGBoostRegressionModel):
-            #    pred_dist = self.model.pred_dist(X_val_kf)._params
-            #    pred_dists.append(pred_dist)
+            if isinstance(self, NGBoostRegressionModel):
+                pred_dist = self.model.pred_dist(X_val_kf)
+                pred_dists.append(pred_dist)
             
             # Get eplanations
             if get_shap:             
@@ -217,8 +219,8 @@ class BaseRegressionModel:
         r2, p = pearsonr(y_vals, preds)
         
         if uncertainty == True:
-            epistemic_uncertainty = np.mean(np.concatenate(epistemics))
-            aleatoric_uncertainty = np.mean(np.concatenate(aleatorics))
+            epistemic_uncertainty = np.concatenate(epistemics)
+            aleatoric_uncertainty = np.concatenate(aleatorics)
         mse = mean_squared_error(y_vals, preds)
 
         if get_shap:
@@ -428,6 +430,7 @@ class LinearRegressionModel(BaseRegressionModel):
         
         super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n)
         self.model = LinearRegression()
+
         self.model_name = "Linear Regression"
         if top_n == -1:
             self.top_n = len(self.feature_selection['features'])
@@ -780,7 +783,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
             plt.close()
         return shap_values
     
-    def compute_uncertainties(self, X: pd.DataFrame, members: int = 10) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def compute_uncertainties(self, mode=["nig", "ensemble"], X: pd.DataFrame = None,  members: int = 10) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Compute aleatoric and epistemic uncertainty using an ensemble of NGBoost models.
 
@@ -794,41 +797,126 @@ class NGBoostRegressionModel(BaseRegressionModel):
                 - aleatoric_uncertainty: Mean of predicted variances across ensemble
                 - epistemic_uncertainty: Variance of predicted means across ensemble
         """
+        if mode not in ["nig", "ensemble"]:
+            raise ValueError("Invalid mode. Choose either 'nig' or 'ensemble'.")
+        elif mode == "nig":
+            mean_prediction, aleatoric_uncertainty, epistemic_uncertainty = self.model.pred_uncertainty(X).items()
+        else:
+            mean_predictions = []
+            variance_predictions = []
+            members = 2
+            for i in range(members):
+                # Shuffle data with different random seed
+                shuffled_df = self.X.copy()
+                shuffled_df['target'] = self.y
+                shuffled_df = shuffled_df.sample(frac=1.0, random_state=i).reset_index(drop=True)
+                X_shuffled = shuffled_df[self.feature_selection['features']]
+                y_shuffled = shuffled_df['target']
 
+                # Fit a new NGBoost model with different seed
+                ngb_model = NGBRegressor(**self.ngb_hparams, random_state=i)
+                ngb_model.fit(X_shuffled, y_shuffled)
 
-        mean_predictions = []
-        variance_predictions = []
-        members = 2
-        for i in range(members):
-            # Shuffle data with different random seed
-            shuffled_df = self.X.copy()
-            shuffled_df['target'] = self.y
-            shuffled_df = shuffled_df.sample(frac=1.0, random_state=i).reset_index(drop=True)
-            X_shuffled = shuffled_df[self.feature_selection['features']]
-            y_shuffled = shuffled_df['target']
+                dist = ngb_model.pred_dist(X)
+                mean_pred = dist.loc  # mean
+                var_pred = dist.scale**2  # variance
 
-            # Fit a new NGBoost model with different seed
-            ngb_model = NGBRegressor(**self.ngb_hparams, random_state=i)
-            ngb_model.fit(X_shuffled, y_shuffled)
+                mean_predictions.append(mean_pred)
+                variance_predictions.append(var_pred)
 
-            dist = ngb_model.pred_dist(X)
-            mean_pred = dist.loc  # mean
-            var_pred = dist.scale**2  # variance
+            mean_predictions = np.array(mean_predictions)  # shape (members, n_samples)
+            variance_predictions = np.array(variance_predictions)
 
-            mean_predictions.append(mean_pred)
-            variance_predictions.append(var_pred)
-
-        mean_predictions = np.array(mean_predictions)  # shape (members, n_samples)
-        variance_predictions = np.array(variance_predictions)
-
-        # Compute uncertainties
-        mean_prediction = np.mean(mean_predictions, axis=0)
-        aleatoric_uncertainty = np.mean(variance_predictions, axis=0)
-        epistemic_uncertainty = np.var(mean_predictions, axis=0)
+            # Compute uncertainties
+            mean_prediction = np.mean(mean_predictions, axis=0)
+            aleatoric_uncertainty = np.mean(variance_predictions, axis=0)
+            epistemic_uncertainty = np.var(mean_predictions, axis=0)
 
         return mean_prediction, aleatoric_uncertainty, epistemic_uncertainty
 
-        
+    
+
+    def calibration_analysis(self):
+        """
+        Generate PIT histogram, QQ-plot, quantile‐calibration diagram, and CRPS.
+        Assumes that after LOOCV you have stored in self.metrics:
+          - 'pred_dist': a tuple/ list of 4 numpy arrays (mu, lam, alpha, beta), each of length n_samples
+          - 'y_test'   : the true y's for those held-out samples, length n_samples
+        """
+        # prepare output folder
+        save_path = os.path.join(self.save_path, "calibration")
+        os.makedirs(save_path, exist_ok=True)
+
+        # pull out parameters & truths
+        mu_arr, lam_arr, alpha_arr, beta_arr = self.metrics['pred_dist']
+        y_test = np.asarray(self.metrics['y_test'])
+        n = len(y_test)
+
+        # reconstruct a frozen Student-t for each case
+        #   ν = 2α,   Ω = 2β(1+λ),   scale = sqrt(Ω / (λ ν))
+        nu    = 2 * alpha_arr
+        Omega = 2 * beta_arr * (1 + lam_arr)
+        scale = np.sqrt(Omega / (lam_arr * nu))
+
+        dists = [ st.t(df=nu[i], loc=mu_arr[i], scale=scale[i])
+                  for i in range(n) ]
+
+        # 1) PIT values
+        pit = np.array([d.cdf(y) for d,y in zip(dists, y_test)])
+
+        # --- PIT histogram ---
+        plt.figure()
+        plt.hist(pit, bins=20, range=(0,1), edgecolor='k', alpha=0.7)
+        plt.axhline(n/20, color='r', linestyle='--', label='ideal uniform')
+        plt.title('PIT Histogram')
+        plt.xlabel('PIT')
+        plt.ylabel('Count')
+        plt.legend()
+        plt.savefig(f'{save_path}/pit_hist.png')
+        plt.close()
+
+        # --- PIT QQ-plot ---
+        sorted_pit = np.sort(pit)
+        uniform_q  = np.linspace(0,1,n)
+        plt.figure()
+        plt.plot(uniform_q, sorted_pit, marker='.', linestyle='none')
+        plt.plot([0,1],[0,1], 'r--')
+        plt.title('PIT QQ-Plot')
+        plt.xlabel('Uniform Quantile')
+        plt.ylabel('Empirical PIT Quantile')
+        plt.savefig(f'{save_path}/pit_qq.png')
+        plt.close()
+
+        # 2) Quantile Calibration Diagram
+        qs  = np.linspace(0.05, 0.95, 19)
+        obs = []
+        for q in qs:
+            # predicted q-quantile for each case
+            yq = np.array([d.ppf(q) for d in dists])
+            # fraction of truths ≤ that
+            obs.append(np.mean(y_test <= yq))
+
+        plt.figure()
+        plt.plot(qs, obs, marker='o', linestyle='-')
+        plt.plot([0,1],[0,1],'r--')
+        plt.title('Quantile Calibration Plot')
+        plt.xlabel('Nominal Quantile')
+        plt.ylabel('Observed Fraction ≤ Predicted')
+        plt.savefig(f'{save_path}/quantile_calib.png')
+        plt.close()
+
+        # 3) CRPS (draw 500 samples per predictive distribution)
+        samples = np.stack([d.sample(500) for d in dists], axis=1)
+        # samples.shape == (500, n)
+        crps_vals = crps_ensemble(y_test, samples.T)
+        print(f'Average CRPS: {crps_vals.mean():.4f}')
+
+        return {
+            'pit':          pit,
+            'quantile_cal': (qs, np.array(obs)),
+            'crps':         crps_vals,
+        }
+
 
 
 class TabPFNRegression(BaseRegressionModel):

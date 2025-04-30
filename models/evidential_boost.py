@@ -120,7 +120,7 @@ class NIGLogScore(LogScore):
         return nll + evid_strength * evidential_reg + kl_strength * kl_reg
    
     
-    def d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
+    def d_score(self, Y, params=None, evid_strength=0.5, kl_strength=0.1):
         # Unpack or use stored
         if params is None:
             mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
@@ -139,10 +139,10 @@ class NIGLogScore(LogScore):
         def comps(r):
             t = lam*r*r + Omega
             g_mu    = lam*(nu+1)*(-r)/t
-            g_lam   = (
-                -0.5/lam
-                - alpha*(2*beta)/Omega
-                + (alpha+0.5)*(r*r + 2*beta)/t
+            g_lam = (
+            -0.5/lam
+            - alpha * (2*beta)/Omega
+            + (alpha+0.5)*(resid**2) / t
             )
             g_alpha = -np.log(Omega) + np.log(t) + psi(alpha) - psi(alpha+0.5)
             g_beta  = -alpha/beta + (alpha+0.5)*(2*(1+lam))/t
@@ -188,7 +188,7 @@ class NIGLogScore(LogScore):
         return np.stack([raw_mu, raw_lam, raw_alpha, raw_beta], axis=1)
     
 
-    def old_d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
+    def old_d_score(self, Y, params=None, evid_strength=0.05, kl_strength=0.01):
     # Unpack or use stored
         if params is None:
             mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
@@ -349,7 +349,7 @@ class NormalInverseGamma(RegressionDistn):
         samples = np.random.normal(self.mu, np.sqrt(sigma2 / self.lam))
         return samples
 
-    def pred_dist(self):
+    def pred_uncertainty(self):
         """
         Computes predictive statistics and returns them as a dictionary.
           - "mean": μ,

@@ -19,7 +19,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     ignored_targets = [t for t in possible_targets if t != target]
     ignored_target_cols = [identifier + "_" + t for t in ignored_targets]
     data_df = pd.read_csv(folder_path + data_path)
-    data_df = data_df.drop(columns=['Pat_ID']+ ignored_target_cols)
+    columns_to_drop = ['Pat_ID'] + [col for col in ignored_target_cols if col in data_df.columns]
+    data_df = data_df.drop(columns=columns_to_drop)
     test_split_size = 0.2
     Feature_Selection = {}
     
@@ -39,10 +40,10 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
      #XGBoost hyperparameters grid    
     # Define the parameter grid for NGBoost
     #define bounds
-    if identifier == "BDI":
-        NIGLogScore.set_bounds(0, 63)
-    elif identifier == "MoCA":
-        NIGLogScore.set_bounds(0, 30)
+    #if identifier == "BDI":
+    #    NIGLogScore.set_bounds(0, 63)
+    #elif identifier == "MoCA":
+    #    NIGLogScore.set_bounds(0, 30)
     
     
 
@@ -56,8 +57,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     NGB_Hparams = {
         'Dist': NormalInverseGamma,
         'Score' : NIGLogScore,
-        'n_estimators': 350, 
-        'learning_rate': 0.1, 
+        'n_estimators': 500, 
+        'learning_rate': 0.05, 
         'natural_gradient': True,
         #'minibatch_frac': 0.1,
         'verbose': False,
@@ -111,11 +112,12 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     
 
 if __name__ == "__main__":
-    #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "results/level2/NGBoost", -1)
-    main(folder_path, "data/BDI/post/bdi_df.csv", "sum_post", "BDI", "results/post/NGBoost", -1)
+    #main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA","results/level2/NGBoost", -1)
+    main(folder_path, "data/BDI/post/bdi_df.csv", "sum_post", "BDI", "results/post/NGBoost", -1)
     
