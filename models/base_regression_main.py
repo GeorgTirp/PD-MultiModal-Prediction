@@ -45,7 +45,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         safe_path_linear, 
         identifier, 
         n_top_features)
-    linear_metrics = linear_model.evaluate(folds=folds, get_shap=True)
+    linear_metrics = linear_model.evaluate(folds=folds, get_shap=False)
     linear_model.plot(f"Actual vs. Prediction (Linear Regression) - {identifier}", identifier)
 
     rf_hparams  = {
@@ -72,9 +72,9 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
 
 
 if __name__ == "__main__":
-    #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+    folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
+    #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "/results/level2/", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "/results/level2/", -1)
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "/results/level2/", -1)
