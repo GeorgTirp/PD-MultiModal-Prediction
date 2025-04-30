@@ -6,6 +6,7 @@ from sklearn.ensemble import RandomForestRegressor
 from scipy.stats import pearsonr
 from typing import Tuple, Dict
 import matplotlib.pyplot as plt
+import matplotlib
 import numpy as np
 from scipy import stats
 import os
@@ -24,7 +25,10 @@ from sklearn.tree import DecisionTreeRegressor
 from evidential_boost import NormalInverseGamma
 from joblib import Parallel, delayed
 import scipy.stats as st
+import statsmodels.api as sm
+from statsmodels.miscmodels.tobit import Tobit
 from properscoring import crps_ensemble
+matplotlib.use('TkAgg') 
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -157,7 +161,7 @@ class BaseRegressionModel:
         logging.info("Finished model evaluation.")
         return metrics
 
-    def nested_eval(self, folds=10, get_shap=True, tune=False, tune_folds=10, uncertainty=False) -> Dict:
+    def nested_eval(self, folds=10, get_shap=True, tune=False, tune_folds=10, uncertainty=False, ablation_idx=None) -> Dict:
         """ Evaluate the model using cross-validation """
         logging.info("Starting model evaluation...")
         if folds == -1:
@@ -197,7 +201,8 @@ class BaseRegressionModel:
 
             # Get paramters of predictive Distribution
             if isinstance(self, NGBoostRegressionModel):
-                pred_dist = self.model.pred_dist(X_val_kf)
+                pred_dist = self.model.pred_dist(X_val_kf).params
+                pred_dist = np.column_stack([pred_dist[key] for key in pred_dist.keys()])
                 pred_dists.append(pred_dist)
             
             # Get eplanations
@@ -205,15 +210,24 @@ class BaseRegressionModel:
                  # Compute SHAP values on the whole dataset per fold
                 with io.capture_output():
                     if isinstance(self, NGBoostRegressionModel):
-                        shap_values_mean = self.feature_importance_mean(top_n=-1, save_results=True,  iter_idx=val_index)
-                        shap_values_variance = self.feature_importance_variance(top_n=-1, save_results=True, iter_idx=val_index)
+                        shap_values_mean = self.feature_importance_mean(
+                            top_n=-1, save_results=True,  
+                            iter_idx=val_index, 
+                            ablation_idx=ablation_idx)
+                        shap_values_variance = self.feature_importance_variance(
+                            top_n=-1, 
+                            save_results=True, 
+                            iter_idx=val_index)
                         all_shap_mean.append(shap_values_mean)
                         all_shap_variance.append(shap_values_variance)
                     else:
-                        shap_values = self.feature_importance(top_n=-1, save_results=True, iter_idx=val_index)
+                        shap_values = self.feature_importance(
+                            top_n=-1, save_results=True, 
+                            iter_idx=val_index, 
+                            ablation_idx=ablation_idx)
                         all_shap_values.append(shap_values) 
 
-        #pred_dists = np.hstack(pred_dists)
+        pred_dists = np.vstack(pred_dists)
         preds = np.concatenate(preds)
         y_vals = np.concatenate(y_vals)
         r2, p = pearsonr(y_vals, preds)
@@ -282,17 +296,20 @@ class BaseRegressionModel:
         """ Compute the feature ablation"""
         r2s = []
         p_values = []
+        removals = []
         number_of_features = len(self.feature_selection['features'])
         for i in range(number_of_features):
-            metrics = self.nested_eval(folds=10, get_shap=True, tune=False)
+            metrics = self.nested_eval(folds=10, get_shap=True, tune=False, ablation_idx=i)
             r2s.append(metrics['r2'])
             p_values.append(metrics['p_value'])
             importance = metrics['feature_importance']
             importance_indices = np.argsort(importance)
             least_important_feature = self.feature_selection['features'][importance_indices[0]]
+            least_important_name = self.X.columns[importance_indices[0]]
             self.X = self.X.drop(columns=[least_important_feature])
             self.y = self.y.drop(columns=[least_important_feature])
             self.feature_selection['features'].remove(least_important_feature)
+            removals.append(least_important_feature)
         
         # Define the custom color palette from your image
         custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
@@ -322,7 +339,7 @@ class BaseRegressionModel:
         plt.tight_layout()
         plt.savefig(path, dpi=300, bbox_inches='tight')
         plt.close()
-        return r2s, p_values
+        return r2s, p_values, removals
             
 
     
@@ -417,38 +434,108 @@ class BaseRegressionModel:
                  self.save_path, self.identifier, self.target_name)
 
 class LinearRegressionModel(BaseRegressionModel):
-    """ Linear Regression Model """
+    """ Linear and Tobit Regression Model """
     def __init__(
-            self,
-            data_df: pd.DataFrame, 
-            feature_selection: dict, 
-            target_name: str,
-            test_split_size: float = 0.2,
-            save_path: str = None,
-            identifier: str = None,
-            top_n: int = 10):
-        
-        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n)
-        self.model = LinearRegression()
+        self,
+        data_df: pd.DataFrame,
+        feature_selection: dict,
+        target_name: str,
+        test_split_size: float = 0.2,
+        save_path: str = None,
+        identifier: str = None,
+        top_n: int = 10,
+        lower_bound: float = None,
+        upper_bound: float = None,
+    ):
+        # Store bounds
+        self.lower_bound = lower_bound
+        self.upper_bound = upper_bound
 
-        self.model_name = "Linear Regression"
-        if top_n == -1:
+        # Initialize BaseRegressionModel
+        super().__init__(data_df, feature_selection, target_name,
+                         test_split_size, save_path, identifier, top_n)
+
+        # Decide on model type
+        if lower_bound is None and upper_bound is None:
+            # Standard OLS
+            self.model_type = 'linear'
+            self.model = LinearRegression()
+            self.model_name = 'Linear Regression'
+        else:
+            # Tobit (censored) regression
+            self.model_type = 'tobit'
+            self.model = None       # will be built in fit()
+            self.result = None      # statsmodels result object
+            self.model_name = 'Tobit Regression'
+
+        # Adjust top_n for linear
+        if self.model_type == 'linear' and top_n == -1:
             self.top_n = len(self.feature_selection['features'])
 
-    def feature_importance(self, top_n: int = None, save_results=True, iter_idx=None) -> Dict:
-        """ Compute feature importance using coefficients for Linear Regression """
-    
-        if iter_idx is None:
-            logging.info("Starting feature importance evaluation for Linear Regression...")
-        # Use absolute value of coefficients (normalized)
-        attribution = np.abs(self.model.coef_) / np.sum(np.abs(self.model.coef_))
-        feature_names = self.feature_selection['features']
-        indices = np.argsort(attribution)[-self.top_n:][::-1]
-        top_features = {feature_names[i]: attribution[i] for i in indices}
+    def fit(self) -> None:
+        """ Train the model, using OLS or Tobit depending on bounds """
+        logging.info(f"Starting {self.model_name} model training...")
+        X_train, X_test, y_train, y_test = self.train_split
+
+        if self.model_type == 'linear':
+            # Use sklearn linear regression
+            self.model.fit(X_train, y_train)
+        else:
+            # Build and fit Tobit via statsmodels
+            # add constant term
+            exog = sm.add_constant(X_train, has_constant='add')
+            # instantiate Tobit with censoring bounds
+            tobit_mod = Tobit(endog=y_train,
+                              exog=exog,
+                              left=self.lower_bound,
+                              right=self.upper_bound)
+            self.result = tobit_mod.fit(disp=False)
+        logging.info(f"Finished {self.model_name} model training.")
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        """ Predict using the trained model """
+        logging.info(f"Starting {self.model_name} prediction...")
+        if self.model_type == 'linear':
+            preds = self.model.predict(X)
+        else:
+            # for Tobit, statsmodels result.predict takes exog
+            exog = sm.add_constant(X, has_constant='add')
+            preds = self.result.predict(exog)
+        logging.info(f"Finished {self.model_name} prediction.")
+        return np.asarray(preds)
+
+    def feature_importance(self, top_n: int = None, save_results=True, iter_idx=None, ablation_idx=None):
+        """ Compute feature importance via coefficients """
+        # Get coefficients depending on model type
+        if self.model_type == 'linear':
+            coefs = self.model.coef_
+        else:
+            # Tobit params: first param is intercept
+            coefs = self.result.params[1:]
+
+        # Normalize absolute values
+        attribution = np.abs(coefs) / np.sum(np.abs(coefs))
+        names = self.feature_selection['features']
+        # select top_n
+        n = top_n or self.top_n
+        idx = np.argsort(attribution)[-n:][::-1]
+        top_features = {names[i]: attribution[i] for i in idx}
+
         if save_results:
-            np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_feature_importance.npy', top_features)
+            np.save(os.path.join(self.save_path, f"{self.identifier}_{self.target_name}_feature_importance.npy"), top_features)
         
-        self.importances = top_features
+        # For linear only: optional SHAP analysis
+        if self.model_type == 'linear':
+            import shap
+            shap.initjs()
+            background = self.X.sample(25, random_state=42)
+            explainer = shap.LinearExplainer(self.model, background)
+            shap_values = explainer.shap_values(self.X)
+            # plotting omitted for brevity
+            return shap_values
+        else:
+            return top_features
+
 
         # Compute SHAP values using a linear explainer
         shap.initjs()
@@ -464,6 +551,9 @@ class LinearRegressionModel(BaseRegressionModel):
                 save_path = self.save_path + "/singleSHAPs"
                 os.makedirs(save_path, exist_ok=True)
                 plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_{iter_idx}.png')
+            elif ablation_idx is not None:
+                save_path = self.save_path + "/ablationSHAPs"
+                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_ablation_{ablation_idx}.png')
             else:
                 plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm.png')
             plt.close()
@@ -494,7 +584,7 @@ class RandomForestModel(BaseRegressionModel):
         if top_n == -1:
             self.top_n = len(self.feature_selection['features'])
 
-    def feature_importance(self, top_n: int = None, save_results=True, iter_idx=None) -> Dict:
+    def feature_importance(self, top_n: int = None, save_results=True, iter_idx=None, ablation_idx=None) -> Dict:
         """ Compute feature importance using the built-in attribute for Random Forest """
         if iter_idx is None:
             logging.info("Starting feature importance evaluation for Random Forest...")
@@ -521,6 +611,9 @@ class RandomForestModel(BaseRegressionModel):
                 save_path = self.save_path + "/singleSHAPs"
                 os.makedirs(save_path, exist_ok=True)
                 plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_rf_shap_aggregated_beeswarm_{iter_idx}.png')
+            elif ablation_idx is not None:
+                save_path = self.save_path + "/ablationSHAPs"
+                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_ablation_{ablation_idx}.png')
             else:
                 plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_rf_shap_aggregated_beeswarm.png')
             plt.close()
@@ -742,7 +835,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
         self.model_name += " (Tuned)"
         return best_params
 
-    def feature_importance_mean(self, top_n: int = None, batch_size: int = 10, save_results: bool = True, iter_idx=None) -> Dict:
+    def feature_importance_mean(self, top_n: int = None, batch_size: int = 10, save_results: bool = True, iter_idx=None, ablation_idx=None) -> Dict:
         """ Compute feature importance for the predicted mean using SHAP KernelExplainer. """
         shap.initjs()
         # Use a small random sample as background
@@ -758,6 +851,9 @@ class NGBoostRegressionModel(BaseRegressionModel):
                 save_path = self.save_path + "/singleSHAPs"
                 os.makedirs(save_path, exist_ok=True)
                 plt.savefig(f'{save_path}/{self.identifier}_ngboost_mean_shap_aggregated_beeswarm_{iter_idx}.png')
+            elif ablation_idx is not None:
+                save_path = self.save_path + "/ablationSHAPs"
+                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_ablation_{ablation_idx}.png')
             else:
                 plt.savefig(f'{self.save_path}/{self.identifier}_ngboost_mean_shap_aggregated_beeswarm.png')
             plt.close()
@@ -848,7 +944,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
         os.makedirs(save_path, exist_ok=True)
 
         # pull out parameters & truths
-        mu_arr, lam_arr, alpha_arr, beta_arr = self.metrics['pred_dist']
+        param_array = self.metrics['pred_dist'].T
+        mu_arr, lam_arr, alpha_arr, beta_arr = param_array[0], param_array[1], param_array[2], param_array[3]
         y_test = np.asarray(self.metrics['y_test'])
         n = len(y_test)
 
@@ -906,10 +1003,17 @@ class NGBoostRegressionModel(BaseRegressionModel):
         plt.close()
 
         # 3) CRPS (draw 500 samples per predictive distribution)
-        samples = np.stack([d.sample(500) for d in dists], axis=1)
+        samples = np.stack([d.rvs(size=500) for d in dists], axis=1)
+
         # samples.shape == (500, n)
         crps_vals = crps_ensemble(y_test, samples.T)
         print(f'Average CRPS: {crps_vals.mean():.4f}')
+        # y_test is your array of true values
+        median_pred = np.median(y_test)
+        # CRPS for constant-at-median = np.mean(|y_test - median_pred|)
+        baseline_crps = np.mean(np.abs(y_test - median_pred))
+        print("Baseline CRPS (degenerate at median):", baseline_crps)
+
 
         return {
             'pit':          pit,

@@ -40,10 +40,11 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
      #XGBoost hyperparameters grid    
     # Define the parameter grid for NGBoost
     #define bounds
-    #if identifier == "BDI":
-    #    NIGLogScore.set_bounds(0, 63)
-    #elif identifier == "MoCA":
-    #    NIGLogScore.set_bounds(0, 30)
+    #if target == "sum_post":
+        #if identifier == "BDI":
+        #    NIGLogScore.set_bounds(0, 63)
+        #elif identifier == "MoCA":
+        #    NIGLogScore.set_bounds(0, 30)
     
     
 
@@ -90,6 +91,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
+    model.calibration_analysis()
     #r2s, p_values = model.feature_ablation()
     
     summands = [0, 0, 1, 0]
@@ -112,12 +114,12 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     
 
 if __name__ == "__main__":
-    folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "results/level2/NGBoost", -1)
-    #main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", -1)
+    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA","results/level2/NGBoost", -1)
-    main(folder_path, "data/BDI/post/bdi_df.csv", "sum_post", "BDI", "results/post/NGBoost", -1)
+    #main(folder_path, "data/BDI/post/bdi_df.csv", "sum_post", "BDI", "results/post/NGBoost", -1)
     
