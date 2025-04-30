@@ -36,6 +36,12 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     }
     n_top_features = 15
 
+    if target == "sum_post":
+        if identifier == "BDI":
+            lower_bound, upper_bound = 0, 63
+        elif identifier == "MoCA":
+            lower_bound, upper_bound = 0, 30
+    
     # Linear Regression Model
     linear_model = LinearRegressionModel(
         data_df, 
@@ -44,7 +50,10 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         test_split_size, 
         safe_path_linear, 
         identifier, 
-        n_top_features)
+        n_top_features,
+        lower_bound,
+        upper_bound,
+        )
     linear_metrics = linear_model.evaluate(folds=folds, get_shap=True)
     linear_model.plot(f"Actual vs. Prediction (Linear Regression) - {identifier}", identifier)
 
@@ -67,14 +76,15 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     rf_model.fit()
     rf_metrics = rf_model.evaluate(folds=folds, get_shap=True, tune=True, nested=True, tune_folds=10)
     rf_model.plot(f"Actual vs. Prediction (Random Forest) - {identifier}", identifier)
+    
 
     logging.info("Finished main execution.")
 
 
 if __name__ == "__main__":
     #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
+    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "/results/level2/", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "/results/level2/", -1)
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "/results/level2/", -1)
