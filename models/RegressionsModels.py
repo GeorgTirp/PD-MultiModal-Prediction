@@ -885,28 +885,40 @@ class NGBoostRegressionModel(BaseRegressionModel):
         save_path = os.path.join(self.save_path, "calibration")
         os.makedirs(save_path, exist_ok=True)
 
-        # pull out parameters & truths
-        param_array = self.metrics['pred_dist'].T
-        mu_arr, lam_arr, alpha_arr, beta_arr = param_array[0], param_array[1], param_array[2], param_array[3]
-        y_test = np.asarray(self.metrics['y_test'])
-        n = len(y_test)
+        # pull out true values + predicted parameters
+        pred_dist = self.metrics['pred_dist'].T
+        y_test    = np.asarray(self.metrics['y_test'])
+        n         = len(y_test)
 
-        # reconstruct a frozen Student-t for each case
-        #   ν = 2α,   Ω = 2β(1+λ),   scale = sqrt(Ω / (λ ν))
-        nu    = 2 * alpha_arr
-        Omega = 2 * beta_arr * (1 + lam_arr)
-        scale = np.sqrt(Omega / (lam_arr * nu))
+        # decide which family
+        if self.model.Dist == NormalInverseGamma:
+            # NIG→Student-t
+            mu_arr, lam_arr, alpha_arr, beta_arr = pred_dist[0], pred_dist[1], pred_dist[2], pred_dist[3]
+            nu    = 2 * alpha_arr
+            Omega = 2 * beta_arr * (1 + lam_arr)
+            scale = np.sqrt(Omega / (lam_arr * nu))
+            dists = [
+                st.t(df=nu[i], loc=mu_arr[i], scale=scale[i])
+                for i in range(n)
+            ]
 
-        dists = [ st.t(df=nu[i], loc=mu_arr[i], scale=scale[i])
-                  for i in range(n) ]
+        elif self.model.Dist == Normal:
+            # Gaussian
+            mu_arr, sigma_arr = pred_dist[0], pred_dist[1]
+            dists = [
+                st.norm(loc=mu_arr[i], scale=sigma_arr[i])
+                for i in range(n)
+            ]
 
-        # 1) PIT values
-        pit = np.array([d.cdf(y) for d,y in zip(dists, y_test)])
+        else:
+            raise ValueError(f"Expected 2 or 4 distribution parameters, got {len(pred_dist)}")
 
-        # --- PIT histogram ---
+        # ---- 1) PIT ----
+        pit = np.array([dist.cdf(y) for dist, y in zip(dists, y_test)])
+
         plt.figure()
         plt.hist(pit, bins=20, range=(0,1), edgecolor='k', alpha=0.7)
-        plt.axhline(n/20, color='r', linestyle='--', label='ideal uniform')
+        plt.axhline(n/20, color='r', linestyle='--', label='ideal')
         plt.title('PIT Histogram')
         plt.xlabel('PIT')
         plt.ylabel('Count')
@@ -914,48 +926,47 @@ class NGBoostRegressionModel(BaseRegressionModel):
         plt.savefig(f'{save_path}/pit_hist.png')
         plt.close()
 
-        # --- PIT QQ-plot ---
+        # ---- 2) PIT QQ plot ----
         sorted_pit = np.sort(pit)
         uniform_q  = np.linspace(0,1,n)
         plt.figure()
         plt.plot(uniform_q, sorted_pit, marker='.', linestyle='none')
         plt.plot([0,1],[0,1], 'r--')
-        plt.title('PIT QQ-Plot')
+        plt.title('PIT QQ‐Plot')
         plt.xlabel('Uniform Quantile')
         plt.ylabel('Empirical PIT Quantile')
         plt.savefig(f'{save_path}/pit_qq.png')
         plt.close()
 
-        # 2) Quantile Calibration Diagram
+        # ---- 3) Quantile‐Calibration ----
         qs  = np.linspace(0.05, 0.95, 19)
         obs = []
         for q in qs:
-            # predicted q-quantile for each case
-            yq = np.array([d.ppf(q) for d in dists])
-            # fraction of truths ≤ that
+            yq = np.array([dist.ppf(q) for dist in dists])
             obs.append(np.mean(y_test <= yq))
 
         plt.figure()
         plt.plot(qs, obs, marker='o', linestyle='-')
         plt.plot([0,1],[0,1],'r--')
-        plt.title('Quantile Calibration Plot')
+        plt.title('Quantile Calibration')
         plt.xlabel('Nominal Quantile')
         plt.ylabel('Observed Fraction ≤ Predicted')
         plt.savefig(f'{save_path}/quantile_calib.png')
         plt.close()
 
-        # 3) CRPS (draw 500 samples per predictive distribution)
-        samples = np.stack([d.rvs(size=500) for d in dists], axis=1)
-
+        # ---- 4) CRPS ----
+        # draw 500 samples per predictive distribution
+        samples = np.stack([dist.rvs(size=500) for dist in dists], axis=1)
         # samples.shape == (500, n)
         crps_vals = crps_ensemble(y_test, samples.T)
-        print(f'Average CRPS: {crps_vals.mean():.4f}')
-        # y_test is your array of true values
-        median_pred = np.median(y_test)
-        # CRPS for constant-at-median = np.mean(|y_test - median_pred|)
-        baseline_crps = np.mean(np.abs(y_test - median_pred))
-        print("Baseline CRPS (degenerate at median):", baseline_crps)
+        avg_crps  = crps_vals.mean()
 
+        # baseline degenerate‐median model
+        median_pred   = np.median(y_test)
+        baseline_crps = np.mean(np.abs(y_test - median_pred))
+
+        print(f"Average CRPS: {avg_crps:.4f}")
+        print(f"Baseline CRPS (degenerate at median): {baseline_crps:.4f}")
 
         return {
             'pit':          pit,
