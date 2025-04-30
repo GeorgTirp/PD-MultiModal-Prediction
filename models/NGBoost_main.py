@@ -91,6 +91,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
+    _,_, removals= model.feature_ablation()
     model.calibration_analysis()
     #r2s, p_values = model.feature_ablation()
     
@@ -119,7 +120,7 @@ if __name__ == "__main__":
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "results/level2/NGBoost", -1)
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", -1)
+    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NormalNGBoost", 5)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA","results/level2/NGBoost", -1)
     #main(folder_path, "data/BDI/post/bdi_df.csv", "sum_post", "BDI", "results/post/NGBoost", -1)
     

@@ -25,10 +25,8 @@ from sklearn.tree import DecisionTreeRegressor
 from evidential_boost import NormalInverseGamma
 from joblib import Parallel, delayed
 import scipy.stats as st
-import statsmodels.api as sm
-from statsmodels.miscmodels.tobit import Tobit
 from properscoring import crps_ensemble
-matplotlib.use('TkAgg') 
+#matplotlib.use('TkAgg') 
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -316,10 +314,12 @@ class BaseRegressionModel:
                 # Set Seaborn style, context, and custom palette
         sns.set_theme(style="whitegrid", context="paper")
         sns.set_palette(custom_palette)
-        path = self.save_path + 'feature_ablation.png'
+        path = f'{self.save_path}/{self.identifier}_feature_ablation.png'
                 # Read in the CSV
         
-        
+        # Save the removals list as a CSV file
+        removals_df = pd.DataFrame({'Removed_Features': removals})
+        removals_df.to_csv(f'{self.save_path}/{self.identifier}_ablation_history.csv', index=False)
         # Create a figure
         plt.figure(figsize=(6, 4))
         x = np.arange(number_of_features)
@@ -434,108 +434,37 @@ class BaseRegressionModel:
                  self.save_path, self.identifier, self.target_name)
 
 class LinearRegressionModel(BaseRegressionModel):
-    """ Linear and Tobit Regression Model """
+    """ Linear Regression Model """
     def __init__(
-        self,
-        data_df: pd.DataFrame,
-        feature_selection: dict,
-        target_name: str,
-        test_split_size: float = 0.2,
-        save_path: str = None,
-        identifier: str = None,
-        top_n: int = 10,
-        lower_bound: float = None,
-        upper_bound: float = None,
-    ):
-        # Store bounds
-        self.lower_bound = lower_bound
-        self.upper_bound = upper_bound
-
-        # Initialize BaseRegressionModel
-        super().__init__(data_df, feature_selection, target_name,
-                         test_split_size, save_path, identifier, top_n)
-
-        # Decide on model type
-        if lower_bound is None and upper_bound is None:
-            # Standard OLS
-            self.model_type = 'linear'
-            self.model = LinearRegression()
-            self.model_name = 'Linear Regression'
-        else:
-            # Tobit (censored) regression
-            self.model_type = 'tobit'
-            self.model = None       # will be built in fit()
-            self.result = None      # statsmodels result object
-            self.model_name = 'Tobit Regression'
-
-        # Adjust top_n for linear
-        if self.model_type == 'linear' and top_n == -1:
+            self,
+            data_df: pd.DataFrame, 
+            feature_selection: dict, 
+            target_name: str,
+            test_split_size: float = 0.2,
+            save_path: str = None,
+            identifier: str = None,
+            top_n: int = 10):
+        
+        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n)
+        self.model = LinearRegression()
+        self.model_name = "Linear Regression"
+        if top_n == -1:
             self.top_n = len(self.feature_selection['features'])
 
-    def fit(self) -> None:
-        """ Train the model, using OLS or Tobit depending on bounds """
-        logging.info(f"Starting {self.model_name} model training...")
-        X_train, X_test, y_train, y_test = self.train_split
-
-        if self.model_type == 'linear':
-            # Use sklearn linear regression
-            self.model.fit(X_train, y_train)
-        else:
-            # Build and fit Tobit via statsmodels
-            # add constant term
-            exog = sm.add_constant(X_train, has_constant='add')
-            # instantiate Tobit with censoring bounds
-            tobit_mod = Tobit(endog=y_train,
-                              exog=exog,
-                              left=self.lower_bound,
-                              right=self.upper_bound)
-            self.result = tobit_mod.fit(disp=False)
-        logging.info(f"Finished {self.model_name} model training.")
-
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
-        """ Predict using the trained model """
-        logging.info(f"Starting {self.model_name} prediction...")
-        if self.model_type == 'linear':
-            preds = self.model.predict(X)
-        else:
-            # for Tobit, statsmodels result.predict takes exog
-            exog = sm.add_constant(X, has_constant='add')
-            preds = self.result.predict(exog)
-        logging.info(f"Finished {self.model_name} prediction.")
-        return np.asarray(preds)
-
-    def feature_importance(self, top_n: int = None, save_results=True, iter_idx=None, ablation_idx=None):
-        """ Compute feature importance via coefficients """
-        # Get coefficients depending on model type
-        if self.model_type == 'linear':
-            coefs = self.model.coef_
-        else:
-            # Tobit params: first param is intercept
-            coefs = self.result.params[1:]
-
-        # Normalize absolute values
-        attribution = np.abs(coefs) / np.sum(np.abs(coefs))
-        names = self.feature_selection['features']
-        # select top_n
-        n = top_n or self.top_n
-        idx = np.argsort(attribution)[-n:][::-1]
-        top_features = {names[i]: attribution[i] for i in idx}
-
+    def feature_importance(self, top_n: int = None, save_results=True, iter_idx=None, ablation_idx=None) -> Dict:
+        """ Compute feature importance using coefficients for Linear Regression """
+    
+        if iter_idx is None:
+            logging.info("Starting feature importance evaluation for Linear Regression...")
+        # Use absolute value of coefficients (normalized)
+        attribution = np.abs(self.model.coef_) / np.sum(np.abs(self.model.coef_))
+        feature_names = self.feature_selection['features']
+        indices = np.argsort(attribution)[-self.top_n:][::-1]
+        top_features = {feature_names[i]: attribution[i] for i in indices}
         if save_results:
-            np.save(os.path.join(self.save_path, f"{self.identifier}_{self.target_name}_feature_importance.npy"), top_features)
+            np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_feature_importance.npy', top_features)
         
-        # For linear only: optional SHAP analysis
-        if self.model_type == 'linear':
-            import shap
-            shap.initjs()
-            background = self.X.sample(25, random_state=42)
-            explainer = shap.LinearExplainer(self.model, background)
-            shap_values = explainer.shap_values(self.X)
-            # plotting omitted for brevity
-            return shap_values
-        else:
-            return top_features
-
+        self.importances = top_features
 
         # Compute SHAP values using a linear explainer
         shap.initjs()
@@ -553,7 +482,8 @@ class LinearRegressionModel(BaseRegressionModel):
                 plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_{iter_idx}.png')
             elif ablation_idx is not None:
                 save_path = self.save_path + "/ablationSHAPs"
-                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_ablation_{ablation_idx}.png')
+                os.makedirs(save_path, exist_ok=True)
+                plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_ablation_{ablation_idx}.png')
             else:
                 plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm.png')
             plt.close()
@@ -561,6 +491,7 @@ class LinearRegressionModel(BaseRegressionModel):
         if iter_idx is None:
             logging.info("Finished feature importance evaluation for Linear Regression.")
         return shap_values
+
 
 class RandomForestModel(BaseRegressionModel):
     """ Random Forest Model """
@@ -613,7 +544,8 @@ class RandomForestModel(BaseRegressionModel):
                 plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_rf_shap_aggregated_beeswarm_{iter_idx}.png')
             elif ablation_idx is not None:
                 save_path = self.save_path + "/ablationSHAPs"
-                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_ablation_{ablation_idx}.png')
+                os.makedirs(save_path, exist_ok=True)
+                plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_ablation_{ablation_idx}.png')
             else:
                 plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_rf_shap_aggregated_beeswarm.png')
             plt.close()
@@ -859,7 +791,13 @@ class NGBoostRegressionModel(BaseRegressionModel):
             plt.close()
         return shap_values
 
-    def feature_importance_variance(self, top_n: int = None, batch_size: int = 10, save_results: bool = True, iter_idx=None) -> Dict:
+    def feature_importance_variance(
+            self, 
+            top_n: int = None, 
+            batch_size: int = 10, 
+            save_results: bool = True, 
+            iter_idx=None, 
+            ablation_idx=None) -> Dict:
         """ Compute feature importance for the predicted variance using SHAP KernelExplainer. """
         shap.initjs()
         background = shap.sample(self.X, 20)
@@ -874,6 +812,10 @@ class NGBoostRegressionModel(BaseRegressionModel):
                 save_path = self.save_path + "/singleSHAPs"
                 os.makedirs(save_path, exist_ok=True)
                 plt.savefig(f'{save_path}/{self.identifier}_ngboost_variance_shap_aggregated_beeswarm_{iter_idx}.png')
+            elif ablation_idx is not None:
+                save_path = self.save_path + "/ablationSHAPs"
+                os.makedirs(save_path, exist_ok=True)
+                plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_ablation_{ablation_idx}.png')
             else:
                 plt.savefig(f'{self.save_path}/{self.identifier}_ngboost_variance_shap_aggregated_beeswarm.png')
             plt.close()
