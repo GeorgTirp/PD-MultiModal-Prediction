@@ -2,7 +2,7 @@ import os
 from RegressionsModels import NGBoostRegressionModel
 import pandas as pd
 from evidential_boost import NormalInverseGamma, NIGLogScore
-
+from ngboost.distns.normal import Normal, NormalCRPScore, NormalLogScore
 from sklearn.tree import DecisionTreeRegressor
 from matplotlib import pyplot as plt
 import numpy as np
@@ -56,8 +56,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     
 
     NGB_Hparams = {
-        'Dist': NormalInverseGamma,
-        'Score' : NIGLogScore,
+        'Dist': Normal,
+        'Score' : NormalCRPScore,
         'n_estimators': 500, 
         'learning_rate': 0.05, 
         'natural_gradient': True,
@@ -91,11 +91,12 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
+    #_,_, removals= model.feature_ablation()
     model.calibration_analysis()
-    #r2s, p_values = model.feature_ablation()
     
-    summands = [0, 0, 1, 0]
-    param_names  = ["mu", "lambda", "alpha", "beta"]
+    
+    #summands = [0, 0, 1, 0]
+    #param_names  = ["mu", "lambda", "alpha", "beta"]
     #for i in range(len(param_names)):
     #    if i == 0:
     #        param = metrics["pred_dist"][i] + summands[i]
@@ -119,7 +120,7 @@ if __name__ == "__main__":
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "results/level2/NGBoost", -1)
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", -1)
+    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NormalNGBoost", 5)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA","results/level2/NGBoost", -1)
     #main(folder_path, "data/BDI/post/bdi_df.csv", "sum_post", "BDI", "results/post/NGBoost", -1)
     
