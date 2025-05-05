@@ -8,7 +8,7 @@ from RegressionsModels import LinearRegressionModel, RandomForestModel
 def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info("Starting main execution...")
     target_col = identifier + "_" + target
-    possible_targets = ["ratio", "diff", "sum_post"] 
+    possible_targets = ["ratio", "diff"] 
     ignored_targets = [t for t in possible_targets if t != target]
     ignored_target_cols = [identifier + "_" + t for t in ignored_targets]
     data_df = pd.read_csv(folder_path + data_path)
@@ -51,11 +51,10 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         safe_path_linear, 
         identifier, 
         n_top_features,
-        lower_bound,
-        upper_bound,
         )
-    linear_metrics = linear_model.evaluate(folds=folds, get_shap=True)
+    linear_metrics = linear_model.evaluate(folds=folds, get_shap=False)
     linear_model.plot(f"Actual vs. Prediction (Linear Regression) - {identifier}", identifier)
+    _,_, removals= linear_model.feature_ablation()
 
     rf_hparams  = {
         'n_estimators': [20, 30, 50, 100, 150],
@@ -74,20 +73,24 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         n_top_features,
         param_grid=rf_hparams)
     rf_model.fit()
-    rf_metrics = rf_model.evaluate(folds=folds, get_shap=True, tune=True, nested=True, tune_folds=10)
+    rf_metrics = rf_model.evaluate(folds=folds, get_shap=True, tune=True, nested=True, tune_folds=-1)
     rf_model.plot(f"Actual vs. Prediction (Random Forest) - {identifier}", identifier)
-    
+    _,_, removals= rf_model.feature_ablation()
+    _,_, removals= linear_model.feature_ablation()
 
     logging.info("Finished main execution.")
 
 
 if __name__ == "__main__":
-    #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
-    #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "/results/level2/", -1)
+    main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "/results/level2/", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "/results/level2/", -1)
-    #main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "/results/level2/", -1)
+    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "/results/level2/", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA", "/results/level2/", -1)
-    main(folder_path, "data/BDI/post/bdi_df.csv", "sum_post", "BDI", "/results/post/", -1)
+    #main(folder_path, "data/BDI/post/bdi_df.csv", "sum_post", "BDI", "/results/post/", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA", "/results/level2/", -1)
+    main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "/results/level1/", -1)
+    #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "/results/level2/", -1)
+    main(folder_path, "data/BDI/level1/bdi_df.csv", "ratio", "BDI", "/results/level1/", -1)

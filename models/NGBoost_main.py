@@ -15,7 +15,7 @@ import logging
 
 def main(folder_path, data_path, target, identifier, out, folds=10):
     target_col = identifier + "_" + target
-    possible_targets = ["ratio", "diff", "sum_post"] 
+    possible_targets = ["ratio", "diff"] 
     ignored_targets = [t for t in possible_targets if t != target]
     ignored_target_cols = [identifier + "_" + t for t in ignored_targets]
     data_df = pd.read_csv(folder_path + data_path)
@@ -49,17 +49,17 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     
 
     param_grid_ngb = {
-    'n_estimators': [50, 100, 150],
+    'n_estimators': [550, 600, 650, 700],
     'learning_rate': [0.01, 0.05, 0.1],
     'Base__max_depth': [3, 4, 5]
     }  
     
-
+    # BEST ONES: 600, 0.1 and for regs 0.1 and 0.001
     NGB_Hparams = {
-        'Dist': Normal,
-        'Score' : NormalCRPScore,
-        'n_estimators': 500, 
-        'learning_rate': 0.05, 
+        'Dist': NormalInverseGamma,
+        'Score' : NIGLogScore,
+        'n_estimators': 600,
+        'learning_rate': 0.1,
         'natural_gradient': True,
         #'minibatch_frac': 0.1,
         'verbose': False,
@@ -112,15 +112,15 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     #    plt.close()
         
         
-    
 
 if __name__ == "__main__":
-    #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "results/level2/NGBoost", -1)
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NormalNGBoost", 5)
+    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", -1)
+    #main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NormalNGBoost", -1)
     #main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA","results/level2/NGBoost", -1)
     #main(folder_path, "data/BDI/post/bdi_df.csv", "sum_post", "BDI", "results/post/NGBoost", -1)
     

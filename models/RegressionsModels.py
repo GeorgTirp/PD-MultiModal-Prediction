@@ -26,6 +26,10 @@ from evidential_boost import NormalInverseGamma
 from joblib import Parallel, delayed
 import scipy.stats as st
 from properscoring import crps_ensemble
+from scipy.stats import norm
+import pickle
+#from pycens.censored_regression import Tobit as PycensTobit
+from statsmodels.base.model import GenericLikelihoodModel
 #matplotlib.use('TkAgg') 
 
 # Configure logging
@@ -207,11 +211,12 @@ class BaseRegressionModel:
             if get_shap:             
                  # Compute SHAP values on the whole dataset per fold
                 with io.capture_output():
+                    if ablation_idx is not None:
+                        val_index = None
                     if isinstance(self, NGBoostRegressionModel):
                         shap_values_mean = self.feature_importance_mean(
                             top_n=-1, save_results=True,  
-                            iter_idx=val_index, 
-                            ablation_idx=ablation_idx)
+                            iter_idx=val_index)
                         shap_values_variance = self.feature_importance_variance(
                             top_n=-1, 
                             save_results=True, 
@@ -221,11 +226,11 @@ class BaseRegressionModel:
                     else:
                         shap_values = self.feature_importance(
                             top_n=-1, save_results=True, 
-                            iter_idx=val_index, 
-                            ablation_idx=ablation_idx)
+                            iter_idx=val_index)
                         all_shap_values.append(shap_values) 
 
-        pred_dists = np.vstack(pred_dists)
+        if isinstance(self, NGBoostRegressionModel):
+            pred_dists = np.vstack(pred_dists)
         preds = np.concatenate(preds)
         y_vals = np.concatenate(y_vals)
         r2, p = pearsonr(y_vals, preds)
@@ -236,26 +241,33 @@ class BaseRegressionModel:
         mse = mean_squared_error(y_vals, preds)
 
         if get_shap:
+            if ablation_idx is not None:
+                save_path = f'{self.save_path}/{self.identifier}_{self.target_name}/ablation/'
+                os.makedirs(save_path, exist_ok=True)
+                save_path = f'{save_path}_{ablation_idx}'
+            else:
+                save_path = f'{self.save_path}/{self.identifier}_{self.target_name}'
+            
             if isinstance(self, NGBoostRegressionModel):
                 all_shap_mean_array = np.stack(all_shap_mean, axis=0)
-                all_shap_variance_array = np.stack(all_shap_variance, axis=0)
+                #all_shap_variance_array = np.stack(all_shap_variance, axis=0)
                 # Average over the folds to get an aggregated array of shape (n_samples, n_features)
                 mean_shap_values = np.mean(all_shap_mean_array, axis=0)
-                variance_shap_values = np.mean(all_shap_variance_array, axis=0)
+                #variance_shap_values = np.mean(all_shap_variance_array, axis=0)
                 np.save(f'{self.save_path}/{self.identifier}_mean_shap_values.npy', mean_shap_values)
-                np.save(f'{self.save_path}/{self.identifier}_variance_shap_values.npy', variance_shap_values)
+                #np.save(f'{self.save_path}/{self.identifier}_variance_shap_values.npy', variance_shap_values)
                 # Plot for mean SHAP values
                 shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
                 plt.title(f'{self.identifier} Summary Plot (Aggregated - Mean)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
-                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_mean.png')
+                plt.savefig(f'{save_path}_shap_aggregated_beeswarm_mean.png')
                 plt.close()
                 
-                shap.summary_plot(variance_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-                plt.title(f'{self.identifier} Summary Plot (Aggregated - Variance)', fontsize=16)
-                plt.subplots_adjust(top=0.90)
-                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_variance.png')
-                plt.close()
+                #shap.summary_plot(variance_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                #plt.title(f'{self.identifier} Summary Plot (Aggregated - Variance)', fontsize=16)
+                #plt.subplots_adjust(top=0.90)
+                #plt.savefig(f'{save_path}_shap_aggregated_beeswarm_variance.png')
+                #plt.close()
             else:
                 all_shap_values_array = np.stack(all_shap_values, axis=0)
                 # Average over the folds to get an aggregated array of shape (n_samples, n_features)
@@ -264,7 +276,9 @@ class BaseRegressionModel:
                 shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
                 plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
-                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm.png')
+                plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png')
+                with open(f'{save_path}_shap_explanations.pkl', 'wb') as fp:
+                    pickle.dump(mean_shap_values, fp)
                 plt.close()
             
             # Compute the mean of the absolute SHAP values for each feature
@@ -297,7 +311,7 @@ class BaseRegressionModel:
         removals = []
         number_of_features = len(self.feature_selection['features'])
         for i in range(number_of_features):
-            metrics = self.nested_eval(folds=10, get_shap=True, tune=False, ablation_idx=i)
+            metrics = self.nested_eval(folds=-1, get_shap=True, tune=False, ablation_idx=i)
             r2s.append(metrics['r2'])
             p_values.append(metrics['p_value'])
             importance = metrics['feature_importance']
@@ -424,7 +438,6 @@ class BaseRegressionModel:
         # Show grid and ensure everything fits nicely
         plt.grid(True)
         plt.tight_layout()
-
         # Save and close
         plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_actual_vs_predicted.png')
         plt.close()
@@ -432,6 +445,87 @@ class BaseRegressionModel:
         # Log info (optional)
         logging.info("Plot saved to %s/%s_%s_actual_vs_predicted.png", 
                  self.save_path, self.identifier, self.target_name)
+
+
+class Tobit(GenericLikelihoodModel):
+    """Custom Tobit (censored) regression."""
+    def __init__(self, endog, exog, left=None, right=None, **kwargs):
+        super().__init__(endog, exog, **kwargs)
+        self.left = left
+        self.right = right
+
+    def nloglikeobs(self, params):
+        beta, sigma = params[:-1], params[-1]
+        xb = np.dot(self.exog, beta)
+        y = self.endog
+
+        # three regimes: left censored, uncensored, right censored
+        ll = np.where(
+            y <= self.left,
+            np.log(norm.cdf((self.left - xb) / sigma)),
+            np.where(
+                y >= self.right,
+                np.log(1 - norm.cdf((self.right - xb) / sigma)),
+                norm.logpdf((y - xb) / sigma) - np.log(sigma)
+            )
+        )
+        return -ll  # we minimize negative log‐likelihood
+
+    def fit(self, start_params=None, maxiter=10000, maxfun=5000, **kwds):
+        # use OLS for good starting values
+        if start_params is None:
+            ols = sm.OLS(self.endog, self.exog).fit()
+            start_params = np.append(ols.params, np.sqrt(ols.scale))
+        return super().fit(start_params=start_params,
+                           maxiter=maxiter, maxfun=maxfun, **kwds)
+
+
+class NewLinearRegressionModel(BaseRegressionModel):
+    """OLS or custom‐Tobit regression depending on bounds"""
+    def __init__(self, *args,
+                 lower_bound: float = None,
+                 upper_bound: float = None,
+                 **kwargs):
+        self.lower_bound = lower_bound
+        self.upper_bound = upper_bound
+        super().__init__(*args, **kwargs)
+
+        if self.lower_bound is None and self.upper_bound is None:
+            self.model_type = 'linear'
+            self.model = LinearRegression()
+            self.model_name = 'Linear Regression'
+        else:
+            self.model_type = 'tobit'
+            self.result = None    # will hold Tobit fit
+            self.model_name = 'Tobit Regression'
+
+    def fit(self):
+        logging.info(f"Starting {self.model_name} training…")
+        X_tr, X_te, y_tr, y_te = self.train_split
+
+        if self.model_type == 'linear':
+            self.model.fit(X_tr, y_tr)
+        else:
+            exog = sm.add_constant(X_tr, has_constant='add')
+            mod = Tobit(
+                endog=y_tr.values,
+                exog=exog.values,
+                left=self.lower_bound,
+                right=self.upper_bound
+            )
+            self.result = mod.fit(disp=False)
+        logging.info(f"Finished {self.model_name} training.")
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        logging.info(f"Starting {self.model_name} prediction…")
+        if self.model_type == 'linear':
+            preds = self.model.predict(X)
+        else:
+            exog = sm.add_constant(X, has_constant='add')
+            preds = self.result.predict(exog.values)
+        logging.info(f"Finished {self.model_name} prediction.")
+        return preds
+
 
 class LinearRegressionModel(BaseRegressionModel):
     """ Linear Regression Model """
@@ -968,10 +1062,15 @@ class NGBoostRegressionModel(BaseRegressionModel):
         print(f"Average CRPS: {avg_crps:.4f}")
         print(f"Baseline CRPS (degenerate at median): {baseline_crps:.4f}")
 
+        # ---- 5) ECE ----
+        ece = np.mean(np.abs(np.array(obs) - qs))
+        print(f"Expected Calibration Error (ECE): {ece:.4f}")
+
         return {
             'pit':          pit,
             'quantile_cal': (qs, np.array(obs)),
             'crps':         crps_vals,
+            'ece':          ece,
         }
 
 

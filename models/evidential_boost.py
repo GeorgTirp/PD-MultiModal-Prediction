@@ -85,7 +85,7 @@ class NIGLogScore(LogScore):
         return np.mean(penalty)
     
 
-    def score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
+    def score(self, Y, params=None, evid_strength=0.1, kl_strength=0.005):
        
         self._last_Y = Y
         if params is None:
@@ -120,7 +120,7 @@ class NIGLogScore(LogScore):
         return nll + evid_strength * evidential_reg + kl_strength * kl_reg
    
     
-    def d_score(self, Y, params=None, evid_strength=0.5, kl_strength=0.1):
+    def d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.001):
         # Unpack or use stored
         if params is None:
             mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
@@ -188,7 +188,7 @@ class NIGLogScore(LogScore):
         return np.stack([raw_mu, raw_lam, raw_alpha, raw_beta], axis=1)
     
 
-    def old_d_score(self, Y, params=None, evid_strength=0.05, kl_strength=0.01):
+    def old_d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
     # Unpack or use stored
         if params is None:
             mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
@@ -214,7 +214,7 @@ class NIGLogScore(LogScore):
         d_lam = (
             -0.5/lam
             - alpha * (2*beta)/Omega
-            + (alpha+0.5)*((resid**2) + 2*beta) / term
+            + (alpha+0.5)*((resid**2)) / term
         )
 
         # 3) ∂ℓ/∂α

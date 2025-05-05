@@ -292,4 +292,53 @@ class TabPFNRegression():
         logging.info("Plot saved to %s/%s_%s_actual_vs_predicted.png", 
                  self.save_path, self.identifier, self.target_name)
 
-        #
+    def feature_ablation(self) -> Dict:
+        """ Compute the feature ablation"""
+        r2s = []
+        p_values = []
+        removals = []
+        number_of_features = len(self.Feature_Selection['features'])
+        for i in range(number_of_features):
+            metrics = self.evaluate(folds=-1)
+            r2s.append(metrics['r2'])
+            p_values.append(metrics['p_value'])
+            importance = metrics['feature_importance']
+            importance_indices = np.argsort(importance)
+            least_important_feature = self.Feature_Selection['features'][importance_indices[0]]
+            least_important_name = self.X.columns[importance_indices[0]]
+            self.X = self.X.drop(columns=[least_important_feature])
+            self.y = self.y.drop(columns=[least_important_feature])
+            self.Feature_Selection['features'].remove(least_important_feature)
+            removals.append(least_important_feature)
+        
+        # Define the custom color palette from your image
+        custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
+                # Set Seaborn style, context, and custom palette
+        sns.set_theme(style="whitegrid", context="paper")
+        sns.set_palette(custom_palette)
+        path = f'{self.save_path}/{self.identifier}_feature_ablation.png'
+                # Read in the CSV
+        
+        # Save the removals list as a CSV file
+        removals_df = pd.DataFrame({'Removed_Features': removals})
+        removals_df.to_csv(f'{self.save_path}/{self.identifier}_ablation_history.csv', index=False)
+        # Create a figure
+        plt.figure(figsize=(6, 4))
+        x = np.arange(number_of_features)
+                # Create a figure
+        plt.figure(figsize=(6, 4))
+                # Plot each model's R² scores in a loop, using sample_sizes on the x-axis
+        #for model_name, r2_scores in results.items():
+        plot_df = pd.DataFrame({'x': x, 'r2s': r2s})
+        sns.lineplot(data=plot_df, x='x', y='r2s', label="R Score", marker='o')
+
+                # Optionally use a log scale for the x-axis if you want to emphasize the “logarithmic” nature
+        # Label the axes and set the title
+        plt.xlabel("Number of removed features")
+        plt.ylabel("R Score")
+        plt.title("R Scores Over Feature Ablation")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(path, dpi=300, bbox_inches='tight')
+        plt.close()
+        return r2s, p_values, removals
