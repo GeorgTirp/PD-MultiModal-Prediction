@@ -54,7 +54,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     'Base__max_depth': [3, 4, 5, 6]
     }  
     
-   
+    # BEST ONES: 600, 0.1 and for regs 0.1 and 0.001
     NGB_Hparams = {
         'Dist': NormalInverseGamma,
         'Score' : NIGLogScore,
@@ -117,10 +117,10 @@ if __name__ == "__main__":
     #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
     folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
-    main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "results/level1/NGBoost", 20)
-    main(folder_path, "data/BDI/level1/bdi_df.csv", "ratio", "BDI", "results/level1/NGBoost", 20)
+    #main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "results/level1/NGBoost", 20)
+    #main(folder_path, "data/BDI/level1/bdi_df.csv", "ratio", "BDI", "results/level1/NGBoost", 20)
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", 20)
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", 20)
-    #main(folder_path, "data/BDI/level3/bdi_df.csv", "diff", "BDI", "results/level3/NGBoost", 20)
-    #main(folder_path, "data/BDI/level3/bdi_df.csv", "ratio", "BDI", "results/level3/NGBoost", 20)
+    main(folder_path, "data/BDI/level3/bdi_df.csv", "diff", "BDI", "results/level3/NGBoost", 20)
+    main(folder_path, "data/BDI/level3/bdi_df.csv", "ratio", "BDI", "results/level3/NGBoost", 20)
     

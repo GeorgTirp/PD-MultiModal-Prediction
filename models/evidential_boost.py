@@ -85,7 +85,7 @@ class NIGLogScore(LogScore):
         return np.mean(penalty)
     
 
-    def score(self, Y, params=None, evid_strength=0.1, kl_strength=0.005):
+    def score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
        
         self._last_Y = Y
         if params is None:
@@ -120,7 +120,7 @@ class NIGLogScore(LogScore):
         return nll + evid_strength * evidential_reg + kl_strength * kl_reg
    
     
-    def d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.001):
+    def d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
         # Unpack or use stored
         if params is None:
             mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta

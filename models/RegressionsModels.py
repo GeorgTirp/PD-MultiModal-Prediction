@@ -254,7 +254,11 @@ class BaseRegressionModel:
                 # Average over the folds to get an aggregated array of shape (n_samples, n_features)
                 mean_shap_values = np.mean(all_shap_mean_array, axis=0)
                 #variance_shap_values = np.mean(all_shap_variance_array, axis=0)
-                np.save(f'{self.save_path}/{self.identifier}_mean_shap_values.npy', mean_shap_values)
+                if ablation_idx is not None:
+                    np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_[{ablation_idx}]_mean_shap_values.npy', mean_shap_values)
+                    #np.save(f'{save_path}_variance_shap_values.npy', variance_shap_values)
+                else:
+                    np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values.npy', mean_shap_values)
                 #np.save(f'{self.save_path}/{self.identifier}_variance_shap_values.npy', variance_shap_values)
                 # Plot for mean SHAP values
                 shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
@@ -272,7 +276,7 @@ class BaseRegressionModel:
                 all_shap_values_array = np.stack(all_shap_values, axis=0)
                 # Average over the folds to get an aggregated array of shape (n_samples, n_features)
                 mean_shap_values = np.mean(all_shap_values_array, axis=0)
-                np.save(f'{self.save_path}/{self.identifier}_mean_shap_values.npy', mean_shap_values)
+                np.save(f'{self.save_path}/{self.identifier}_{self.target}_mean_shap_values.npy', mean_shap_values)
                 shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
                 plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
@@ -301,6 +305,12 @@ class BaseRegressionModel:
         self.metrics = metrics
         metrics_df = pd.DataFrame([metrics])
         metrics_df.to_csv(f'{self.save_path}/{self.identifier}_metrics.csv', index=False)
+        if ablation_idx == None:
+            # Save the trained model to a file
+            model_save_path = f'{self.save_path}/{self.identifier}_trained_model.pkl'
+            with open(model_save_path, 'wb') as model_file:
+                pickle.dump(self.model, model_file)
+            logging.info(f"Trained model saved to {model_save_path}.")
         logging.info("Finished model evaluation.")
         return metrics
     
@@ -311,7 +321,7 @@ class BaseRegressionModel:
         removals = []
         number_of_features = len(self.feature_selection['features'])
         for i in range(number_of_features):
-            metrics = self.nested_eval(folds=-1, get_shap=True, tune=False, ablation_idx=i)
+            metrics = self.nested_eval(folds=20, get_shap=True, tune=True, tune_folds=-1, ablation_idx=i)
             r2s.append(metrics['r2'])
             p_values.append(metrics['p_value'])
             importance = metrics['feature_importance']
@@ -876,12 +886,12 @@ class NGBoostRegressionModel(BaseRegressionModel):
             if iter_idx is not None:
                 save_path = self.save_path + "/singleSHAPs"
                 os.makedirs(save_path, exist_ok=True)
-                plt.savefig(f'{save_path}/{self.identifier}_ngboost_mean_shap_aggregated_beeswarm_{iter_idx}.png')
+                plt.savefig(f'{save_path}/{self.identifier}_mean_shap_aggregated_beeswarm_{iter_idx}.png')
             elif ablation_idx is not None:
                 save_path = self.save_path + "/ablationSHAPs"
                 plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_ablation_{ablation_idx}.png')
             else:
-                plt.savefig(f'{self.save_path}/{self.identifier}_ngboost_mean_shap_aggregated_beeswarm.png')
+                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_aggregated_beeswarm.png')
             plt.close()
         return shap_values
 
