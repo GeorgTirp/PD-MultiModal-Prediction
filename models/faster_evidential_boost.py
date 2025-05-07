@@ -5,7 +5,8 @@ from scipy.special import gammaln, digamma, polygamma, psi
 import scipy.stats as st
 from scipy.optimize import approx_fprime
 from numba import njit, prange
-from ngb_jit import d_score_numba#, digamma, trigamma, psi, gammaln
+from ngb_jit import d_score_numba, full_score_numba#, digamma, trigamma, psi, gammaln
+import line_profiler
 
 def softplus(x):
         return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
@@ -60,8 +61,37 @@ class NIGLogScore(LogScore):
         penalty = error * (2 * alpha + lam)
         return np.mean(penalty)
     
-
+    @line_profiler.profile
     def score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
+        # 1) unpack parameters into arrays
+        self._last_Y = Y
+        if params is None:
+            mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
+            mu, lam, alpha, beta = mu.ravel(), lam.ravel(), alpha.ravel(), beta.ravel()
+        else:
+            mu, lam, alpha, beta = np.stack(params, axis=-1).T
+
+        # 2) (optional) pre-clip to avoid NaNs
+        eps = 1e-8
+        lam   = np.clip(lam,   eps, None)
+        alpha = np.clip(alpha, 1.0 + eps, None)
+        beta  = np.clip(beta,  eps, None)
+
+        # 3) call the Numba ufunc — this returns an (n,) array of per-sample losses
+        per_sample_losses = full_score_numba(
+            Y.astype(np.float64),
+            mu.astype(np.float64),
+            lam.astype(np.float64),
+            alpha.astype(np.float64),
+            evid_strength,
+            kl_strength
+        )
+
+        # 4) return the vector directly
+        return per_sample_losses
+    
+
+    def old_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
        
         self._last_Y = Y
         if params is None:
@@ -163,6 +193,7 @@ class NIGLogScore(LogScore):
             raw_beta_grad
         ], axis=1)
 
+    @line_profiler.profile
     def d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
         # Unpack or use stored
         if params is None:
@@ -180,7 +211,7 @@ class NIGLogScore(LogScore):
                                  kl_strength)
     
     
-    
+    @line_profiler.profile
     def metric(self, Y=None, params=None,
                evid_strength: float = 0.2,
                kl_strength:    float = 0.01):

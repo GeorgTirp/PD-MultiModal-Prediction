@@ -1,7 +1,5 @@
-import numpy as np
-from ngboost.distns.distn import RegressionDistn
-from ngboost.scores import LogScore
-from scipy.special import gammaln, digamma
+
+
 from scipy.special import polygamma
 
 import numpy as np
@@ -9,27 +7,12 @@ from ngboost.distns.distn import RegressionDistn
 from ngboost.scores import LogScore
 from scipy.special import gammaln
 import scipy.stats as st
-from scipy.special import psi  # digamma
+from scipy.special import psi, digamma, polygamma
 from scipy.optimize import approx_fprime
-
-def grad_logcdf_bound(Yi, mu, lam, alpha, beta, bound, which='lower'):
-    eps = np.sqrt(np.finfo(float).eps)
-    def loss_fn(x):
-        m, l, a, b = x
-        lam_nat = np.exp(l)
-        alpha_nat = np.exp(a) + 1
-        beta_nat = np.exp(b)
-        nu = 2 * alpha_nat
-        Omega = 2 * beta_nat * (1 + lam_nat)
-        scale = np.sqrt(Omega / (lam_nat * nu))
-        td = st.t(df=nu, loc=m, scale=scale)
-        if which == 'lower':
-            return -np.log(np.clip(td.cdf(bound), 1e-8, 1.0))
-        else:
-            return -np.log(np.clip(td.sf(bound), 1e-8, 1.0))
-    x0 = np.array([mu, np.log(lam), np.log(alpha - 1), np.log(beta)])
-    return approx_fprime(x0, loss_fn, epsilon=eps)
-
+from numba import njit, prange
+import math
+    
+        
 
 def softplus(x):
         return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
@@ -100,95 +83,14 @@ class NIGLogScore(LogScore):
         term4 = gammaln(alpha) - gammaln(alpha + 0.5)
         nll = term1 + term2 + term3 + term4
 
-        if self.lower_bound is not None or self.upper_bound is not None:
-            nu = 2*alpha
-            scale = np.sqrt(Omega/(lam*nu))
-            td = st.t(df=nu, loc=mu, scale=scale)
-            if self.lower_bound is not None:
-                mask_low = (Y <= self.lower_bound)
-                if mask_low.any():
-                    cdf_l = np.clip(td.cdf(self.lower_bound), 1e-8, 1.0)
-                    nll[mask_low] = -np.log(cdf_l[mask_low])
-            if self.upper_bound is not None:
-                mask_up = (Y >= self.upper_bound)
-                if mask_up.any():
-                    sf_u = np.clip(td.sf(self.upper_bound), 1e-8, 1.0)
-                    nll[mask_up] = -np.log(sf_u[mask_up])
-
         evidential_reg = self.evidential_regularizer(Y, mu, lam, alpha)
         kl_reg = self.kl_divergence_nig(mu, lam, alpha, beta)
-        return nll + evid_strength * evidential_reg + kl_strength * kl_reg
-   
-    
-    def d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
-        # Unpack or use stored
-        if params is None:
-            mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
-        else:
-            mu, lam, alpha, beta = np.stack(params, axis=-1).T
         
-        # Stabilize
-        eps = 1e-8
-        lam   = np.clip(lam,   eps, None)
-        alpha = np.clip(alpha, 1.0+eps, None)
-        beta  = np.clip(beta,  eps, None)
-        nu    = 2*alpha
-        Omega = 2*beta*(1+lam)
-
-        # --- corrected helper for the uncensored part ---
-        def comps(r):
-            t = lam*r*r + Omega
-            g_mu    = lam*(nu+1)*(-r)/t
-            g_lam = (
-            -0.5/lam
-            - alpha * (2*beta)/Omega
-            + (alpha+0.5)*(resid**2) / t
-            )
-            g_alpha = -np.log(Omega) + np.log(t) + psi(alpha) - psi(alpha+0.5)
-            g_beta  = -alpha/beta + (alpha+0.5)*(2*(1+lam))/t
-            return g_mu, g_lam, g_alpha, g_beta
-
-        # Uncensored gradients
-        resid = Y - mu
-        d_mu, d_lam, d_alpha, d_beta = comps(resid)
-
-        # Tobit override using numerical derivatives
-        if self.lower_bound is not None or self.upper_bound is not None:
-            for i in range(len(Y)):
-                if self.lower_bound is not None and Y[i] <= self.lower_bound:
-                    grad = grad_logcdf_bound(Y[i], mu[i], lam[i], alpha[i], beta[i], self.lower_bound, which='lower')
-                    d_mu[i], d_lam[i], d_alpha[i], d_beta[i] = grad
-                elif self.upper_bound is not None and Y[i] >= self.upper_bound:
-                    grad = grad_logcdf_bound(Y[i], mu[i], lam[i], alpha[i], beta[i], self.upper_bound, which='upper')
-                    d_mu[i], d_lam[i], d_alpha[i], d_beta[i] = grad
-                # uncensored points keep their original values
-
-        # Regularizer gradients (unchanged)
-        sign = np.sign(Y - mu)
-        gev_mu    = np.mean(-sign*(2*alpha+lam))
-        gev_lam   = np.mean(np.abs(Y-mu))
-        gev_alpha = np.mean(2*np.abs(Y-mu))
-        gev_beta  = 0.0
-        mu0, lam0, alpha0, beta0 = 0,1,2,1
-        gk_mu    = alpha0*lam*(mu-mu0)/beta
-        gk_lam   = -0.5/lam + alpha0*((mu-mu0)**2/(2*beta)+1/lam0)
-        gk_alpha = (alpha-alpha0)*polygamma(1,alpha)+(beta0/beta-1)
-        gk_beta  = alpha0*(1/beta-beta0/beta**2) - alpha/beta**2 - alpha0*lam*(mu-mu0)**2/(2*beta**2)
-
-        d_mu    += evid_strength*gev_mu    + kl_strength*gk_mu
-        d_lam   += evid_strength*gev_lam   + kl_strength*gk_lam
-        d_alpha += evid_strength*gev_alpha + kl_strength*gk_alpha
-        d_beta  += evid_strength*gev_beta  + kl_strength*gk_beta
-
-        # Chain‐rule to raw space
-        raw_mu    = d_mu
-        raw_lam   = d_lam*lam
-        raw_alpha = d_alpha*(alpha-1)
-        raw_beta  = d_beta*beta
-        return np.stack([raw_mu, raw_lam, raw_alpha, raw_beta], axis=1)
+        return nll + evid_strength * evidential_reg + kl_strength * kl_reg
     
 
-    def old_d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
+
+    def d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
     # Unpack or use stored
         if params is None:
             mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
@@ -268,6 +170,23 @@ class NIGLogScore(LogScore):
             raw_beta_grad
         ], axis=1)
 
+    def new_d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
+        # Unpack or use stored
+        if params is None:
+            mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
+        else:
+            mu, lam, alpha, beta = np.stack(params, axis=-1).T
+        
+        # Stabilize
+        return self.d_score_numba(Y.astype(np.float64),
+                                 mu.astype(np.float64),
+                                 lam.astype(np.float64),
+                                 alpha.astype(np.float64),
+                                 beta.astype(np.float64),
+                                 evid_strength,
+                                 kl_strength)
+    
+    
     
     def metric(self, Y=None, params=None,
                evid_strength: float = 0.2,
@@ -427,3 +346,5 @@ class NormalInverseGamma(RegressionDistn):
         log_prob = coeff + norm - 0.5 * (nu + 1) * np.log1p(sq_term)
 
         return log_prob
+
+

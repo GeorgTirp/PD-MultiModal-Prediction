@@ -1,4 +1,7 @@
+import warnings
+warnings.filterwarnings("ignore")
 import os
+os.environ["PYTHONWARNINGS"] = "ignore"
 from RegressionsModels import NGBoostRegressionModel
 import pandas as pd
 from evidential_boost import NormalInverseGamma, NIGLogScore
@@ -49,10 +52,10 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     
 
     param_grid_ngb = {
-    'n_estimators': [100, 200, 300, 400, 450, 500, 550, 600, 650, 700],
-    'learning_rate': [0.05, 0.1, 0.01],
-    'Base__max_depth': [3, 4, 5, 6]
-    }  
+    'n_estimators': [300, 400, 500, 600],
+    'learning_rate': [0.05, 0.1],
+    'Base__max_depth': [3, 4]
+    }   
     
    
     NGB_Hparams = {
@@ -76,21 +79,21 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         identifier,
         -1,
         param_grid_ngb)
-    #metrics = model.evaluate(
-    #    folds=folds, 
-    #    tune=False, 
-    #    nested=True, 
-    #    tune_folds=-1, 
-    #    get_shap=True,
-    #    uncertainty=False)
-    #
-    ## Set up logging
-    #logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    #
-    ## Log the metrics
-    #logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
-    #logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
-    #model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
+    metrics = model.evaluate(
+        folds=folds, 
+        tune=True, 
+        nested=True, 
+        tune_folds=20, 
+        get_shap=True,
+        uncertainty=False)
+    
+    # Set up logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    
+    # Log the metrics
+    logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
+    logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
+    model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
     _,_, removals= model.feature_ablation()
     model.calibration_analysis()
     
@@ -117,7 +120,7 @@ if __name__ == "__main__":
     #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
     folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
-    main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "results/level1/NGBoost", 20)
+    #main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "results/level1/NGBoost", 20)
     main(folder_path, "data/BDI/level1/bdi_df.csv", "ratio", "BDI", "results/level1/NGBoost", 20)
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", 20)
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", 20)

@@ -1,6 +1,6 @@
 import pandas as pd
 from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split, KFold, GridSearchCV, LeaveOneOut
+from sklearn.model_selection import train_test_split, KFold, GridSearchCV, LeaveOneOut, ShuffleSplit
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.ensemble import RandomForestRegressor
 from scipy.stats import pearsonr
@@ -321,7 +321,7 @@ class BaseRegressionModel:
         removals = []
         number_of_features = len(self.feature_selection['features'])
         for i in range(number_of_features):
-            metrics = self.nested_eval(folds=20, get_shap=True, tune=True, tune_folds=-1, ablation_idx=i)
+            metrics = self.nested_eval(folds=20, get_shap=True, tune=True, tune_folds=20, ablation_idx=i)
             r2s.append(metrics['r2'])
             p_values.append(metrics['p_value'])
             importance = metrics['feature_importance']
@@ -837,10 +837,11 @@ class NGBoostRegressionModel(BaseRegressionModel):
         if folds == -1:
             folds = len(X)
         # Perform grid search on the current NGBoost model
+        ss = ShuffleSplit(n_splits=5, test_size= 0.05, random_state=7)
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
-            cv=folds,
+            cv=ss,
             scoring='neg_mean_squared_error',
             n_jobs=-1
         )
