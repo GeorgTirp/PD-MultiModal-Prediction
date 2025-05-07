@@ -82,10 +82,10 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         param_grid_ngb)
     metrics = model.evaluate(
         folds=folds, 
-        tune=False, 
+        tune=True, 
         nested=True, 
         tune_folds=20, 
-        get_shap=False,
+        get_shap=True,
         uncertainty=False)
     
     # Set up logging
@@ -124,7 +124,7 @@ if __name__ == "__main__":
     #main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "results/level1/NGBoost", 20)
     #main(folder_path, "data/BDI/level1/bdi_df.csv", "ratio", "BDI", "results/level1/NGBoost", 20)
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", 20)
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", 2)
+    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", 20)
     #main(folder_path, "data/BDI/level3/bdi_df.csv", "diff", "BDI", "results/level3/NGBoost", 20)
     #main(folder_path, "data/BDI/level3/bdi_df.csv", "ratio", "BDI", "results/level3/NGBoost", 20)
     

@@ -5,7 +5,7 @@ from scipy.special import gammaln, digamma, polygamma, psi
 import scipy.stats as st
 from scipy.optimize import approx_fprime
 from numba import njit, prange
-from ngb_jit import d_score_numba, full_score_numba#, digamma, trigamma, psi, gammaln
+from ngb_jit import d_score_numba, full_score_numba, compute_diag_fim#, digamma, trigamma, psi, gammaln
 import line_profiler
 
 def softplus(x):
@@ -113,86 +113,6 @@ class NIGLogScore(LogScore):
     
 
 
-    def old_d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
-    # Unpack or use stored
-        if params is None:
-            mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
-        else:
-            mu, lam, alpha, beta = np.stack(params, axis=-1).T
-
-        # Stabilize
-        eps = 1e-8
-        lam   = np.clip(lam, eps, None)
-        alpha = np.clip(alpha, 1.0+eps, None)
-        beta  = np.clip(beta, eps, None)
-
-        # Shorthands
-        nu      = 2 * alpha
-        Omega   = 2 * beta * (1 + lam)
-        resid   = Y - mu
-        term    = lam * resid**2 + Omega
-
-        # 1) ∂ℓ/∂μ
-        d_mu = lam*(nu+1)*(-resid) / term
-
-        # 2) ∂ℓ/∂λ (corrected)
-        d_lam = (
-            -0.5/lam
-            - alpha * (2*beta)/Omega
-            + (alpha+0.5)*((resid**2)) / term
-        )
-
-        # 3) ∂ℓ/∂α
-        d_alpha = (
-            -np.log(Omega)
-            + np.log(term)
-            + psi(alpha)
-            - psi(alpha + 0.5)
-        )
-        # 4) ∂ℓ/∂β
-        d_beta = (
-            -alpha/beta
-            + (alpha+0.5)*(2*(1+lam)) / term
-        )
-
-        # --- evidential reg grads ---
-        sign = np.sign(Y - mu)                       # vector
-        grad_ev_mu    = np.mean(-sign * (2*alpha + lam))
-        grad_ev_lam   = np.mean( np.abs(Y - mu) )
-        grad_ev_alpha = np.mean( 2 * np.abs(Y - mu) )
-        grad_ev_beta  = 0.0
-
-        # --- KL regularization grads ---
-        mu0, lam0, alpha0, beta0 = (0, 1, 2, 1)
-        # d_mu_KL
-        gk_mu = alpha0 * lam * (mu - mu0) / beta
-        # d_lam_KL
-        gk_lam = -0.5 / lam + alpha0 * ((mu - mu0) ** 2 / (2 * beta) + 1 / lam0)
-        # d_alpha_KL
-        gk_alpha = (alpha - alpha0) * trigamma(alpha) + (beta0 / beta - 1)
-        # d_beta_KL
-        gk_beta = alpha0 * (1 / beta - beta0 / beta**2) - alpha / beta**2 - alpha0 * lam * (mu - mu0) ** 2 / (2 * beta**2)
-
-
-        # combine
-        d_mu   += evid_strength * grad_ev_mu     + kl_strength * gk_mu
-        d_lam  += evid_strength * grad_ev_lam    + kl_strength * gk_lam
-        d_alpha+= evid_strength * grad_ev_alpha  + kl_strength * gk_alpha
-        d_beta += evid_strength * grad_ev_beta   + kl_strength * gk_beta
-
-        # chain‐rule back to raw‐space
-        raw_mu_grad   = d_mu
-        raw_lam_grad   = d_lam   * lam
-        raw_alpha_grad = d_alpha * (alpha-1)
-        raw_beta_grad = d_beta  * beta
-        
-        return np.stack([
-            raw_mu_grad,
-            raw_lam_grad,
-            raw_alpha_grad,
-            raw_beta_grad
-        ], axis=1)
-
     @line_profiler.profile
     def d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
         # Unpack or use stored
@@ -202,20 +122,21 @@ class NIGLogScore(LogScore):
             mu, lam, alpha, beta = np.stack(params, axis=-1).T
         
         # Stabilize
-        return d_score_numba(Y.astype(np.float64),
+        grads = d_score_numba(Y.astype(np.float64),
                                  mu.astype(np.float64),
                                  lam.astype(np.float64),
                                  alpha.astype(np.float64),
                                  beta.astype(np.float64),
                                  evid_strength,
                                  kl_strength)
-    
+        self.current_grads = grads
+        return grads
     
     @line_profiler.profile
     def metric(self, Y=None, params=None,
-               evid_strength: float = 0.2,
-               kl_strength:    float = 0.01):
-        """ Empirical FIM from full‐loss gradients """
+           evid_strength: float = 0.2,
+           kl_strength: float = 0.01,
+           diagonal: bool = False):
         if params is None:
             mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
             params = [mu, lam, alpha, beta]
@@ -223,9 +144,30 @@ class NIGLogScore(LogScore):
             params = np.stack(params, axis=-1).T
         if Y is None:
             Y = self._last_Y
-        grads = self.d_score(Y, params=params)
-        FIM = np.array([np.outer(g, g) + 1e-5*np.eye(g.shape[0]) for g in grads])
-        return FIM
+
+        grads = self.current_grads
+
+        if diagonal:
+            return compute_diag_fim(grads)
+        else:
+            # Full FIM
+            return np.array([np.outer(g, g) + 1e-5*np.eye(g.shape[0]) for g in grads])
+
+
+    #def metric(self, Y=None, params=None,
+    #           evid_strength: float = 0.2,
+    #           kl_strength:    float = 0.01):
+    #    """ Empirical FIM from full‐loss gradients """
+    #    if params is None:
+    #        mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
+    #        params = [mu, lam, alpha, beta]
+    #    else:
+    #        params = np.stack(params, axis=-1).T
+    #    if Y is None:
+    #        Y = self._last_Y
+    #    grads = self.d_score(Y, params=params)
+    #    FIM = np.array([np.outer(g, g) + 1e-5*np.eye(g.shape[0]) for g in grads])
+    #    return FIM
 
 
 

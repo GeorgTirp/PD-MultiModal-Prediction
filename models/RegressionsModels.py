@@ -837,7 +837,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
         if folds == -1:
             folds = len(X)
         # Perform grid search on the current NGBoost model
-        ss = ShuffleSplit(n_splits=5, test_size= 0.05, random_state=7)
+        ss = ShuffleSplit(n_splits=10, test_size= 0.05, random_state=7)
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
