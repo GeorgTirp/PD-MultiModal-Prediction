@@ -9,6 +9,10 @@ from matplotlib.collections import PolyCollection
 import seaborn as sns
 from sklearn.model_selection import train_test_split, KFold, GridSearchCV, LeaveOneOut
 import pickle
+from scipy.stats import pearsonr
+import faster_evidential_boost
+from tqdm import tqdm
+import ast
 
 def plot_stim_positions(positions: pd.DataFrame, safe_path: str = "") -> None:
     """ Plot the stimulation positions in the brain"""
@@ -312,23 +316,8 @@ def visualize_demographics(questionnaire, root_dir):
     #print("Stimulation positions plotted and safed into {}".format(save_path))
 
 
-def regression_plot(data_path: str, target: str, ablation_step, ablation_history: str, model_path: str,  ) -> None:
+def regression_plot(metrics_path: str, save_path: str) -> None:
     """ Plot predicted vs. actual values """
-    # Load the data
-    data = pd.read_csv(data_path)
-    # Extract the target variable and remove it from the DataFrame
-    y = data[target]
-    data = data.drop(columns=["BDI_diff", "Pat_ID", "BDI_ratio"])
-    # Read ablation history CSV
-    ablation_df = pd.read_csv(ablation_history)
-    # Get the first ablation_step feature names from ablation_df
-    feature_names = ablation_df.iloc[:ablation_step, 0].tolist()
-    # Drop these features from the data DataFrame
-    X = data.drop(columns=feature_names, errors='ignore')
-
-    #Load the model from oickle file
-    with open(model_path, 'rb') as f:
-        model = pickle.load(f)
     # Use a context suitable for publication-quality figures
     sns.set_context("paper")
     # Optionally choose a style you like
@@ -336,10 +325,37 @@ def regression_plot(data_path: str, target: str, ablation_step, ablation_history
     # Create a wider (landscape) figure
     plt.figure(figsize=(10, 6))
     # Create a DataFrame for Seaborn
+    colors = {
+        "deterioration": "04E762",
+        "improvement": "FF5714",
+        "line": "grey",
+        "scatter": "grey",
+        "ideal_line": "black",
+    }
+    # Read your metrics CSV:
+    metrics_df = pd.read_csv(metrics_path)
+
+    # Suppose the first row has your arrays:
+    y_test_str = metrics_df.loc[0, "y_test"]
+    y_pred_str = metrics_df.loc[0, "y_pred"]
+
+    # 1) Parse the string into a Python list of floats
+    #    ast.literal_eval is safest if they’re valid Python lists: "[1.0, 2.0, 3.0]"
+    #    If your arrays omit commas (e.g. "[1.0 2.0 3.0]"), you can do a manual split instead:
+    try:
+        y_test = ast.literal_eval(y_test_str)
+        y_pred = ast.literal_eval(y_pred_str)
+    except (ValueError, SyntaxError):
+        # fallback: strip brackets and split on whitespace
+        y_test = list(map(float, y_test_str.strip("[]").split()))
+        y_pred = list(map(float, y_pred_str.strip("[]").split()))
+    N = len(y_test)
+    # 2) Build your plotting DataFrame
     plot_df = pd.DataFrame({
-        'Actual': self.metrics['y_test'],
-        'Predicted': self.metrics['y_pred']
+        "Actual": y_test,
+        "Predicted": y_pred
     })
+    r, p = metrics_df["r2"].iloc[0], metrics_df["p_value"].iloc[0]
     # Scatter plot only (no regression line)
     sns.scatterplot(
         x='Actual', 
@@ -347,18 +363,19 @@ def regression_plot(data_path: str, target: str, ablation_step, ablation_history
         data=plot_df, 
         alpha=0.7
     )
+   
     
     # Plot a reference line with slope = 1
     min_val = min(plot_df['Actual'].min(), plot_df['Predicted'].min())
     max_val = max(plot_df['Actual'].max(), plot_df['Predicted'].max())
-    plt.plot([min_val, max_val], [min_val, max_val], color='grey', alpha=0.4, linestyle='--')
+    plt.plot([min_val, max_val], [min_val, max_val], color=colors["ideal_line"], alpha=0.5, linestyle='--')
     # Fit a regression line
     sns.regplot(
         x='Actual', 
         y='Predicted', 
         data=plot_df, 
         scatter=False, 
-        color='red', 
+        color=colors["line"], 
         line_kws={'label': 'Regression Line'}
     )
     # Plot confidence intervals
@@ -368,7 +385,7 @@ def regression_plot(data_path: str, target: str, ablation_step, ablation_history
         y='Predicted', 
         data=plot_df, 
         scatter=False, 
-        color='red', 
+        color=colors["line"], 
         ci=ci, 
         line_kws={'label': f'{ci}% Confidence Interval'}
     )
@@ -376,23 +393,42 @@ def regression_plot(data_path: str, target: str, ablation_step, ablation_history
     # using axis coordinates (0–1 range) so it doesn't get cut off
     plt.text(
         0.05, 0.95, 
-        f'R: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.6f}', 
+        f'R: {r:.2f}\nP-value: {p:.6f}', 
         fontsize=12, 
         transform=plt.gca().transAxes,  # use axis coordinates
         verticalalignment='top',
         bbox=dict(facecolor='white', alpha=0.5)
     )
+    # Color the background: left of y=0 as improvement, right as deterioration
+    ax = plt.gca()
+    ax = plt.gca()
+    # get current y‐limits
+    min_y, max_y = ax.get_ylim()
+
+    # shade below y=0 (improvement)
+    ax.axhspan(min_y, 0,
+               color="#" + colors["improvement"],
+               alpha=0.08, zorder=0)
+    # shade above y=0 (deterioration)
+    ax.axhspan(0, max_y,
+               color="#" + colors["deterioration"],
+               alpha=0.08, zorder=0)
+
+    # re‐apply limits so axes don’t auto‐expand
+    ax.set_ylim(min_y, max_y)
     # Label axes and set title
-    plt.xlabel(f'Actual {modality} {self.target_name}', fontsize=12)
-    plt.ylabel(f'Predicted {modality} {self.target_name}', fontsize=12)
-    plt.title(title + "  N=" + str(len(self.y)), fontsize=14)
+    plt.xlabel(f'Actual BDI ratio', fontsize=12)
+    plt.ylabel(f'Predicted BDI ratio', fontsize=12)
+    plt.title("Predictions vs. Actual BDI Ratio" + "  N=" + str(N), fontsize=14)
     # Show grid and ensure everything fits nicely
     plt.grid(True)
     plt.tight_layout()
     # Save and close
-    plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_actual_vs_predicted.png')
+    plt.savefig(f'{save_path}BDI_ratio_actual_vs_predicted.png')
     plt.close()
     
 if __name__ == "__main__":
-    root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction"
-    visualize_demographics("BDI", root_dir)
+    #root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction"
+    root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+    #visualize_demographics("BDI", root_dir)
+    regression_plot(metrics_path = root_dir + "/results/level3/NGBoost/BDI_metrics.csv", save_path = root_dir + "/figures/")
