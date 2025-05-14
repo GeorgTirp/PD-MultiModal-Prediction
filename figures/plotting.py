@@ -13,6 +13,7 @@ from scipy.stats import pearsonr
 import faster_evidential_boost
 from tqdm import tqdm
 import ast
+from scipy.stats import linregress
 
 def plot_stim_positions(positions: pd.DataFrame, safe_path: str = "") -> None:
     """ Plot the stimulation positions in the brain"""
@@ -316,119 +317,162 @@ def visualize_demographics(questionnaire, root_dir):
     #print("Stimulation positions plotted and safed into {}".format(save_path))
 
 
-def regression_plot(metrics_path: str, save_path: str) -> None:
+def regression_figures(
+        metrics_path_best: str, 
+        metrics_path_full: str , 
+        bdi_data_path: str,
+        save_path: str) -> None:
     """ Plot predicted vs. actual values """
-    # Use a context suitable for publication-quality figures
-    sns.set_context("paper")
-    # Optionally choose a style you like
-    sns.set_style("whitegrid")
-    # Create a wider (landscape) figure
-    plt.figure(figsize=(10, 6))
-    # Create a DataFrame for Seaborn
-    colors = {
-        "deterioration": "04E762",
-        "improvement": "FF5714",
-        "line": "grey",
-        "scatter": "grey",
-        "ideal_line": "black",
-    }
-    # Read your metrics CSV:
-    metrics_df = pd.read_csv(metrics_path)
-
-    # Suppose the first row has your arrays:
-    y_test_str = metrics_df.loc[0, "y_test"]
-    y_pred_str = metrics_df.loc[0, "y_pred"]
-
-    # 1) Parse the string into a Python list of floats
-    #    ast.literal_eval is safest if they’re valid Python lists: "[1.0, 2.0, 3.0]"
-    #    If your arrays omit commas (e.g. "[1.0 2.0 3.0]"), you can do a manual split instead:
-    try:
-        y_test = ast.literal_eval(y_test_str)
-        y_pred = ast.literal_eval(y_pred_str)
-    except (ValueError, SyntaxError):
-        # fallback: strip brackets and split on whitespace
-        y_test = list(map(float, y_test_str.strip("[]").split()))
-        y_pred = list(map(float, y_pred_str.strip("[]").split()))
-    N = len(y_test)
-    # 2) Build your plotting DataFrame
-    plot_df = pd.DataFrame({
-        "Actual": y_test,
-        "Predicted": y_pred
-    })
-    r, p = metrics_df["r2"].iloc[0], metrics_df["p_value"].iloc[0]
-    # Scatter plot only (no regression line)
-    sns.scatterplot(
-        x='Actual', 
-        y='Predicted', 
-        data=plot_df, 
-        alpha=0.7
-    )
-   
     
-    # Plot a reference line with slope = 1
-    min_val = min(plot_df['Actual'].min(), plot_df['Predicted'].min())
-    max_val = max(plot_df['Actual'].max(), plot_df['Predicted'].max())
-    plt.plot([min_val, max_val], [min_val, max_val], color=colors["ideal_line"], alpha=0.5, linestyle='--')
-    # Fit a regression line
-    sns.regplot(
-        x='Actual', 
-        y='Predicted', 
-        data=plot_df, 
-        scatter=False, 
-        color=colors["line"], 
-        line_kws={'label': 'Regression Line'}
-    )
-    # Plot confidence intervals
-    ci = 95  # Confidence interval percentage
-    sns.regplot(
-        x='Actual', 
-        y='Predicted', 
-        data=plot_df, 
-        scatter=False, 
-        color=colors["line"], 
-        ci=ci, 
-        line_kws={'label': f'{ci}% Confidence Interval'}
-    )
-    # Add text (R and p-value) in the top-left corner inside the plot
-    # using axis coordinates (0–1 range) so it doesn't get cut off
-    plt.text(
-        0.05, 0.95, 
-        f'R: {r:.2f}\nP-value: {p:.6f}', 
-        fontsize=12, 
-        transform=plt.gca().transAxes,  # use axis coordinates
-        verticalalignment='top',
-        bbox=dict(facecolor='white', alpha=0.5)
-    )
-    # Color the background: left of y=0 as improvement, right as deterioration
-    ax = plt.gca()
-    ax = plt.gca()
-    # get current y‐limits
-    min_y, max_y = ax.get_ylim()
+    def plot_regression(plot_df, r, p, save_path, title, xlabel="Actual BDI Ratio", ylabel="Predicted BDI Ratio"):
+        # Set the context for the plot
+        
+        sns.set_context("paper")
+        # Optionally choose a style you like
+        sns.set_style("whitegrid")
+        # Create a wider (landscape) figure
+        plt.figure(figsize=(10, 6))
+        # Create a DataFrame for Seaborn
+        colors = {
+            "deterioration": "04E762",
+            "improvement": "FF5714",
+            "line": "grey",
+            "scatter": "grey",
+            "ideal_line": "black",
+        }
+        # Read your metrics CSV:
+        sns.scatterplot(
+            x='Actual', 
+            y='Predicted', 
+            data=plot_df, 
+            alpha=0.7
+        )
+    
 
-    # shade below y=0 (improvement)
-    ax.axhspan(min_y, 0,
-               color="#" + colors["improvement"],
-               alpha=0.08, zorder=0)
-    # shade above y=0 (deterioration)
-    ax.axhspan(0, max_y,
-               color="#" + colors["deterioration"],
-               alpha=0.08, zorder=0)
+        # Plot a reference line with slope = 1
+        min_val = min(plot_df['Actual'].min(), plot_df['Predicted'].min())
+        max_val = max(plot_df['Actual'].max(), plot_df['Predicted'].max())
+        plt.plot([min_val, max_val], [min_val, max_val], color=colors["ideal_line"], alpha=0.5, linestyle='--')
+        # Fit a regression line
+        sns.regplot(
+            x='Actual', 
+            y='Predicted', 
+            data=plot_df, 
+            scatter=False, 
+            color=colors["line"], 
+            line_kws={'label': 'Regression Line'}
+        )
+        # Plot confidence intervals
+        ci = 95  # Confidence interval percentage
+        sns.regplot(
+            x='Actual', 
+            y='Predicted', 
+            data=plot_df, 
+            scatter=False, 
+            color=colors["line"], 
+            ci=ci, 
+            line_kws={'label': f'{ci}% Confidence Interval'}
+        )
+        # Add text (R and p-value) in the top-left corner inside the plot
+        # using axis coordinates (0–1 range) so it doesn't get cut off
+        plt.text(
+            0.05, 0.95, 
+            f'R: {r:.2f}\nP-value: {p:.6f}', 
+            fontsize=12, 
+            transform=plt.gca().transAxes,  # use axis coordinates
+            verticalalignment='top',
+            bbox=dict(facecolor='white', alpha=0.5)
+        )
+        # Color the background: left of y=0 as improvement, right as deterioration
+        ax = plt.gca()
+        ax = plt.gca()
+        # get current y‐limits
+        min_y, max_y = ax.get_ylim()
 
-    # re‐apply limits so axes don’t auto‐expand
-    ax.set_ylim(min_y, max_y)
-    # Label axes and set title
-    plt.xlabel(f'Actual BDI ratio', fontsize=12)
-    plt.ylabel(f'Predicted BDI ratio', fontsize=12)
-    plt.title("Predictions vs. Actual BDI Ratio" + "  N=" + str(N), fontsize=14)
-    # Show grid and ensure everything fits nicely
-    plt.grid(True)
-    plt.tight_layout()
-    # Save and close
-    plt.savefig(f'{save_path}BDI_ratio_actual_vs_predicted.png')
-    plt.close()
+        # shade below y=0 (improvement)
+        ax.axhspan(min_y, 0,
+                   color="#" + colors["improvement"],
+                   alpha=0.08, zorder=0)
+        # shade above y=0 (deterioration)
+        ax.axhspan(0, max_y,
+                   color="#" + colors["deterioration"],
+                   alpha=0.08, zorder=0)
+
+        # re‐apply limits so axes don’t auto‐expand
+        ax.set_ylim(0, 1)
+        ax.set_xlim(0, 1)
+        # Label axes and set title
+        plt.xlabel(xlabel, fontsize=12)
+        plt.ylabel(ylabel, fontsize=12)
+        plt.title(title + "  N=" + str(N), fontsize=14)
+        # Show grid and ensure everything fits nicely
+        plt.grid(True)
+        plt.tight_layout()
+        # Save and close
+        plt.savefig(f'{save_path}_{title}.png')
+        plt.savefig(f'{save_path}_{title}.svd')
+        plt.close()
+    
+    
+    def plot_model(metrics_path: str, title: str):
+        # Read the metrics CSV
+        metrics_df = pd.read_csv(metrics_path)
+        # Read the BDI data CSV
+        bdi_df = pd.read_csv(bdi_data_path)
+        # Extract the best model's metrics
+        best_model = metrics_df.iloc[0]
+        # Extract the y_test and y_pred arrays from the DataFrame
+        y_test_str = best_model["y_test"]
+        y_pred_str = best_model["y_pred"]
+        # Parse the string into a Python list of floats
+        try:
+            y_test = ast.literal_eval(y_test_str)
+            y_pred = ast.literal_eval(y_pred_str)
+        except (ValueError, SyntaxError):
+            # fallback: strip brackets and split on whitespace
+            y_test = list(map(float, y_test_str.strip("[]").split()))
+            y_pred = list(map(float, y_pred_str.strip("[]").split()))
+        N = len(y_test)
+        # Build your plotting DataFrame
+        plot_df = pd.DataFrame({
+            "Actual": y_test,
+            "Predicted": y_pred
+        })
+        r, p = best_model["r2"], best_model["p_value"]
+        plot_regression(plot_df, r, p, save_path, title)
+    
+    def plot_linear_regression(bdi_data_path: str, title: str, xlabel: str = "Pre BDI Score", ylabel: str = "BDI Ratio"):
+        # Read the BDI data CSV
+        bdi_df = pd.read_csv(bdi_data_path)
+        # Extract the y_test and y_pred arrays from the DataFrame
+        plot_df = pd.DataFrame({
+            "Pre": bdi_df["BDI_sum_pre"],
+            "Ratio": bdi_df["BDI_ratio"]
+        })
+        # Fit a linear regression model
+        _, _, r, p, std_err = linregress(plot_df["Pre"], plot_df["Ratio"])
+
+        plot_regression(plot_df, r, p, save_path, title, xlabel="Pre BDI Score", ylabel="BDI Ratio")
+
+        # Add legend with R and p-value
+        plt.legend()
+        # Parse the string into a Python list of floats
+        
+    plot_model(metrics_path_best, "Predicted vs. Actual Best Model")
+    plot_model(metrics_path_full, "Predicted vs. Actual Full Model")
+    plot_linear_regression(bdi_data_path, "Pre vs. Ratio")
+
+
     
 if __name__ == "__main__":
     #root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction"
     root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
     #visualize_demographics("BDI", root_dir)
-    regression_plot(metrics_path = root_dir + "/results/level3/NGBoost/BDI_metrics.csv", save_path = root_dir + "/figures/")
+    metrics_path1 = root_dir + "/results/level3/NGBoost/BDI_metrics.csv"
+    metrics_path2 = root_dir + "/results/level3/NGBoost/BDI_metrics.csv"
+    bdi_data_path = root_dir + "/data/BDI/level3/bdi_df.csv"
+    regression_figures(
+        metrics_path1, 
+        metrics_path2,
+        bdi_data_path,
+        save_path = root_dir + "/figures/")
