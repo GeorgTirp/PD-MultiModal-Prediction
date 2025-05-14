@@ -95,7 +95,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
     _,_, removals= model.feature_ablation()
-    model.calibration_analysis()
+    #model.calibration_analysis()
     
     
     #summands = [0, 0, 1, 0]

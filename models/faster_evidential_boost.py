@@ -133,10 +133,7 @@ class NIGLogScore(LogScore):
         return grads
     
     @line_profiler.profile
-    def metric(self, Y=None, params=None,
-           evid_strength: float = 0.2,
-           kl_strength: float = 0.01,
-           diagonal: bool = False):
+    def metric(self, Y=None, params=None, diagonal: bool = False):
         if params is None:
             mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
             params = [mu, lam, alpha, beta]
@@ -296,6 +293,12 @@ class NormalInverseGamma(RegressionDistn):
         predictive = aleatoric + epistemic
         return predictive
         #return aleatoric
+    
+    def predict_variance(self, X):
+        # predict_dist returns a list/array of NormalInverseGamma instances
+        dists = self.predict_dist(X)
+        # call .var() on each to get aleatoric+epistemic
+        return np.array([dist.var() for dist in dists])
 
     def logpdf(self, Y):
         mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta

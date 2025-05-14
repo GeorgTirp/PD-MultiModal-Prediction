@@ -340,4 +340,4 @@ def visualize_demographics(questionnaire, root_dir):
 if __name__ == "__main__":
     root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction"
     visualize_demographics("BDI", root_dir)
-    visualize_demographics("MoCA", root_dir)
+    #visualize_demographics("MoCA", root_dir)

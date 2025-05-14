@@ -149,7 +149,6 @@ def d_score_numba(Y, mu, lam, alpha, beta,
 #    for i in range(n):
 #        out[i] += evid_s * mean_evid + kl_s * mean_kl
 #
-#
 
 @njit(parallel=True, fastmath=True)
 def full_score_numba(Y, mu, lam, alpha, evid_s, kl_s):

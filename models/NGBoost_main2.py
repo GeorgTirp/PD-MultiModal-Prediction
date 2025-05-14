@@ -10,6 +10,7 @@ from sklearn.tree import DecisionTreeRegressor
 from matplotlib import pyplot as plt
 import numpy as np
 import logging
+from xgboost import XGBRegressor
 
 
 
@@ -58,6 +59,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     'Base__max_depth': [3, 4]
     }      
     
+    
     # BEST ONES: 600, 0.1 and for regs 0.1 and 0.001
     NGB_Hparams = {
         'Dist': NormalInverseGamma,
@@ -96,7 +98,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
     _,_, removals= model.feature_ablation()
-    model.calibration_analysis()
+    #model.calibration_analysis()
     
     
     #summands = [0, 0, 1, 0]
@@ -124,7 +126,7 @@ if __name__ == "__main__":
     #main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "results/level1/NGBoost", 20)
     #main(folder_path, "data/BDI/level1/bdi_df.csv", "ratio", "BDI", "results/level1/NGBoost", 20)
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", 20)
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", 20)
+    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2_new_Ledd/NGBoost", -1)
     #main(folder_path, "data/BDI/level3/bdi_df.csv", "diff", "BDI", "results/level3/NGBoost", 20)
     #main(folder_path, "data/BDI/level3/bdi_df.csv", "ratio", "BDI", "results/level3/NGBoost", 20)
     

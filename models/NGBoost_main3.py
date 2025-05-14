@@ -4,7 +4,7 @@ import os
 os.environ["PYTHONWARNINGS"] = "ignore"
 from RegressionsModels import NGBoostRegressionModel
 import pandas as pd
-from evidential_boost import NormalInverseGamma, NIGLogScore
+from faster_evidential_boost import NormalInverseGamma, NIGLogScore
 from ngboost.distns.normal import Normal, NormalCRPScore, NormalLogScore
 from sklearn.tree import DecisionTreeRegressor
 from matplotlib import pyplot as plt
@@ -95,7 +95,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
     _,_, removals= model.feature_ablation()
-    model.calibration_analysis()
+    #model.calibration_analysis()
     
     
     #summands = [0, 0, 1, 0]
@@ -125,5 +125,5 @@ if __name__ == "__main__":
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", 20)
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/NGBoost", 20)
     #main(folder_path, "data/BDI/level3/bdi_df.csv", "diff", "BDI", "results/level3/NGBoost", 20)
-    main(folder_path, "data/BDI/level3/bdi_df.csv", "ratio", "BDI", "results/level3/NGBoost", 20)
+    main(folder_path, "data/BDI/level3/bdi_df.csv", "ratio", "BDI", "results/level3_LOO/NGBoost", -1)
     
