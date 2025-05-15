@@ -324,12 +324,18 @@ def regression_figures(
         save_path: str) -> None:
     """ Plot predicted vs. actual values """
     
-    def plot_regression(plot_df, r, p, save_path, title, xlabel="Actual BDI Ratio", ylabel="Predicted BDI Ratio"):
+    def plot_regression(
+            plot_df, 
+            r, 
+            p, 
+            save_path, 
+            title, 
+            xlabel="Actual BDI Ratio", 
+            ylabel="Predicted BDI Ratio",
+            type="model"):
         # Set the context for the plot
         
-        sns.set_context("paper")
-        # Optionally choose a style you like
-        sns.set_style("whitegrid")
+        
         # Create a wider (landscape) figure
         plt.figure(figsize=(10, 6))
         # Create a DataFrame for Seaborn
@@ -340,23 +346,30 @@ def regression_figures(
             "scatter": "grey",
             "ideal_line": "black",
         }
+        # Fit a regression line
+        if type == "model":
+            x,y = 'Actual', 'Predicted'
+        elif type == "linear":
+            x,y = 'Pre', 'Ratio'
+        else:
+            raise ValueError("Invalid type. Choose 'model' or 'linear'.")
         # Read your metrics CSV:
         sns.scatterplot(
-            x='Actual', 
-            y='Predicted', 
+            x=x, 
+            y=y, 
             data=plot_df, 
             alpha=0.7
         )
     
 
         # Plot a reference line with slope = 1
-        min_val = min(plot_df['Actual'].min(), plot_df['Predicted'].min())
-        max_val = max(plot_df['Actual'].max(), plot_df['Predicted'].max())
-        plt.plot([min_val, max_val], [min_val, max_val], color=colors["ideal_line"], alpha=0.5, linestyle='--')
-        # Fit a regression line
+        #min_val = min(plot_df[x].min(), plot_df[y].min())
+        #max_val = max(plot_df[x].max(), plot_df[y].max())
+        #plt.plot([min_val, max_val], [min_val, max_val], color=colors["ideal_line"], alpha=0.5, linestyle='--')
+        
         sns.regplot(
-            x='Actual', 
-            y='Predicted', 
+            x=x, 
+            y=y, 
             data=plot_df, 
             scatter=False, 
             color=colors["line"], 
@@ -365,8 +378,8 @@ def regression_figures(
         # Plot confidence intervals
         ci = 95  # Confidence interval percentage
         sns.regplot(
-            x='Actual', 
-            y='Predicted', 
+            x=x, 
+            y=y, 
             data=plot_df, 
             scatter=False, 
             color=colors["line"], 
@@ -383,6 +396,7 @@ def regression_figures(
             verticalalignment='top',
             bbox=dict(facecolor='white', alpha=0.5)
         )
+        N = len(plot_df)
         # Color the background: left of y=0 as improvement, right as deterioration
         ax = plt.gca()
         ax = plt.gca()
@@ -399,18 +413,28 @@ def regression_figures(
                    alpha=0.08, zorder=0)
 
         # re‐apply limits so axes don’t auto‐expand
-        ax.set_ylim(0, 1)
-        ax.set_xlim(0, 1)
+        
+        pad = 0.05  # 5% padding
+        x_min, x_max = plot_df[x].min(), plot_df[x].max()
+        y_min, y_max = plot_df[y].min(), plot_df[y].max()
+        ax.set_xlim(x_min - pad * (x_max - x_min), x_max + pad * (x_max - x_min))
+        ax.set_ylim(y_min - pad * (y_max - y_min), y_max + pad * (y_max - y_min))
+        if type == "model":
+            ax.set_ylim(-0.8, 0.8)
+            ax.set_xlim(-0.8, 0.8)
         # Label axes and set title
         plt.xlabel(xlabel, fontsize=12)
         plt.ylabel(ylabel, fontsize=12)
         plt.title(title + "  N=" + str(N), fontsize=14)
         # Show grid and ensure everything fits nicely
-        plt.grid(True)
+        plt.grid(False)
+        sns.set_context("paper")
+        # Optionally choose a style you like
+        sns.despine()
         plt.tight_layout()
         # Save and close
         plt.savefig(f'{save_path}_{title}.png')
-        plt.savefig(f'{save_path}_{title}.svd')
+        plt.savefig(f'{save_path}_{title}.svg')
         plt.close()
     
     
@@ -441,7 +465,7 @@ def regression_figures(
         r, p = best_model["r2"], best_model["p_value"]
         plot_regression(plot_df, r, p, save_path, title)
     
-    def plot_linear_regression(bdi_data_path: str, title: str, xlabel: str = "Pre BDI Score", ylabel: str = "BDI Ratio"):
+    def plot_linear_regression(bdi_data_path: str, title: str, xlabel: str = "BDI Pre Score", ylabel: str = "BDI Ratio"):
         # Read the BDI data CSV
         bdi_df = pd.read_csv(bdi_data_path)
         # Extract the y_test and y_pred arrays from the DataFrame
@@ -452,25 +476,22 @@ def regression_figures(
         # Fit a linear regression model
         _, _, r, p, std_err = linregress(plot_df["Pre"], plot_df["Ratio"])
 
-        plot_regression(plot_df, r, p, save_path, title, xlabel="Pre BDI Score", ylabel="BDI Ratio")
+        plot_regression(plot_df, r, p, save_path, title, xlabel=xlabel, ylabel=ylabel, type="linear")
 
-        # Add legend with R and p-value
-        plt.legend()
-        # Parse the string into a Python list of floats
         
-    plot_model(metrics_path_best, "Predicted vs. Actual Best Model")
-    plot_model(metrics_path_full, "Predicted vs. Actual Full Model")
+    #plot_model(metrics_path_best, "Predicted vs. Actual Best Model")
+    #plot_model(metrics_path_full, "Predicted vs. Actual Full Model")
     plot_linear_regression(bdi_data_path, "Pre vs. Ratio")
 
 
     
 if __name__ == "__main__":
-    #root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction"
-    root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+    #root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+    root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
     #visualize_demographics("BDI", root_dir)
     metrics_path1 = root_dir + "/results/level3/NGBoost/BDI_metrics.csv"
     metrics_path2 = root_dir + "/results/level3/NGBoost/BDI_metrics.csv"
-    bdi_data_path = root_dir + "/data/BDI/level3/bdi_df.csv"
+    bdi_data_path = root_dir + "/data/BDI/level2/bdi_df.csv"
     regression_figures(
         metrics_path1, 
         metrics_path2,
