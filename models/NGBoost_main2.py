@@ -54,9 +54,11 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     
 
     param_grid_ngb = {
-    'n_estimators': [300, 400, 500, 600],
-    'learning_rate': [0.05, 0.1],
-    'Base__max_depth': [3, 4]
+    'n_estimators': [450],
+    'learning_rate': [0.5],
+    'Base__max_depth': [3,],
+    'Score__evid_strength': [0.05, 0.1, 0.2],
+    'Score__kl_strength': [0.01, 0.05, 0.1],
     }      
     
     
@@ -67,7 +69,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         'n_estimators': 600,
         'learning_rate': 0.1,
         'natural_gradient': True,
-        #'minibatch_frac': 0.1,
+        #'Score_kwargs': {'evid_strength': 0.1, 'kl_strength': 0.01},
         'verbose': False,
         'Base': DecisionTreeRegressor(max_depth=3)  # specify the depth here
     }
@@ -126,7 +128,7 @@ if __name__ == "__main__":
     #main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "results/level1/NGBoost", 20)
     #main(folder_path, "data/BDI/level1/bdi_df.csv", "ratio", "BDI", "results/level1/NGBoost", 20)
     #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/NGBoost", 20)
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2_new_Ledd/NGBoost", -1)
+    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2_test/NGBoost", 20)
     #main(folder_path, "data/BDI/level3/bdi_df.csv", "diff", "BDI", "results/level3/NGBoost", 20)
     #main(folder_path, "data/BDI/level3/bdi_df.csv", "ratio", "BDI", "results/level3/NGBoost", 20)
     

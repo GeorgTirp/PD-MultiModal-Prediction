@@ -20,14 +20,16 @@ class NIGLogScore(LogScore):
     
     lower_bound = None
     upper_bound = None
+    evid_strength = 0.1
+    kl_strength = 0.01
 
-    #def __init__(self, lower_bound=None, upper_bound=None):
-    #    
-    #    if lower_bound is not None:
-    #        self.lower_bound = np.asarray(lower_bound, float)
-    #    if upper_bound is not None:
-    #        self.upper_bound = np.asarray(upper_bound, float)
-
+    @classmethod
+    def set_params(cls, evid_strength=None, kl_strength=None):
+        if evid_strength is not None:
+            cls.evid_strength = evid_strength
+        if kl_strength is not None:
+            cls.kl_strength = kl_strength
+    
     @classmethod
     def set_bounds(cls, lower, upper):
         cls.lower_bound = lower
@@ -62,7 +64,7 @@ class NIGLogScore(LogScore):
         return np.mean(penalty)
     
     @line_profiler.profile
-    def score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
+    def score(self, Y, params=None):
         # 1) unpack parameters into arrays
         self._last_Y = Y
         if params is None:
@@ -77,6 +79,8 @@ class NIGLogScore(LogScore):
         alpha = np.clip(alpha, 1.0 + eps, None)
         beta  = np.clip(beta,  eps, None)
 
+        evid_strength = self.__class__.evid_strength
+        kl_strength = self.__class__.kl_strength
         # 3) call the Numba ufunc — this returns an (n,) array of per-sample losses
         per_sample_losses = full_score_numba(
             Y.astype(np.float64),
@@ -91,36 +95,17 @@ class NIGLogScore(LogScore):
         return per_sample_losses
     
 
-    def old_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
-       
-        self._last_Y = Y
-        if params is None:
-            params = [self.mu, self.lam, self.alpha, self.beta]
-
-        mu, lam, alpha, beta = np.stack(params, axis=-1).T
-
-        Omega = 2 * beta * (1 + lam)
-        term1 = 0.5*( np.log(np.pi) - np.log(lam) )
-        term2 = -alpha * np.log( Omega )
-        term3 = (alpha + 0.5) * np.log( lam*(Y-mu)**2 + Omega )
-        term4 = gammaln(alpha) - gammaln(alpha + 0.5)
-        nll = term1 + term2 + term3 + term4
-
-        evidential_reg = self.evidential_regularizer(Y, mu, lam, alpha)
-        kl_reg = self.kl_divergence_nig(mu, lam, alpha, beta)
-        
-        return nll + evid_strength * evidential_reg + kl_strength * kl_reg
-    
-
 
     @line_profiler.profile
-    def d_score(self, Y, params=None, evid_strength=0.1, kl_strength=0.05):
+    def d_score(self, Y, params=None):
         # Unpack or use stored
         if params is None:
             mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
         else:
             mu, lam, alpha, beta = np.stack(params, axis=-1).T
         
+        evid_strength = self.__class__.evid_strength
+        kl_strength = self.__class__.kl_strength
         # Stabilize
         grads = d_score_numba(Y.astype(np.float64),
                                  mu.astype(np.float64),
@@ -315,5 +300,3 @@ class NormalInverseGamma(RegressionDistn):
         log_prob = coeff + norm - 0.5 * (nu + 1) * np.log1p(sq_term)
 
         return log_prob
-
-

@@ -21,8 +21,9 @@ from IPython.utils import io
 import torch
 from ngboost import NGBRegressor
 from ngboost.distns import Normal
+from faster_evidential_boost import NIGLogScore
 from sklearn.tree import DecisionTreeRegressor
-from evidential_boost import NormalInverseGamma
+from faster_evidential_boost import NormalInverseGamma
 from joblib import Parallel, delayed
 import scipy.stats as st
 from properscoring import crps_ensemble
@@ -30,6 +31,7 @@ from scipy.stats import norm
 import pickle
 #from pycens.censored_regression import Tobit as PycensTobit
 from statsmodels.base.model import GenericLikelihoodModel
+
 #matplotlib.use('TkAgg') 
 
 # Configure logging
@@ -301,7 +303,7 @@ class BaseRegressionModel:
                 all_shap_values_array = np.stack(all_shap_values, axis=0)
                 # Average over the folds to get an aggregated array of shape (n_samples, n_features)
                 mean_shap_values = np.mean(all_shap_values_array, axis=0)
-                np.save(f'{self.save_path}/{self.identifier}_{self.target}_mean_shap_values.npy', mean_shap_values)
+                np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values.npy', mean_shap_values)
                 shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
                 plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
@@ -350,7 +352,7 @@ class BaseRegressionModel:
         removals = []
         number_of_features = len(self.feature_selection['features'])
         for i in range(number_of_features):
-            metrics = self.nested_eval(folds=-1, get_shap=True, tune=True, tune_folds=10, ablation_idx=i)
+            metrics = self.nested_eval(folds=-1, get_shap=True, tune=False, tune_folds=10, ablation_idx=i)
             r2s.append(metrics['r2'])
             p_values.append(metrics['p_value'])
             importance = metrics['feature_importance']
@@ -878,27 +880,29 @@ class NGBoostRegressionModel(BaseRegressionModel):
         best_params = grid_search.best_params_
         
         # Separate base learner parameters and other NGBoost hyperparameters
+        score_params = {k.replace("Score__", ""): v for k, v in best_params.items() if k.startswith("Score__")}
+        NIGLogScore.set_params(**score_params)
+
+        # Remove score params from best_params before passing to NGBoost
+        clean_params = {k: v for k, v in best_params.items() if not k.startswith("Score__") and not k.startswith("Base__")}
+
+        # Extract and create base learner if needed
         base_params = {k.replace("Base__", ""): v for k, v in best_params.items() if k.startswith("Base__")}
-        non_base_params = {k: v for k, v in best_params.items() if not k.startswith("Base__")}
-        
-        # Rebuild the base learner using the tuned parameters.
-        # Here we assume the base learner is a DecisionTreeRegressor.
         if base_params:
-            new_base_learner = DecisionTreeRegressor(**base_params)
+            base_learner = DecisionTreeRegressor(**base_params)
         else:
-            # Use a default base learner if no parameters were provided
-            new_base_learner = DecisionTreeRegressor(max_depth=3)
-        
-        # Update the current NGBoost hyperparameters with the tuned non-base parameters
-        new_ngb_hparams = self.ngb_hparams.copy()
-        new_ngb_hparams.update(non_base_params)
-        new_ngb_hparams['Base'] = new_base_learner
-        
-        # Reinitialize the NGBoost model with updated hyperparameters.
-        self.model = NGBRegressor(**new_ngb_hparams)
+            base_learner = DecisionTreeRegressor(max_depth=3)
+
+        # Insert base learner into NGBoost params
+        clean_params['Base'] = base_learner
+
+        # Create NGBoost model with clean params
+        self.model = NGBRegressor(Dist=NormalInverseGamma, Score=NIGLogScore, verbose=False, **clean_params)
+        self.model.fit(X, y)
         # Force an immediate fit on the tuning data to initialize internal parameters.
         self.model.fit(X, y)
         self.model_name += " (Tuned)"
+        print(f"Best parameters found: {best_params}")
         return best_params
 
     def feature_importance_mean(self, top_n: int = None, batch_size: int = 10, save_results: bool = True, iter_idx=None, ablation_idx=None) -> Dict:
