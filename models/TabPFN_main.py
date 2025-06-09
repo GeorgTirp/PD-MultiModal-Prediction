@@ -44,13 +44,9 @@ if __name__ == "__main__":
     folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
-    main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "results/level1/TabPFN", -1)
-    #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "results/level2/TabPFN", -1)
-    main(folder_path, "data/BDI/level1/bdi_df.csv", "ratio", "BDI", "results/level1/TabPFN", -1)
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/TabPFN", -1)
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/TabPFN", -1)
-    #main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "results/level2/TabPFN", -1)
-    #main(folder_path, "data/BDI/level3/bdi_df.csv", "ratio", "BDI", "results/level3/TabPFN", -1)
-    #main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA", "results/level2/TabPFN", -1)
-    #main(folder_path, "data/BDI/post/bdi_df.csv", "sum_post", "BDI", "results/post/TabPFN", -1)
-    #main(folder_path, "data/BDI/level3/bdi_df.csv", "diff", "BDI", "results/level3/TabPFN", -1)
+    main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "results/level1/TabPFN", 20)
+    main(folder_path, "data/BDI/level1/bdi_df.csv", "ratio", "BDI", "results/level1/TabPFN", 20)
+    main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2/TabPFN", 20)
+    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2/TabPFN", 20)
+    #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level3/TabPFN", 20)
+    #main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level3/TabPFN", 20)

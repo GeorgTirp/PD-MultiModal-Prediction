@@ -81,12 +81,12 @@ class TabPFNRegression():
     def evaluate(self, folds=10) -> Tuple:
         """ Evaluate the models using mean squared error, r2 score and cross validation"""
         
-        if folds == -1:
-            kf = LeaveOneOut()
-            logging.info("Starting model evaluation with Leave-One-Out cross-validation.")
-        else:
-            kf = KFold(n_splits=folds, shuffle=True, random_state=42)
-            logging.info("Starting model evaluation with %d folds.", folds)
+        #if folds == -1:
+        #    kf = LeaveOneOut()
+        #    logging.info("Starting model evaluation with Leave-One-Out cross-validation.")
+        #else:
+        kf = KFold(n_splits=folds, shuffle=True, random_state=42)
+        logging.info("Starting model evaluation with %d folds.", folds)
 
         preds = []
         y_vals = []

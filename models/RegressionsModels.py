@@ -1,3 +1,12 @@
+import os
+
+os.environ["OMP_NUM_THREADS"] = "1"            # Limits OpenMP (used by NumPy, Numba, etc.)
+os.environ["OPENBLAS_NUM_THREADS"] = "1"       # OpenBLAS (used by NumPy)
+os.environ["MKL_NUM_THREADS"] = "1"            # MKL (used by scikit-learn on Intel Macs)
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"     # Apple's Accelerate framework
+os.environ["NUMEXPR_NUM_THREADS"] = "1"  
+import torch
+torch.set_num_threads(1)
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split, KFold, GridSearchCV, LeaveOneOut, ShuffleSplit
@@ -6,17 +15,13 @@ from sklearn.ensemble import RandomForestRegressor
 from scipy.stats import pearsonr
 from typing import Tuple, Dict
 import matplotlib.pyplot as plt
-import matplotlib
 import numpy as np
-from scipy import stats
-import os
 import shap
 import logging
 from tqdm import tqdm
 from xgboost import XGBRegressor
 from tabpfn import TabPFNRegressor
 import seaborn as sns
-from contextlib import contextmanager#
 from IPython.utils import io
 import torch
 from ngboost import NGBRegressor
@@ -24,14 +29,22 @@ from ngboost.distns import Normal
 from faster_evidential_boost import NIGLogScore
 from sklearn.tree import DecisionTreeRegressor
 from faster_evidential_boost import NormalInverseGamma
-from joblib import Parallel, delayed
 import scipy.stats as st
 from properscoring import crps_ensemble
 from scipy.stats import norm
 import pickle
 #from pycens.censored_regression import Tobit as PycensTobit
 from statsmodels.base.model import GenericLikelihoodModel
+from ray import tune
+from ray.tune.schedulers import ASHAScheduler
+from ray.tune.search.hyperopt import HyperOptSearch
+from ray.tune.search.bayesopt import BayesOptSearch
+from ray.tune.search.optuna import OptunaSearch
+from ray.tune.search.basic_variant import BasicVariantGenerator
 
+search_alg = BasicVariantGenerator()
+
+from hyperopt import hp
 #matplotlib.use('TkAgg') 
 
 # Configure logging
@@ -214,7 +227,7 @@ class BaseRegressionModel:
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
             if tune:
-                self.tune_hparams(X_train_kf, y_train_kf, self.param_grid, tune_folds)
+                self.tune_hparams_ray(X_train_kf, y_train_kf, self.param_grid, tune_folds)
                 #tune = False
             else:
                 self.model.fit(X_train_kf, y_train_kf)
@@ -900,6 +913,129 @@ class NGBoostRegressionModel(BaseRegressionModel):
         self.model = NGBRegressor(Dist=NormalInverseGamma, Score=NIGLogScore, verbose=False, **clean_params)
         self.model.fit(X, y)
         # Force an immediate fit on the tuning data to initialize internal parameters.
+        self.model.fit(X, y)
+        self.model_name += " (Tuned)"
+        print(f"Best parameters found: {best_params}")
+        return best_params
+
+    def tune_hparams_ray(self, X, y, param_grid: dict, folds=5, algo: str ="BayesOpt") -> dict:
+        """Tune hyperparameters using Ray Tune with cross-validation."""
+
+        # Split data into training and validation sets
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=1/folds, random_state=42)
+
+        def train_ngboost(config):
+            # Extract base learner parameters
+            if algo == "BayesOpt":
+                config['n_estimators'] = int(round(config['n_estimators']))
+                config['Base__max_depth'] = int(round(config['Base__max_depth']))
+
+            base_params = {k.replace("Base__", ""): v for k, v in config.items() if k.startswith("Base__")}
+            base_learner = DecisionTreeRegressor(**base_params) if base_params else DecisionTreeRegressor(max_depth=3)
+
+            # Extract score parameters
+            score_params = {k.replace("Score__", ""): v for k, v in config.items() if k.startswith("Score__")}
+            NIGLogScore.set_params(**score_params)
+
+            # Extract NGBoost parameters
+            ngb_params = {k: v for k, v in config.items() if not (k.startswith("Base__") or k.startswith("Score__"))}
+            ngb_params['Base'] = base_learner
+
+            # Initialize and train NGBoost model
+            model = NGBRegressor(Dist=NormalInverseGamma, Score=NIGLogScore, verbose=False, **ngb_params)
+            model.fit(X_train, y_train)
+            preds = model.predict(X_val)
+            mse = mean_squared_error(y_val, preds)
+            tune.report({"mse": mse})
+
+        # Define the search space
+        search_space = {}
+        for param, values in param_grid.items():
+            if isinstance(values, list):
+                search_space[param] = tune.choice(values)
+            else:
+                search_space[param] = values  # Fixed value
+
+        # Configure the scheduler for early stopping
+        scheduler = ASHAScheduler(
+            max_t=500,
+            grace_period=100,
+            reduction_factor=2
+        )
+        def convert_to_hyperopt_space(param_grid):
+                space = {}
+                for k, v in param_grid.items():
+                    if isinstance(v, list):
+                        space[k] = hp.choice(k, v)
+                    else:
+                        space[k] = v
+                return space
+        
+        def convert_to_bayesopt_space(param_grid):
+            space = {}
+            for k, v in param_grid.items():
+                if isinstance(v, list):
+                    if all(isinstance(i, int) for i in v):
+                        # Treat integer parameters as continuous and use a uniform distribution
+                        space[k] = tune.uniform(min(v), max(v))
+                    elif all(isinstance(i, float) for i in v):
+                        # Use uniform distribution for float parameters
+                        space[k] = tune.uniform(min(v), max(v))
+                    else:
+                        # Handle categorical parameters
+                        space[k] = tune.choice(v)
+                else:
+                    # Handle fixed values
+                    space[k] = v
+            return space
+    
+
+        if algo == "HyperOpt":
+            search_space = convert_to_hyperopt_space(param_grid)
+            algo = HyperOptSearch(search_space, metric="mse", mode="min")
+
+        elif algo == "BayesOpt":
+            search_space = convert_to_bayesopt_space(param_grid)
+            algo = BayesOptSearch(search_space, metric="mse", mode="min")
+        
+        elif algo is "Optuna":
+            algo = OptunaSearch(search_space, metric="mse", mode="min")
+
+        else:
+            algo = BasicVariantGenerator(search_space, metric="mse", mode="min")
+        
+        # Execute hyperparameter tuning
+        tuner = tune.Tuner(
+            train_ngboost,
+            #param_space=search_space,
+            tune_config=tune.TuneConfig(
+                metric="mse",
+                mode="min",
+                scheduler=scheduler,
+                search_alg= algo,
+                num_samples=200  # Adjust as needed
+            )
+        )
+        results = tuner.fit()
+
+        # Retrieve the best hyperparameters
+        best_result = results.get_best_result()
+        best_params = best_result.config
+
+        # Separate and apply score parameters
+        score_params = {k.replace("Score__", ""): v for k, v in best_params.items() if k.startswith("Score__")}
+        NIGLogScore.set_params(**score_params)
+
+        # Separate and apply base learner parameters
+        base_params = {k.replace("Base__", ""): v for k, v in best_params.items() if k.startswith("Base__")}
+        base_learner = DecisionTreeRegressor(**base_params) if base_params else DecisionTreeRegressor(max_depth=3)
+
+        # Prepare NGBoost parameters
+        ngb_params = {k: v for k, v in best_params.items() if not (k.startswith("Base__") or k.startswith("Score__"))}
+        ngb_params['Base'] = base_learner
+
+        # Initialize and train the final NGBoost model
+        self.model = NGBRegressor(Dist=NormalInverseGamma, Score=NIGLogScore, verbose=False, **ngb_params)
         self.model.fit(X, y)
         self.model_name += " (Tuned)"
         print(f"Best parameters found: {best_params}")

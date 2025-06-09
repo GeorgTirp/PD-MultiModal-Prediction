@@ -54,9 +54,9 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     
 
     param_grid_ngb = {
-    'n_estimators': [450],
-    'learning_rate': [0.5],
-    'Base__max_depth': [3,],
+    'n_estimators': [450, 500, 550, 600],
+    'learning_rate': [0.5, 0.01, 0.1],
+    'Base__max_depth': [3, 4, 5],
     'Score__evid_strength': [0.05, 0.1, 0.2],
     'Score__kl_strength': [0.01, 0.05, 0.1],
     }      
@@ -99,8 +99,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
-    _,_, removals= model.feature_ablation()
-    #model.calibration_analysis()
+   # _,_, removals= model.feature_ablation()
+    model.calibration_analysis()
     
     
     #summands = [0, 0, 1, 0]
@@ -122,8 +122,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         
 
 if __name__ == "__main__":
-    #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+   # folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     #main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "results/level1/NGBoost", 20)
     #main(folder_path, "data/BDI/level1/bdi_df.csv", "ratio", "BDI", "results/level1/NGBoost", 20)

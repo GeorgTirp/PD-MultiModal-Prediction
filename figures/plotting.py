@@ -14,6 +14,7 @@ import faster_evidential_boost
 from tqdm import tqdm
 import ast
 from scipy.stats import linregress
+from sklearn.svm import SVC
 
 def plot_stim_positions(positions: pd.DataFrame, safe_path: str = "") -> None:
     """ Plot the stimulation positions in the brain"""
@@ -484,7 +485,110 @@ def regression_figures(
     plot_linear_regression(bdi_data_path, "Pre vs. Ratio")
 
 
-    
+def threshold_figure(
+        feature_name: str, 
+        data_path: str,
+        shap_data_path: str,
+        removal_list_path: str,
+        save_path: str) -> None:
+    """
+    Reads in the BDI data, SHAP values, and the list of removed features at each ablation step.
+    1) Determines which column in the SHAP array corresponds to `feature_name`.
+    2) Plots a histogram of the SHAP values for that feature, coloring bars by sign (negative vs. positive).
+    3) Creates a simple linear‐SVM on the raw feature values to find a decision threshold for 
+       predicting (BDI_diff >= 0). Plots a histogram of the feature values split by target class 
+       and draws the SVM‐determined threshold as a vertical line.
+    4) Saves the combined figure to `save_path`.
+    """
+
+    # 1) Load inputs
+    removals = pd.read_csv(removal_list_path)  # Assumes a single‐column CSV listing removed feature names
+    bdi_df = pd.read_csv(data_path)
+
+    shap_values = np.load(shap_data_path)      # shape = (n_samples, n_features_remaining)
+
+    # Extract the raw feature vector and binary target
+    feature = bdi_df[feature_name].values
+    target = (bdi_df["BDI_ratio"] >= 0).astype(int)
+
+    # Drop unnecessary columns from bdi_df
+    bdi_df = bdi_df.drop(columns=["BDI_diff", "BDI_ratio", "Pat_ID"], errors="ignore")
+    original_features = [col for col in bdi_df.columns if col != "BDI_diff"]
+    n_original = len(original_features)
+    n_shap_cols = shap_values.shape[1]
+    n_removed_before = n_original - n_shap_cols
+
+    if n_removed_before < 0 or n_removed_before > len(removals):
+        raise ValueError(
+            f"Calculated removed_count = {n_removed_before} is invalid. "
+            f"Check that shap_values and removal_list correspond."
+        )
+
+    # Take exactly the first n_removed_before entries from the removal history
+    removed_up_to_now = removals.iloc[:n_removed_before, 0].astype(str).tolist()
+
+    # Form the list of features that remain at the time SHAP values were computed
+    remaining_features = [f for f in original_features if f not in removed_up_to_now]
+
+    if feature_name not in remaining_features:
+        raise ValueError(f"Feature '{feature_name}' was already removed in the ablation history; no SHAP values available.")
+
+    # The column index within shap_values for feature_name:
+    shap_col_index = remaining_features.index(feature_name)
+    shap_feature = shap_values[:, shap_col_index]
+
+
+    X = feature.reshape(-1, 1)
+    y = target
+
+    svm_clf = SVC(kernel="linear", C=1.0)
+    svm_clf.fit(X, y)
+    w = svm_clf.coef_[0][0]
+    b = svm_clf.intercept_[0]
+    threshold = -b / w  # decision boundary in feature space
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    # Split feature values by SHAP sign
+    mask_neg = (shap_feature < 0)
+    mask_pos = (shap_feature >= 0)
+
+    feature_neg_shap = feature[mask_neg]
+    feature_pos_shap = feature[mask_pos]
+
+    # Common bins over the raw feature range
+    fmin, fmax = feature.min(), feature.max()
+    bins = np.linspace(fmin, fmax, 30)
+
+    ax.hist(
+        feature_neg_shap,
+        bins=bins,
+        color="tab:blue",
+        alpha=0.7,
+        label="SHAP < 0"
+    )
+    ax.hist(
+        feature_pos_shap,
+        bins=bins,
+        color="tab:orange",
+        alpha=0.7,
+        label="SHAP ≥ 0"
+    )
+
+    # Draw vertical line at the SVM threshold
+    ax.axvline(threshold, color="black", linestyle="--", linewidth=2,
+               label=f"SVM threshold = {threshold:.3f}")
+
+    ax.set_title(f"Histogram of '{feature_name}' Values\n(colored by SHAP sign + SVM threshold)")
+    ax.set_xlabel(f"{feature_name} (raw)")
+    ax.set_ylabel("Count")
+    ax.legend()
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     #root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
     root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
@@ -492,8 +596,17 @@ if __name__ == "__main__":
     metrics_path1 = root_dir + "/results/level3/NGBoost/BDI_metrics.csv"
     metrics_path2 = root_dir + "/results/level3/NGBoost/BDI_metrics.csv"
     bdi_data_path = root_dir + "/data/BDI/level2/bdi_df.csv"
+
     regression_figures(
         metrics_path1, 
         metrics_path2,
         bdi_data_path,
         save_path = root_dir + "/figures/")
+    
+    threshold_figure(
+        feature_name="BDI_sum_pre",
+        data_path=root_dir + "/data/BDI/level2/bdi_df.csv",
+        shap_data_path=root_dir + "/results/level2/NGBoost/BDI_ratio_[6]_mean_shap_values.npy",
+        removal_list_path=root_dir + "/results/level2/NGBoost/BDI_ablation_history.csv",
+        save_path=root_dir + "/figures/bdi_threshold_figure.png"
+    )
