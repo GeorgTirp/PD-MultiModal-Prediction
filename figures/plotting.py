@@ -16,6 +16,7 @@ import ast
 from scipy.stats import linregress
 from sklearn.svm import SVC
 from sklearn.model_selection import GridSearchCV
+from scipy.stats import ttest_rel, false_discovery_control
 
 def plot_stim_positions(positions: pd.DataFrame, safe_path: str = "") -> None:
     """ Plot the stimulation positions in the brain"""
@@ -487,7 +488,7 @@ def regression_figures(
 
 
 def threshold_figure(
-        feature_name: str, 
+        feature_name_mapping: dict,
         data_path: str,
         shap_data_path: str,
         removal_list_path: str,
@@ -504,6 +505,8 @@ def threshold_figure(
     colors = {
             "deterioration": "#04E762",
             "improvement": "#FF5714",
+            "det_edge": "#007C34",
+            "imp_edge": "#8A3210",
             "line": "grey",
             "scatter": "grey",
             "ideal_line": "black",
@@ -513,16 +516,128 @@ def threshold_figure(
     bdi_df = pd.read_csv(data_path)
 
     shap_values = np.load(shap_data_path)      # shape = (n_samples, n_features_remaining)
-
-    # Extract the raw feature vector and binary target
-    feature = bdi_df[feature_name].values
-    target = (bdi_df["BDI_ratio"] >= 0).astype(int)
+    
 
     # Drop unnecessary columns from bdi_df
     bdi_df = bdi_df.drop(columns=["BDI_diff", "BDI_ratio", "Pat_ID"], errors="ignore")
     original_features = [col for col in bdi_df.columns if col != "BDI_diff"]
     n_original = len(original_features)
     n_shap_cols = shap_values.shape[1]
+    n_removed_before = n_original - n_shap_cols
+    
+    if n_removed_before < 0 or n_removed_before > len(removals):
+        raise ValueError(
+            f"Calculated removed_count = {n_removed_before} is invalid. "
+            f"Check that shap_values and removal_list correspond."
+        )
+
+    # Take exactly the first n_removed_before entries from the removal history
+    removed_up_to_now = removals.iloc[:n_removed_before, 0].astype(str).tolist()
+
+    # Form the list of features that remain at the time SHAP values were computed
+    remaining_features = [f for f in original_features if f not in removed_up_to_now]
+
+    #if feature_name not in remaining_features:
+    #    raise ValueError(f"Feature '{feature_name}' was already removed in the ablation history; no SHAP values available.")
+    for feature_name in remaining_features:
+
+        feature = bdi_df[feature_name].values
+        # The column index within shap_values for feature_name:
+        shap_col_index = remaining_features.index(feature_name)
+        shap_feature = shap_values[:, shap_col_index]
+        # Convert shap_feature to a binary vector: 1 if SHAP ≥ 0, else 0
+        target = (shap_feature >= 0).astype(int)
+
+        X = feature.reshape(-1, 1)
+        y = target
+
+        param_grid = {'C': [0.01, 0.1, 1, 10, 100]}
+        svm = SVC(kernel="linear")
+        grid_search = GridSearchCV(svm, param_grid, cv=5)
+        grid_search.fit(X, y)
+        svm_clf = grid_search.best_estimator_
+        print(f"Best C: {grid_search.best_params_['C']} with accuracy: {grid_search.best_score_:.2f}")
+        w = svm_clf.coef_[0][0]
+        b = svm_clf.intercept_[0]
+        threshold = -b / w  
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # Split feature values by SHAP sign
+        mask_neg = (shap_feature < 0)
+        mask_pos = (shap_feature >= 0)
+
+        feature_neg_shap = feature[mask_neg]
+        feature_pos_shap = feature[mask_pos]
+
+        # Common bins over the raw feature range
+        fmin, fmax = feature.min(), feature.max()
+        bins = np.linspace(fmin, fmax, 30)
+
+        ax.hist(
+            feature_neg_shap,
+            bins=bins,
+            color=colors["improvement"],
+            alpha=0.7,
+            label="negative SHAPs"
+        )
+        ax.hist(
+            feature_pos_shap,
+            bins=bins,
+            color=colors["deterioration"],
+            alpha=0.7,
+            label="positive SHAPs"
+        )
+
+        # Draw vertical line at the SVM threshold
+        ax.axvline(threshold, color="black", linestyle="--", linewidth=2,
+                   label=f"SVM threshold = {threshold:.3f}")
+
+        feature_name_plot= feature_name_mapping[feature_name] if feature_name in feature_name_mapping else feature_name
+        title = f"Histogram of {feature_name_plot} with SHAP values and threshold (Accuracy: {grid_search.best_score_:.2f})"
+        ax.set_title(title, fontsize=14)
+        ax.set_xlabel(f"{feature_name_plot}", fontsize=12)
+        ax.set_ylabel("Frequency", fontsize=12)
+        ax.legend()
+
+        plt.grid(False)
+        sns.set_context("paper")
+            # Optionally choose a style you like
+        sns.despine()
+        plt.tight_layout()
+        plt.tight_layout()
+        plt.savefig(f'{save_path}_{feature_name}.png', dpi=300)
+        plt.close(fig)
+
+
+def shap_importance_histo_figure(
+        feature_name_mapping: dict,
+        data_path: str,
+        shap_data_path: str,
+        removal_list_path: str,
+        save_path: str) -> None:
+    """
+    Plots a histogram of SHAP values for each feature in `feature_names`.
+    """
+    colors = {
+            "deterioration": "#04E762",
+            "improvement": "#FF5714",
+            "line": "grey",
+            "scatter": "grey",
+            "ideal_line": "black",
+        }
+    # 1) Load inputs
+    removals = pd.read_csv(removal_list_path)  # Assumes a single‐column CSV listing removed feature names
+    
+    bdi_df = pd.read_csv(data_path)
+    all_shap_values = np.load(shap_data_path)
+    foldwise_abs_shaps = np.mean(np.abs(all_shap_values), axis=1)       # shape = (n_samples, n_features_remaining)
+    abs_shaps = np.mean(np.abs(np.mean(all_shap_values, axis=0)), axis=0)  # Mean absolute SHAP values across all samples
+    # Drop unnecessary columns from bdi_df
+    bdi_df = bdi_df.drop(columns=["BDI_diff", "BDI_ratio", "Pat_ID"], errors="ignore")
+    original_features = [col for col in bdi_df.columns if col != "BDI_diff"]
+    n_original = len(original_features)
+    n_shap_cols = abs_shaps.shape[0]
     n_removed_before = n_original - n_shap_cols
 
     if n_removed_before < 0 or n_removed_before > len(removals):
@@ -537,87 +652,104 @@ def threshold_figure(
     # Form the list of features that remain at the time SHAP values were computed
     remaining_features = [f for f in original_features if f not in removed_up_to_now]
 
-    if feature_name not in remaining_features:
-        raise ValueError(f"Feature '{feature_name}' was already removed in the ablation history; no SHAP values available.")
-
     # The column index within shap_values for feature_name:
-    shap_col_index = remaining_features.index(feature_name)
-    shap_feature = shap_values[:, shap_col_index]
-    # Convert shap_feature to a binary vector: 1 if SHAP ≥ 0, else 0
-    target = (shap_feature >= 0).astype(int)
-
-    X = feature.reshape(-1, 1)
-    y = target
-
-    param_grid = {'C': [0.01, 0.1, 1, 10, 100]}
-    svm = SVC(kernel="linear")
-    grid_search = GridSearchCV(svm, param_grid, cv=5)
-    grid_search.fit(X, y)
-    svm_clf = grid_search.best_estimator_
-    print(f"Best C: {grid_search.best_params_['C']}")
-    w = svm_clf.coef_[0][0]
-    b = svm_clf.intercept_[0]
-    threshold = -b / w  
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    # Split feature values by SHAP sign
-    mask_neg = (shap_feature < 0)
-    mask_pos = (shap_feature >= 0)
-
-    feature_neg_shap = feature[mask_neg]
-    feature_pos_shap = feature[mask_pos]
-
-    # Common bins over the raw feature range
-    fmin, fmax = feature.min(), feature.max()
-    bins = np.linspace(fmin, fmax, 30)
-
-    ax.hist(
-        feature_neg_shap,
-        bins=bins,
-        color=colors["deterioration"],
-        alpha=0.7,
-        label="negative SHAPs"
-    )
-    ax.hist(
-        feature_pos_shap,
-        bins=bins,
-        color=colors["improvement"],
-        alpha=0.7,
-        label="positive SHAPs"
-    )
-
-    # Draw vertical line at the SVM threshold
-    ax.axvline(threshold, color="black", linestyle="--", linewidth=2,
-               label=f"SVM threshold = {threshold:.3f}")
-
-    feature_name = feature_name.replace("_", " ").title()
-    feature_name = feature_name[0].upper() + feature_name[1:]
-    title = f"Histogram of '{feature_name} with SHAP values and threshold"
-    ax.set_title(title, fontsize=14)
-    ax.set_xlabel(f"{feature_name}", fontsize=12)
-    ax.set_ylabel("Frequency", fontsize=12)
-    ax.legend()
+    sorted_shap_indices = np.argsort(abs_shaps)[::-1]  # Sort indices by absolute SHAP values in descending order
+    x_labels = [remaining_features[i] for i in sorted_shap_indices]
+    x_labels = [feature_name_mapping.get(label, label) for label in x_labels]  # Map feature names if available
+    x_values = abs_shaps[sorted_shap_indices]
     
+    sorted_shap_matrix = foldwise_abs_shaps[:, sorted_shap_indices]
+
+    # Create list to hold p-values from paired t-tests between consecutive features
+    p_values = []
+
+    # Perform paired t-tests between each consecutive pair of SHAP columns
+    for i in range(1, sorted_shap_matrix.shape[1]):
+        col_prev = sorted_shap_matrix[:, i - 1]
+        col_curr = sorted_shap_matrix[:, i]
+
+        t_stat, p_val = ttest_rel(col_prev, col_curr)
+        p_values.append(p_val)
+
+    #n_tests = len(p_values)
+    corrected_p_values = false_discovery_control(p_values, axis=0, method='bh')
+
+    print(f"p-values for consecutive SHAP columns: {corrected_p_values}")
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bar_positions = np.arange(len(x_values))
+    sem_values = np.std(sorted_shap_matrix, axis=0) / np.sqrt(sorted_shap_matrix.shape[0])
+
+    # 1) Plot a simple bar chart of mean |SHAP| per feature
+    ax.bar(
+        x=bar_positions,
+        height=x_values,
+        yerr=sem_values,
+        capsize=5,
+        color="#D37B40",
+        alpha=0.7,
+        edgecolor="#7A431D",
+        linewidth=1.5,
+    )
+
+    # 2) Labeling
+    ax.set_xticks(np.arange(len(x_labels)))
+    ax.set_xticklabels(x_labels, rotation=45, ha="right", fontsize=10)
+    ax.set_title("Mean Absolute SHAP Value by Feature", fontsize=14)
+    ax.set_xlabel("Feature", fontsize=12)
+    ax.set_ylabel("Mean SHAP Value", fontsize=12)
+
+    # Add significance annotations
+    def significance_marker(p):
+        if p < 0.001:
+            return '***'
+        elif p < 0.01:
+            return '**'
+        elif p < 0.05:
+            return '*'
+        else:
+            return ''
+
+    bar_heights = x_values
+    y_offset = max(x_values) * 0.05  # space above bar
+
+    for i, p_val in enumerate(corrected_p_values):
+        mark = significance_marker(p_val)
+        if mark:
+            x1, x2 = bar_positions[i], bar_positions[i + 1]
+            y = max(bar_heights[i], bar_heights[i + 1]) + y_offset
+            h = y_offset * 0.5
+
+            # Draw bracket
+            ax.plot([x1, x1, x2, x2], [y, y + h, y + h, y], lw=1.5, c='black')
+            ax.text((x1 + x2) / 2, y + h + 0.005, mark, ha='center', va='bottom', fontsize=12)
+    # 3) Styling (match threshold_figure style)
     plt.grid(False)
-    sns.set_context("paper")
-        # Optionally choose a style you like
     sns.despine()
+    sns.set_context("paper")
     plt.tight_layout()
-    plt.tight_layout()
+
+    # 4) Save and close
     plt.savefig(save_path, dpi=300)
     plt.close(fig)
 
 
 if __name__ == "__main__":
-    #root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+    root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
     #root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    root_dir = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
+    #root_dir = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
     #/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/level2/level2/NGBoost/BDI_ablation_history.csv
     #visualize_demographics("BDI", root_dir)
     metrics_path1 = root_dir + "/results/level3/NGBoost/BDI_metrics.csv"
     metrics_path2 = root_dir + "/results/level3/NGBoost/BDI_metrics.csv"
     bdi_data_path = root_dir + "/data/BDI/level2/bdi_df.csv"
+    
+    original_features = ['BDI_sum_pre', 'AGE_AT_OP', 'TimeSinceDiag', 'X_L', 'Y_L', 'Z_L', 'X_R',
+       'Y_R', 'Z_R', 'Left_1_mA', 'Right_1_mA', 'LEDD_ratio']
+    
+    feature_names_for_plotting = ['BDI Sum Pre', 'Age at Operation', 'Time passed Since Diagnosis', 'X Left', 'Y Left', 'Z Left', 'X Right',
+       'Y Right', 'Z Right', 'Left mA', 'Right mA', 'LEDD Reduction Ratio']
+    
+    feature_name_mapping = dict(zip(original_features, feature_names_for_plotting))
 
     regression_figures(
         metrics_path1, 
@@ -626,9 +758,17 @@ if __name__ == "__main__":
         save_path = root_dir + "/figures/")
     
     threshold_figure(
-        feature_name="BDI_sum_pre",
+        feature_name_mapping,
         data_path=root_dir + "/data/BDI/level2/bdi_df.csv",
         shap_data_path=root_dir + "/results/level2/NGBoost/BDI_ratio_[6]_mean_shap_values.npy",
         removal_list_path=root_dir + "/results/level2/NGBoost/BDI_ablation_history.csv",
-        save_path=root_dir + "/figures/bdi_threshold_figure.png"
+        save_path=root_dir + "/figures/bdi_threshold_figure"
+    )
+
+    shap_importance_histo_figure(
+        feature_name_mapping,
+        data_path=root_dir + "/data/BDI/level2/bdi_df.csv",
+        shap_data_path=root_dir + "/results/level2_test/NGBoost/BDI_ratio_all_shap_values(mu).npy",
+        removal_list_path=root_dir + "/results/level2/NGBoost/BDI_ablation_history.csv",
+        save_path=root_dir + "/figures/bdi_abs_importance_figure"
     )
