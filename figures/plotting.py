@@ -15,6 +15,7 @@ from tqdm import tqdm
 import ast
 from scipy.stats import linregress
 from sklearn.svm import SVC
+from sklearn.model_selection import GridSearchCV
 
 def plot_stim_positions(positions: pd.DataFrame, safe_path: str = "") -> None:
     """ Plot the stimulation positions in the brain"""
@@ -500,7 +501,13 @@ def threshold_figure(
        and draws the SVM‐determined threshold as a vertical line.
     4) Saves the combined figure to `save_path`.
     """
-
+    colors = {
+            "deterioration": "#04E762",
+            "improvement": "#FF5714",
+            "line": "grey",
+            "scatter": "grey",
+            "ideal_line": "black",
+        }
     # 1) Load inputs
     removals = pd.read_csv(removal_list_path)  # Assumes a single‐column CSV listing removed feature names
     bdi_df = pd.read_csv(data_path)
@@ -536,18 +543,23 @@ def threshold_figure(
     # The column index within shap_values for feature_name:
     shap_col_index = remaining_features.index(feature_name)
     shap_feature = shap_values[:, shap_col_index]
-
+    # Convert shap_feature to a binary vector: 1 if SHAP ≥ 0, else 0
+    target = (shap_feature >= 0).astype(int)
 
     X = feature.reshape(-1, 1)
     y = target
 
-    svm_clf = SVC(kernel="linear", C=1.0)
-    svm_clf.fit(X, y)
+    param_grid = {'C': [0.01, 0.1, 1, 10, 100]}
+    svm = SVC(kernel="linear")
+    grid_search = GridSearchCV(svm, param_grid, cv=5)
+    grid_search.fit(X, y)
+    svm_clf = grid_search.best_estimator_
+    print(f"Best C: {grid_search.best_params_['C']}")
     w = svm_clf.coef_[0][0]
     b = svm_clf.intercept_[0]
-    threshold = -b / w  # decision boundary in feature space
+    threshold = -b / w  
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(10, 6))
 
     # Split feature values by SHAP sign
     mask_neg = (shap_feature < 0)
@@ -563,27 +575,35 @@ def threshold_figure(
     ax.hist(
         feature_neg_shap,
         bins=bins,
-        color="tab:blue",
+        color=colors["deterioration"],
         alpha=0.7,
-        label="SHAP < 0"
+        label="negative SHAPs"
     )
     ax.hist(
         feature_pos_shap,
         bins=bins,
-        color="tab:orange",
+        color=colors["improvement"],
         alpha=0.7,
-        label="SHAP ≥ 0"
+        label="positive SHAPs"
     )
 
     # Draw vertical line at the SVM threshold
     ax.axvline(threshold, color="black", linestyle="--", linewidth=2,
                label=f"SVM threshold = {threshold:.3f}")
 
-    ax.set_title(f"Histogram of '{feature_name}' Values\n(colored by SHAP sign + SVM threshold)")
-    ax.set_xlabel(f"{feature_name} (raw)")
-    ax.set_ylabel("Count")
+    feature_name = feature_name.replace("_", " ").title()
+    feature_name = feature_name[0].upper() + feature_name[1:]
+    title = f"Histogram of '{feature_name} with SHAP values and threshold"
+    ax.set_title(title, fontsize=14)
+    ax.set_xlabel(f"{feature_name}", fontsize=12)
+    ax.set_ylabel("Frequency", fontsize=12)
     ax.legend()
-
+    
+    plt.grid(False)
+    sns.set_context("paper")
+        # Optionally choose a style you like
+    sns.despine()
+    plt.tight_layout()
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
     plt.close(fig)
@@ -591,7 +611,9 @@ def threshold_figure(
 
 if __name__ == "__main__":
     #root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
-    root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+    #root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+    root_dir = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
+    #/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/level2/level2/NGBoost/BDI_ablation_history.csv
     #visualize_demographics("BDI", root_dir)
     metrics_path1 = root_dir + "/results/level3/NGBoost/BDI_metrics.csv"
     metrics_path2 = root_dir + "/results/level3/NGBoost/BDI_metrics.csv"
