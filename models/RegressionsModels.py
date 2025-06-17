@@ -50,35 +50,30 @@ from hyperopt import hp
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-#class FullUncertaintyAdapter:
-#    def __init__(self, ngb_model):
-#        # expose the underlying XGBoost booster for TreeExplainer
-#        self.get_booster = ngb_model.get_booster
-#        self._Booster    = ngb_model.model.get_booster()
-#        self.ngb         = ngb_model
-#
-#        # optional: carry over feature metadata
-#        if hasattr(ngb_model, "feature_names_in_"):
-#            self.feature_names_in_ = ngb_model.feature_names_in_
-#            self.n_features_in_   = ngb_model.n_features_in_
-#
-#    def predict(self, X):
-#        """
-#        Returns an (n_samples, 3) array:
-#          [aleatoric, epistemic, total_predictive] for each row of X.
-#        """
-#        dists = self.ngb.predict_dist(X)
-#        out = []
-#        for d in dists:
-#            u = d.pred_uncertainty()   # {'aleatoric', 'epistemic'}
-#            alea = u["aleatoric"]
-#            epi  = u["epistemic"]
-#            total = alea + epi
-#            out.append([alea, epi, total])
-#        return np.vstack(out)
     
 class BaseRegressionModel:
-    """ Base class for regression models """
+    """Base class for supervised regression models using scikit-learn and SHAP.
+
+    This class handles shared logic for preparing data, training models, evaluating
+    performance, saving results, and computing feature importance. Subclasses are expected
+    to define the model instance and may override feature attribution logic.
+
+    Attributes:
+        data_df (pd.DataFrame): Full input dataset.
+        feature_selection (dict): Dictionary containing selected features, e.g. {'features': [...]}.
+        target_name (str): Name of the target variable column in `data_df`.
+        test_split_size (float): Fraction of data to use as the test set.
+        save_path (str): Optional directory where results, models, and plots are saved.
+        identifier (str): Optional experiment identifier for naming saved files.
+        top_n (int): Number of top features to retain when computing feature importances.
+        model (sklearn.BaseEstimator): Regression model (defined by subclass).
+        model_name (str): Human-readable name of the model (defined by subclass).
+        X (pd.DataFrame): Training features after split.
+        y (pd.Series): Training target after split.
+        X_test (pd.DataFrame): Test features.
+        y_test (pd.Series): Test target.
+        importances (dict): Dictionary of feature importance scores (populated after evaluation).
+    """
     def __init__(
             self,
             data_df: pd.DataFrame, 
@@ -88,6 +83,18 @@ class BaseRegressionModel:
             save_path: str = None,
             identifier: str = None,
             top_n: int = 10):
+        """
+        Initialize the regression model framework with dataset, feature selection, and settings.
+
+        Args:
+            data_df (pd.DataFrame): Input dataset containing features and target.
+            feature_selection (dict): Dictionary with keys 'features' and 'target' specifying columns.
+            target_name (str): Name of the target variable.
+            test_split_size (float, optional): Fraction of data to hold out for testing. Defaults to 0.2.
+            save_path (str, optional): Path to save model outputs and results. Defaults to None.
+            identifier (str, optional): Unique identifier for this model run. Defaults to None.
+            top_n (int, optional): Number of top features to display in SHAP plots. Defaults to 10.
+        """
         
         logging.info("Initializing BaseRegressionModel class...")
         self.feature_selection = feature_selection
@@ -104,7 +111,17 @@ class BaseRegressionModel:
         logging.info("Finished initializing BaseRegressionModel class.")
 
     def model_specific_preprocess(self, data_df: pd.DataFrame, ceiling: list =["BDI", "MoCA"]) -> Tuple:
-        """ Preprocess the data for the model """
+        """
+        Preprocess data specific to model requirements, including feature extraction and optional ceiling adjustments.
+
+        Args:
+            data_df (pd.DataFrame): Original input data.
+            ceiling (list, optional): List of ceiling transformations to apply (e.g., ['BDI', 'MoCA']). Defaults to ["BDI", "MoCA"].
+
+        Returns:
+            Tuple[pd.DataFrame, pd.Series]: Tuple containing preprocessed features (X) and target variable (y).
+        """
+
         logging.info("Starting model-specific preprocessing...")
         # Drop rows with missing values for features and target
         data_df = data_df.dropna(subset=self.feature_selection['features'] + [self.feature_selection['target']])
@@ -125,27 +142,68 @@ class BaseRegressionModel:
         return X, y
 
     def fit(self) -> None:
-        """ Train the model """
+        """
+        Train the model on the training dataset split.
+        """
         logging.info(f"Starting {self.model_name} model training...")
         X_train, X_test, y_train, y_test = self.train_split
         self.model.fit(X_train, y_train)
         logging.info(f"Finished {self.model_name} model training.")
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
-        """ Predict using the trained model """
+        """
+        Generate predictions from a trained model.
+
+        Args:
+            X (pd.DataFrame): Feature data.
+
+        Returns:
+            np.ndarray: Predicted target values.
+        """
         logging.info("Starting prediction...")
         pred = self.model.predict(X)
         logging.info("Finished prediction.")
         return pred
 
     def evaluate(self, folds=10, get_shap=True, tune=False, tune_folds=10, nested=False, uncertainty=False) -> Dict:
+        """
+        Evaluate model performance using cross-validation, with options for tuning and SHAP explanation.
+
+        Args:
+            folds (int, optional): Number of cross-validation folds. Defaults to 10.
+            get_shap (bool, optional): Whether to compute SHAP feature importances. Defaults to True.
+            tune (bool, optional): Whether to perform hyperparameter tuning. Defaults to False.
+            tune_folds (int, optional): Number of folds for tuning process. Defaults to 10.
+            nested (bool, optional): Use nested cross-validation if True. Defaults to False.
+            uncertainty (bool, optional): Whether to compute uncertainty estimates (if supported). Defaults to False.
+
+        Returns:
+            dict: Dictionary of evaluation metrics such as MSE, R², p-values, and SHAP values.
+        """
         if nested==True:
             return self.nested_eval(folds, get_shap, tune, tune_folds, uncertainty=uncertainty)
         else:
             return self.sequential_eval(folds, get_shap, tune, tune_folds)
         
-    def sequential_eval(self, folds=10, get_shap=True, tune=False, tune_folds=10) -> Dict:
-        """ Evaluate the model using cross-validation """
+    def sequential_eval(
+            self, 
+            folds: int =10, 
+            get_shap=True, 
+            tune=False, 
+            tune_folds=10) -> Dict:
+        """
+        Perform sequential cross-validation evaluation.
+    
+        Args:
+            folds (int, optional): Number of CV folds (-1 indicates Leave-One-Out CV). Defaults to 10.
+            get_shap (bool, optional): Whether to compute SHAP values. Defaults to True.
+            tune (bool, optional): Whether to perform hyperparameter tuning. Defaults to False.
+            tune_folds (int, optional): Number of folds used during tuning. Defaults to 10.
+    
+        Returns:
+            dict: Evaluation metrics including mean squared error, R², and SHAP values.
+        """
+
         logging.info("Starting model evaluation...")
         if tune:
             if self.param_grid is None:
@@ -205,7 +263,20 @@ class BaseRegressionModel:
         return metrics
 
     def nested_eval(self, folds=10, get_shap=True, tune=False, tune_folds=10, uncertainty=False, ablation_idx=None) -> Dict:
-        """ Evaluate the model using cross-validation """
+        """
+        Perform nested cross-validation evaluation with optional tuning, SHAP, uncertainty estimation, and ablation.
+
+        Args:
+            folds (int, optional): Number of outer CV folds (-1 for Leave-One-Out). Defaults to 10.
+            get_shap (bool, optional): Whether to compute SHAP values. Defaults to True.
+            tune (bool, optional): Whether to perform hyperparameter tuning. Defaults to False.
+            tune_folds (int, optional): Number of inner CV folds for tuning. Defaults to 10.
+            uncertainty (bool, optional): Whether to estimate predictive uncertainty. Defaults to False.
+            ablation_idx (int or None, optional): Index for feature ablation tracking. Defaults to None.
+
+        Returns:
+            dict: Dictionary of performance metrics, uncertainties, SHAP values, and predictions.
+        """
         logging.info("Starting model evaluation...")
         if folds == -1:
             kf = LeaveOneOut()
@@ -299,6 +370,7 @@ class BaseRegressionModel:
                 # Save SHAP values to a file
                 np.save(f'{save_path}_mean_shap_values.npy', mean_shap_values)
                 np.save(f'{save_path}_predicitve_uncertainty_shap_values.npy', variance_shap_values)
+                np.save(f'{save_path}_all_shap_values(variance).npy', all_shap_variance_array)
         
                 # Plot for mean SHAP values
                 shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
@@ -313,9 +385,9 @@ class BaseRegressionModel:
                 plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated.png')
                 plt.close()
             else:
-                all_shap_values_array = np.stack(all_shap_values, axis=0)
+                all_shap_mean_array = np.stack(all_shap_values, axis=0)
                 # Average over the folds to get an aggregated array of shape (n_samples, n_features)
-                mean_shap_values = np.mean(all_shap_values_array, axis=0)
+                mean_shap_values = np.mean(all_shap_mean_array, axis=0)
                 np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values.npy', mean_shap_values)
                 shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
                 plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
@@ -324,6 +396,8 @@ class BaseRegressionModel:
                 with open(f'{save_path}_shap_explanations.pkl', 'wb') as fp:
                     pickle.dump(mean_shap_values, fp)
                 plt.close()
+            np.save(f'{save_path}_all_shap_values(mu).npy', all_shap_mean_array)
+            
             
             # Compute the mean of the absolute SHAP values for each feature
             feature_importances = np.mean(np.abs(mean_shap_values), axis=0)
@@ -359,7 +433,12 @@ class BaseRegressionModel:
         return metrics
     
     def feature_ablation(self) -> Dict:
-        """ Compute the feature ablation"""
+        """
+        Perform iterative feature ablation analysis using nested cross-validation.
+
+        Returns:
+            Tuple[list, list, list]: Lists of R² scores, p-values, and removed feature names after each ablation step.
+        """
         r2s = []
         p_values = []
         removals = []
@@ -412,23 +491,57 @@ class BaseRegressionModel:
 
     
     def feature_importance(self, top_n: int = 10, batch_size=None, save_results=True) -> Dict:
-        """ To be implemented in the subclass """
+        """
+        Compute feature importance scores (e.g., SHAP values). Must be implemented by subclasses.
+
+        Args:
+            top_n (int, optional): Number of top features to return. Defaults to 10.
+            batch_size (int or None, optional): Batch size for computation. Defaults to None.
+            save_results (bool, optional): Whether to save the importance results. Defaults to True.
+
+        Returns:
+            dict: Feature importance scores.
+
+        Raises:
+            NotImplementedError: If not implemented in subclass.
+        """
         raise NotImplementedError("Subclasses must implement feature_importance method")
 
     def compute_uncertainties(self, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
-        """ Compute uncertainties using the model """
+        """
+        Compute predictive uncertainties (epistemic and aleatoric) for the input features.
+
+        Args:
+            X (pd.DataFrame): Input features for uncertainty estimation.
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray]: Epistemic and aleatoric uncertainty arrays.
+
+        Raises:
+            NotImplementedError: If uncertainty computation is not implemented for the model.
+        """
         raise NotImplementedError("Uncertainty computation not implemented for this model.")
     
     
         
 
     def plot(self, title, modality='') -> None:
-        """ Plot predicted vs. actual values """
+        """
+        Generate a scatter plot of predicted vs. actual target values with regression line and confidence intervals.
+    
+        Args:
+            title (str): Title of the plot.
+            modality (str, optional): Modality string to label axes (e.g., "MRI"). Defaults to empty string.
+        """
         logging.info("Starting plot generation.")
-         # Use a context suitable for publication-quality figures
-        sns.set_context("paper")
-        # Optionally choose a style you like
-        sns.set_style("whitegrid")
+        
+        colors = {
+            "deterioration": "04E762",
+            "improvement": "FF5714",
+            "line": "grey",
+            "scatter": "grey",
+            "ideal_line": "black",
+        }
 
         # Create a wider (landscape) figure
         plt.figure(figsize=(10, 6))
@@ -484,13 +597,28 @@ class BaseRegressionModel:
             bbox=dict(facecolor='white', alpha=0.5)
         )
 
+        ax = plt.gca()
+        # get current y‐limits
+        min_y, max_y = ax.get_ylim()
+
+        # shade below y=0 (improvement)
+        ax.axhspan(min_y, 0,
+                   color="#" + colors["improvement"],
+                   alpha=0.08, zorder=0)
+        # shade above y=0 (deterioration)
+        ax.axhspan(0, max_y,
+                   color="#" + colors["deterioration"],
+                   alpha=0.08, zorder=0)
         # Label axes and set title
         plt.xlabel(f'Actual {modality} {self.target_name}', fontsize=12)
         plt.ylabel(f'Predicted {modality} {self.target_name}', fontsize=12)
         plt.title(title + "  N=" + str(len(self.y)), fontsize=14)
 
         # Show grid and ensure everything fits nicely
-        plt.grid(True)
+        plt.grid(False)
+        sns.set_context("paper")
+        # Optionally choose a style you like
+        sns.despine()
         plt.tight_layout()
         # Save and close
         plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_actual_vs_predicted.png')
@@ -501,88 +629,20 @@ class BaseRegressionModel:
                  self.save_path, self.identifier, self.target_name)
 
 
-class Tobit(GenericLikelihoodModel):
-    """Custom Tobit (censored) regression."""
-    def __init__(self, endog, exog, left=None, right=None, **kwargs):
-        super().__init__(endog, exog, **kwargs)
-        self.left = left
-        self.right = right
-
-    def nloglikeobs(self, params):
-        beta, sigma = params[:-1], params[-1]
-        xb = np.dot(self.exog, beta)
-        y = self.endog
-
-        # three regimes: left censored, uncensored, right censored
-        ll = np.where(
-            y <= self.left,
-            np.log(norm.cdf((self.left - xb) / sigma)),
-            np.where(
-                y >= self.right,
-                np.log(1 - norm.cdf((self.right - xb) / sigma)),
-                norm.logpdf((y - xb) / sigma) - np.log(sigma)
-            )
-        )
-        return -ll  # we minimize negative log‐likelihood
-
-    def fit(self, start_params=None, maxiter=10000, maxfun=5000, **kwds):
-        # use OLS for good starting values
-        if start_params is None:
-            ols = sm.OLS(self.endog, self.exog).fit()
-            start_params = np.append(ols.params, np.sqrt(ols.scale))
-        return super().fit(start_params=start_params,
-                           maxiter=maxiter, maxfun=maxfun, **kwds)
-
-
-class NewLinearRegressionModel(BaseRegressionModel):
-    """OLS or custom‐Tobit regression depending on bounds"""
-    def __init__(self, *args,
-                 lower_bound: float = None,
-                 upper_bound: float = None,
-                 **kwargs):
-        self.lower_bound = lower_bound
-        self.upper_bound = upper_bound
-        super().__init__(*args, **kwargs)
-
-        if self.lower_bound is None and self.upper_bound is None:
-            self.model_type = 'linear'
-            self.model = LinearRegression()
-            self.model_name = 'Linear Regression'
-        else:
-            self.model_type = 'tobit'
-            self.result = None    # will hold Tobit fit
-            self.model_name = 'Tobit Regression'
-
-    def fit(self):
-        logging.info(f"Starting {self.model_name} training…")
-        X_tr, X_te, y_tr, y_te = self.train_split
-
-        if self.model_type == 'linear':
-            self.model.fit(X_tr, y_tr)
-        else:
-            exog = sm.add_constant(X_tr, has_constant='add')
-            mod = Tobit(
-                endog=y_tr.values,
-                exog=exog.values,
-                left=self.lower_bound,
-                right=self.upper_bound
-            )
-            self.result = mod.fit(disp=False)
-        logging.info(f"Finished {self.model_name} training.")
-
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
-        logging.info(f"Starting {self.model_name} prediction…")
-        if self.model_type == 'linear':
-            preds = self.model.predict(X)
-        else:
-            exog = sm.add_constant(X, has_constant='add')
-            preds = self.result.predict(exog.values)
-        logging.info(f"Finished {self.model_name} prediction.")
-        return preds
-
 
 class LinearRegressionModel(BaseRegressionModel):
-    """ Linear Regression Model """
+    """
+    Initializes the Linear Regression model and sets up data and metadata.
+
+    Args:
+        data_df (pd.DataFrame): Input dataset containing features and target.
+        feature_selection (dict): Dictionary with selected features, typically {'features': [...] }.
+        target_name (str): Name of the target column in the dataset.
+        test_split_size (float, optional): Fraction of the data to use as test set. Defaults to 0.2.
+        save_path (str, optional): Path to directory for saving outputs. Defaults to None.
+        identifier (str, optional): Optional run identifier used for saving results. Defaults to None.
+        top_n (int, optional): Number of top features to consider. Use -1 for all. Defaults to 10.
+    """
     def __init__(
             self,
             data_df: pd.DataFrame, 
@@ -600,7 +660,18 @@ class LinearRegressionModel(BaseRegressionModel):
             self.top_n = len(self.feature_selection['features'])
 
     def feature_importance(self, top_n: int = None, save_results=True, iter_idx=None, ablation_idx=None) -> Dict:
-        """ Compute feature importance using coefficients for Linear Regression """
+        """
+        Computes feature importance using model coefficients and SHAP values.
+
+        Args:
+            top_n (int, optional): Number of top features to display. If None, uses `self.top_n`.
+            save_results (bool, optional): Whether to save the importance scores and SHAP plots. Defaults to True.
+            iter_idx (int, optional): Optional iteration index for naming the saved SHAP plot. Used during repeated runs.
+            ablation_idx (int, optional): Optional ablation index for naming the saved SHAP plot. Used in ablation studies.
+
+        Returns:
+            Dict: SHAP values for each feature across the dataset.
+        """
     
         if iter_idx is None:
             logging.info("Starting feature importance evaluation for Linear Regression...")
@@ -642,7 +713,7 @@ class LinearRegressionModel(BaseRegressionModel):
 
 
 class RandomForestModel(BaseRegressionModel):
-    """ Random Forest Model """
+    """ Random Forest Regression Model """
     def __init__(
             self,
             data_df: pd.DataFrame, 
@@ -654,7 +725,20 @@ class RandomForestModel(BaseRegressionModel):
             identifier: str = None,
             top_n: int = 10,
             param_grid: dict = None):
-        
+        """
+        Initializes the Random Forest model with specified hyperparameters.
+
+        Args:
+            data_df (pd.DataFrame): Input dataset containing features and target.
+            feature_selection (dict): Dictionary with selected features, typically {'features': [...] }.
+            target_name (str): Name of the target column in the dataset.
+            rf_hparams (dict): Dictionary of hyperparameters for RandomForestRegressor.
+            test_split_size (float, optional): Fraction of the data to use as test set. Defaults to 0.2.
+            save_path (str, optional): Path to directory for saving outputs. Defaults to None.
+            identifier (str, optional): Optional run identifier used for saving results. Defaults to None.
+            top_n (int, optional): Number of top features to consider. Use -1 for all. Defaults to 10.
+            param_grid (dict, optional): Grid of parameters to use for tuning (if needed). Defaults to None.
+        """
         super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n)
         self.rf_hparams = rf_hparams
         self.param_grid = param_grid
@@ -664,7 +748,18 @@ class RandomForestModel(BaseRegressionModel):
             self.top_n = len(self.feature_selection['features'])
 
     def feature_importance(self, top_n: int = None, save_results=True, iter_idx=None, ablation_idx=None) -> Dict:
-        """ Compute feature importance using the built-in attribute for Random Forest """
+        """
+        Computes feature importance using built-in feature importances and SHAP values.
+    
+        Args:
+            top_n (int, optional): Number of top features to display. If None, uses `self.top_n`.
+            save_results (bool, optional): Whether to save the importance scores and SHAP plots. Defaults to True.
+            iter_idx (int, optional): Optional iteration index for naming the saved SHAP plot. Used during repeated runs.
+            ablation_idx (int, optional): Optional ablation index for naming the saved SHAP plot. Used in ablation studies.
+    
+        Returns:
+            Dict: SHAP values for each feature across the dataset.
+        """
         if iter_idx is None:
             logging.info("Starting feature importance evaluation for Random Forest...")
         # Use the feature_importances_ attribute of RandomForest
@@ -703,13 +798,17 @@ class RandomForestModel(BaseRegressionModel):
         return shap_values
 
     def tune_hparams(self, X, y, param_grid: dict, folds=5) -> Dict:
-        """Tune hyperparameters using GridSearchCV with 5-fold cross-validation.
+        """
+        Tunes hyperparameters using GridSearchCV with k-fold cross-validation.
 
         Args:
-            param_grid (dict): Dictionary of parameter grid to search over.
+            X (pd.DataFrame): Training features.
+            y (pd.Series): Target variable.
+            param_grid (dict): Dictionary of hyperparameter ranges to search.
+            folds (int, optional): Number of cross-validation folds. Use -1 for leave-one-out. Defaults to 5.
 
         Returns:
-            dict: Best hyperparameters found.
+            Dict: Dictionary of best hyperparameters found.
         """
         if folds == -1:
             folds = len(X)
@@ -998,7 +1097,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
             search_space = convert_to_bayesopt_space(param_grid)
             algo = BayesOptSearch(search_space, metric="mse", mode="min")
         
-        elif algo is "Optuna":
+        elif algo == "Optuna":
             algo = OptunaSearch(search_space, metric="mse", mode="min")
 
         else:
@@ -1297,8 +1396,6 @@ class NGBoostRegressionModel(BaseRegressionModel):
             'crps':         crps_vals,
             'ece':          ece,
         }
-
-
 
 class TabPFNRegression(BaseRegressionModel):
     """ TabPFN Regression Model """
