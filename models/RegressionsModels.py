@@ -186,29 +186,35 @@ class BaseRegressionModel:
             return self.sequential_eval(folds, get_shap, tune, tune_folds)
         
     def sequential_eval(
-            self, 
-            folds: int =10, 
-            get_shap=True, 
-            tune=False, 
-            tune_folds=10) -> Dict:
+        self, 
+        folds: int = 10, 
+        get_shap: bool = True, 
+        tune: bool = False, 
+        tune_folds: int = 10,
+        uncertainty: bool = False,
+        ablation_idx: int = None
+        ) -> Dict:
         """
-        Perform sequential cross-validation evaluation.
-    
-        Args:
-            folds (int, optional): Number of CV folds (-1 indicates Leave-One-Out CV). Defaults to 10.
-            get_shap (bool, optional): Whether to compute SHAP values. Defaults to True.
-            tune (bool, optional): Whether to perform hyperparameter tuning. Defaults to False.
-            tune_folds (int, optional): Number of folds used during tuning. Defaults to 10.
-    
-        Returns:
-            dict: Evaluation metrics including mean squared error, R², and SHAP values.
-        """
+        Perform sequential cross-validation evaluation with optional tuning, SHAP, uncertainty estimation, and ablation.
+        Tuning is performed once before cross-validation begins.
 
+        Args:
+            folds (int): Number of outer CV folds (-1 for Leave-One-Out).
+            get_shap (bool): Whether to compute SHAP values.
+            tune (bool): Whether to perform hyperparameter tuning before CV.
+            tune_folds (int): Number of inner CV folds for tuning.
+            uncertainty (bool): Whether to estimate predictive uncertainty.
+            ablation_idx (int or None): Index for feature ablation tracking.
+
+        Returns:
+            dict: Evaluation metrics including MSE, R², SHAP, and optional uncertainty.
+        """
         logging.info("Starting model evaluation...")
+
         if tune:
             if self.param_grid is None:
                 raise ValueError("When calling tune=True, a param_grid has to be passed when initializing the model.")
-            self.tune_hparams(self.X, self.y,  self.param_grid, tune_folds)
+            self.tune_hparams(self.X, self.y, self.param_grid, tune_folds)
 
         if folds == -1:
             kf = LeaveOneOut()
@@ -216,51 +222,124 @@ class BaseRegressionModel:
             kf = KFold(n_splits=folds, shuffle=True, random_state=42)
 
         preds = []
+        epistemics = []
+        aleatorics = []
+        pred_dists = []
         y_vals = []
         all_shap_values = []
+        all_shap_mean = []
+        all_shap_variance = []
+
         for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation", leave=True):
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
-            if not tune:
-                self.model.fit(X_train_kf, y_train_kf)
+
+            self.model.fit(X_train_kf, y_train_kf)
             pred = self.model.predict(X_val_kf)
             preds.append(pred)
             y_vals.append(y_val_kf)
-            if get_shap:             
-                 # Compute SHAP values on the whole dataset per fold
+
+            if uncertainty:
+                _, epistemic, aleatoric = self.compute_uncertainties(mode="nig", X=X_val_kf)
+                epistemics.append(epistemic)
+                aleatorics.append(aleatoric)
+
+            if isinstance(self, NGBoostRegressionModel):
+                pred_dist = self.model.pred_dist(X_val_kf).params
+                pred_dist = np.column_stack([pred_dist[key] for key in pred_dist.keys()])
+                pred_dists.append(pred_dist)
+
+            if get_shap:
                 with io.capture_output():
-                    shap_values = self.feature_importance(top_n=-1, save_results=True, iter_idx=val_index)
-                all_shap_values.append(shap_values) 
+                    if ablation_idx is not None:
+                        val_index = None
+                    if isinstance(self, NGBoostRegressionModel):
+                        shap_values_mean = self.feature_importance_mean(top_n=-1, save_results=True, iter_idx=val_index)
+                        shap_values_variance, _, _ = self.feature_importance_variance(top_n=-1, save_results=True, iter_idx=val_index)
+                        all_shap_mean.append(shap_values_mean)
+                        all_shap_variance.append(shap_values_variance)
+                    else:
+                        shap_values = self.feature_importance(top_n=-1, save_results=True, iter_idx=val_index)
+                        all_shap_values.append(shap_values)
 
         preds = np.concatenate(preds)
         y_vals = np.concatenate(y_vals)
         r2, p = pearsonr(y_vals, preds)
         mse = mean_squared_error(y_vals, preds)
 
+        if uncertainty:
+            epistemic_uncertainty = np.concatenate(epistemics)
+            aleatoric_uncertainty = np.concatenate(aleatorics)
+
+        if get_shap:
+            if ablation_idx is not None:
+                save_path = f'{self.save_path}/ablation/'
+                os.makedirs(save_path, exist_ok=True)
+                save_path = f'{save_path}{self.identifier}_{self.target_name}_{ablation_idx}'
+            else:
+                save_path = f'{self.save_path}/{self.identifier}_{self.target_name}'
+
+            if isinstance(self, NGBoostRegressionModel):
+                all_shap_mean_array = np.stack(all_shap_mean, axis=0)
+                all_shap_variance_array = np.stack(all_shap_variance, axis=0)
+                mean_shap_values = np.mean(all_shap_mean_array, axis=0)
+                variance_shap_values = np.mean(all_shap_variance_array, axis=0)
+
+                np.save(f'{save_path}_mean_shap_values.npy', mean_shap_values)
+                np.save(f'{save_path}_predicitve_uncertainty_shap_values.npy', variance_shap_values)
+                np.save(f'{save_path}_all_shap_values(variance).npy', all_shap_variance_array)
+
+                shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                plt.title(f'{self.identifier} Summary Plot (Aggregated - Mean)', fontsize=16)
+                plt.subplots_adjust(top=0.90)
+                plt.savefig(f'{save_path}_mean_shap_aggregated.png')
+                plt.close()
+
+                shap.summary_plot(variance_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                plt.title(f'{self.identifier} Summary Plot (Aggregated - Variance)', fontsize=16)
+                plt.subplots_adjust(top=0.90)
+                plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated.png')
+                plt.close()
+            else:
+                all_shap_mean_array = np.stack(all_shap_values, axis=0)
+                mean_shap_values = np.mean(all_shap_mean_array, axis=0)
+                np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values.npy', mean_shap_values)
+                shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                plt.title(f'{self.identifier} Summary Plot (Aggregated)', fontsize=16)
+                plt.subplots_adjust(top=0.90)
+                plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png')
+                with open(f'{save_path}_shap_explanations.pkl', 'wb') as fp:
+                    pickle.dump(mean_shap_values, fp)
+                plt.close()
+            np.save(f'{save_path}_all_shap_values(mu).npy', all_shap_mean_array)
+
+            feature_importances = np.mean(np.abs(mean_shap_values), axis=0)
+            feature_importance_dict = dict(zip(self.X.columns, feature_importances))
+
         metrics = {
             'mse': mse,
             'r2': r2,
             'p_value': p,
             'y_pred': preds,
-            'y_test': y_vals
+            'y_test': y_vals,
+            'pred_dist': np.vstack(pred_dists) if isinstance(self, NGBoostRegressionModel) else None,
+            'epistemic': epistemic_uncertainty if uncertainty else None,
+            'aleatoric': aleatoric_uncertainty if uncertainty else None,
+            'feature_importance': feature_importances if get_shap else None
         }
+
         self.metrics = metrics
         metrics_df = pd.DataFrame([metrics])
         metrics_df.to_csv(f'{self.save_path}/{self.identifier}_metrics.csv', index=False)
 
-        if get_shap:
-            all_shap_values_array = np.stack(all_shap_values, axis=0)
-            # Average over the folds to get an aggregated array of shape (n_samples, n_features)
-            mean_shap_values = np.mean(all_shap_values_array, axis=0)
-            np.save(f'{self.save_path}/{self.identifier}_mean_shap_values.npy', mean_shap_values)
-            shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-            plt.title(f'{self.identifier} Summary Plot (Aggregated)', fontsize=16)
-            plt.subplots_adjust(top=0.90)
-            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm.png')
-            plt.close()
-
+        model_save_path = f'{self.save_path}/{self.identifier}_{ablation_idx}_trained_model.pkl' if ablation_idx is not None else f'{self.save_path}/{self.identifier}_trained_model.pkl'
+        with open(model_save_path, 'wb') as model_file:
+            pickle.dump(self.model, model_file)
+        logging.info(f"Trained model saved to {model_save_path}.")
         logging.info("Finished model evaluation.")
+
         return metrics
+
 
     def nested_eval(self, folds=10, get_shap=True, tune=False, tune_folds=10, uncertainty=False, ablation_idx=None) -> Dict:
         """
@@ -528,7 +607,7 @@ class BaseRegressionModel:
     def plot(self, title, modality='') -> None:
         """
         Generate a scatter plot of predicted vs. actual target values with regression line and confidence intervals.
-    
+
         Args:
             title (str): Title of the plot.
             modality (str, optional): Modality string to label axes (e.g., "MRI"). Defaults to empty string.
