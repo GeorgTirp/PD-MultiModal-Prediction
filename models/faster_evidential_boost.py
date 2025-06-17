@@ -9,14 +9,39 @@ from ngb_jit import d_score_numba, full_score_numba, compute_diag_fim#, digamma,
 import line_profiler
 
 def softplus(x):
-        return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
+    """
+    Numerically stable implementation of the softplus function.
+
+    Parameters:
+        x (float or np.ndarray): Input value(s).
+
+    Returns:
+        np.ndarray: Softplus-transformed values.
+    """
+    return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
 
 def positive(x, eps=1e-3):
+    """
+    Maps input to positive values using softplus, with a minimum epsilon shift.
+
+    Parameters:
+        x (float or np.ndarray): Input value(s).
+        eps (float): Minimum value shift to ensure strict positivity.
+
+    Returns:
+        np.ndarray: Positive-transformed values.
+    """
     return np.log1p(np.exp(x)) + eps
 
 # Custom score for Normal-Inverse-Gamma.
 class NIGLogScore(LogScore):
+    """
+    Custom scoring function for the Normal-Inverse-Gamma (NIG) distribution in NGBoost.
 
+    Attributes:
+        evid_strength (float): Coefficient for the evidential regularization term.
+        kl_strength (float): Coefficient for KL divergence regularization.
+    """
     
     lower_bound = None
     upper_bound = None
@@ -25,6 +50,13 @@ class NIGLogScore(LogScore):
 
     @classmethod
     def set_params(cls, evid_strength=None, kl_strength=None):
+        """
+        Sets the regularization strengths for the NIG log score.
+
+        Parameters:
+            evid_strength (float): Evidential regularization strength.
+            kl_strength (float): KL divergence regularization strength.
+        """
         if evid_strength is not None:
             cls.evid_strength = evid_strength
         if kl_strength is not None:
@@ -32,13 +64,38 @@ class NIGLogScore(LogScore):
     
     @classmethod
     def set_bounds(cls, lower, upper):
+        """
+        Set lower and upper bounds for predictions.
+
+        Parameters:
+            lower (float): Lower bound.
+            upper (float): Upper bound.
+        """
         cls.lower_bound = lower
         cls.upper_bound = upper
 
-    def kl_divergence_nig(self, mu, lam, alpha, beta,
-                      mu0=0.0, lam0=1.0, alpha0=2.0, beta0=1.0,
-                      eps=1e-8):
-        
+    def kl_divergence_nig(
+            self, 
+            mu, 
+            lam, 
+            alpha, 
+            beta,
+            mu0=0.0, 
+            lam0=1.0, 
+            alpha0=2.0, 
+            beta0=1.0,
+            eps=1e-8):
+        """
+        Compute the KL divergence between two NIG distributions.
+
+        Parameters:
+            mu, lam, alpha, beta: Current parameters.
+            mu0, lam0, alpha0, beta0: Prior parameters.
+            eps (float): Numerical stability threshold.
+
+        Returns:
+            float: Average KL divergence.
+        """
 
         # Clip to avoid division by zero or log of zero
         lam = np.clip(lam, eps, 1e6)
@@ -58,13 +115,32 @@ class NIGLogScore(LogScore):
         return np.mean(kl)
 
     def evidential_regularizer(self, Y, mu, lam, alpha):
-        
+        """
+        Computes an evidential penalty encouraging predictive uncertainty to match residual error.
+
+        Parameters:
+            Y (np.ndarray): Target values.
+            mu, lam, alpha (np.ndarray): Model parameters.
+
+        Returns:
+            float: Average evidential penalty.
+        """
         error = np.abs(Y - mu)
         penalty = error * (2 * alpha + lam)
         return np.mean(penalty)
     
     @line_profiler.profile
     def score(self, Y, params=None):
+        """
+        Computes the custom NIG loss for each data point using JIT-compiled scoring.
+
+        Parameters:
+            Y (np.ndarray): Target values.
+            params (list or None): Optional list of model parameters.
+
+        Returns:
+            np.ndarray: Per-sample NIG loss values.
+        """
         # 1) unpack parameters into arrays
         self._last_Y = Y
         if params is None:
@@ -98,6 +174,16 @@ class NIGLogScore(LogScore):
 
     @line_profiler.profile
     def d_score(self, Y, params=None):
+        """
+        Computes the gradient of the NIG loss with respect to the model parameters.
+
+        Parameters:
+            Y (np.ndarray): Target values.
+            params (list or None): Optional list of model parameters.
+
+        Returns:
+            np.ndarray: Per-sample gradient vectors.
+        """
         # Unpack or use stored
         if params is None:
             mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
@@ -119,6 +205,17 @@ class NIGLogScore(LogScore):
     
     @line_profiler.profile
     def metric(self, Y=None, params=None, diagonal: bool = False):
+        """
+        Estimates the Fisher Information Matrix (FIM) from gradients.
+
+        Parameters:
+            Y (np.ndarray): Target values.
+            params (list): Model parameters.
+            diagonal (bool): If True, compute only the diagonal of FIM.
+
+        Returns:
+            np.ndarray: Empirical FIM matrix or diagonals.
+        """
         if params is None:
             mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
             params = [mu, lam, alpha, beta]
@@ -135,50 +232,29 @@ class NIGLogScore(LogScore):
             # Full FIM
             return np.array([np.outer(g, g) + 1e-5*np.eye(g.shape[0]) for g in grads])
 
-
-    #def metric(self, Y=None, params=None,
-    #           evid_strength: float = 0.2,
-    #           kl_strength:    float = 0.01):
-    #    """ Empirical FIM from full‐loss gradients """
-    #    if params is None:
-    #        mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
-    #        params = [mu, lam, alpha, beta]
-    #    else:
-    #        params = np.stack(params, axis=-1).T
-    #    if Y is None:
-    #        Y = self._last_Y
-    #    grads = self.d_score(Y, params=params)
-    #    FIM = np.array([np.outer(g, g) + 1e-5*np.eye(g.shape[0]) for g in grads])
-    #    return FIM
-
-
-
     
     
-
 class NormalInverseGamma(RegressionDistn):
     """
-    Implements the Normal-Inverse-Gamma (NIG) distribution for NGBoost.
-    
-    Parameters:
-      μ   : the mean (location) of the Normal component,
-      λ   : a positive scaling factor for the Normal variance,
-      α   : the shape parameter (α > 1) for the Inverse Gamma,
-      β   : the scale parameter (β > 0) for the Inverse Gamma.
-      
-    Predictive (aleatoric) variance:  E[σ²] = β/(α - 1).
-    Epistemic uncertainty approximation:  Var(μ) ≈ β²/(λ*(α - 1)²*(α - 2)).
+    Normal-Inverse-Gamma distribution implementation for NGBoost.
+
+    Used to model both aleatoric and epistemic uncertainty.
+
+    Attributes:
+        mu (np.ndarray): Mean of the Normal component.
+        lam (np.ndarray): Precision of the Normal component.
+        alpha (np.ndarray): Shape parameter of Inverse Gamma.
+        beta (np.ndarray): Scale parameter of Inverse Gamma.
     """
     n_params = 4  # Four parameters: μ, λ, α, β.
     scores = [NIGLogScore]
 
     def __init__(self, params):
         """
-        params: an array-like with 4 elements.
-            params[0]: μ (location)
-            params[1]: raw parameter for λ (we use exp to enforce λ > 0)
-            params[2]: raw parameter for α (we use exp and add 1 to enforce α > 1)
-            params[3]: raw parameter for β (we use exp to enforce β > 0)
+        Initializes the NIG distribution from parameter array.
+
+        Parameters:
+            params (np.ndarray): Raw parameters [mu, raw_lam, raw_alpha, raw_beta].
         """
         self.mu    = params[0]
         self.lam   = np.exp(params[1])     # Avoid zero
@@ -189,13 +265,13 @@ class NormalInverseGamma(RegressionDistn):
     @staticmethod
     def fit(Y):
         """
-        Provides initial parameter estimates from the data Y.
-        
-        Returns an np.array of 4 elements:
-          - raw_mu: the mean of Y,
-          - raw_lam: initialized to 0 so that exp(0)=1,
-          - raw_alpha: initialized to 0 so that alpha = exp(0)+1 = 2,
-          - raw_beta: the log of the variance of Y (so that beta = variance of Y).
+        Estimates initial parameters for NIG from observed data Y.
+
+        Parameters:
+            Y (np.ndarray): Target values.
+
+        Returns:
+            np.ndarray: Initial parameter estimates.
         """
         m = np.mean(Y)
         s = np.std(Y)
@@ -203,12 +279,13 @@ class NormalInverseGamma(RegressionDistn):
 
     def sample(self, m):
         """
-        Draw m samples per prediction.
-        
-        Sampling:
-          1. Sample σ² from an Inverse Gamma with shape α and scale β.
-             (Implemented here by sampling from Gamma and taking the reciprocal.)
-          2. Sample Y from a Normal with mean μ and variance σ²/λ.
+        Samples m values from the predictive NIG distribution.
+
+        Parameters:
+            m (int): Number of samples per prediction.
+
+        Returns:
+            np.ndarray: Sampled values from the NIG distribution.
         """
         shape = self.mu.shape  # assuming vectorized μ
         # Sample sigma^2 from Inverse Gamma(α, β).
@@ -218,10 +295,13 @@ class NormalInverseGamma(RegressionDistn):
 
     def pred_uncertainty(self):
         """
-        Computes predictive statistics and returns them as a dictionary.
-          - "mean": μ,
-          - "aleatoric": β/(α - 1),
-          - "epistemic": β²/(λ*(α - 1)²*(α - 2)).
+        Computes predictive uncertainty (aleatoric + epistemic).
+
+        Returns:
+            dict: Dictionary containing:
+                - "mean": predictive mean (mu),
+                - "aleatoric": β / (α - 1),
+                - "epistemic": β² / (λ(α - 1)²(α - 2)).
         """
         aleatoric = self.beta / (self.alpha - 1)
         epistemic = self.beta**2 / (self.lam * (self.alpha - 1)**2 * (self.alpha - 2))
@@ -229,48 +309,62 @@ class NormalInverseGamma(RegressionDistn):
 
     def pred_dist(self):
         """
-        Computes predictive statistics and returns them as a dictionary.
-          - "mean": μ,
-          - "aleatoric": β/(α - 1),
-          - "epistemic": β²/(λ*(α - 1)²*(α - 2)).
+        Returns the predictive parameters.
+
+        Returns:
+            tuple: (mu, lam, alpha, beta)
         """
         return self.mu, self.lam, self.alpha, self.beta
     
-    #def score(self, Y):
-    #    """
-    #    Calculate the negative log-likelihood and return it.
-    #    """
-    #    params = [self.mu, self.lam, self.alpha, self.beta]
-    #    return NIGLogScore().score(Y, params=params)
-#
-    #def d_score(self, Y):
-    #    """
-    #    Calculate the gradients of the NLL with respect to parameters.
-    #    """
-    #    params = [self.mu, self.lam, self.alpha, self.beta]
-    #    return NIGLogScore().d_score(Y, params=params)
     
     def metric(self, Y):
         """
-        Calculate the metric for the parameters.
+        Computes the Fisher Information Matrix for parameter estimates.
+
+        Parameters:
+            Y (np.ndarray): Target values.
+
+        Returns:
+            np.ndarray: FIM matrix.
         """
         params = [self.mu, self.lam, self.alpha, self.beta]
         return NIGLogScore().metric(Y, params=params)
     
     @property
     def is_regression(self):
+        """
+        Indicates that this is a regression model.
+
+        Returns:
+            bool: Always True.
+        """
         return True
 
     @property
     def params(self):
+        """
+        Returns a dictionary of NIG parameters.
+
+        Returns:
+            dict: {mu, lam, alpha, beta}
+        """
         return {"mu": self.mu, "lam": self.lam, "alpha": self.alpha, "beta": self.beta}
 
     def mean(self):
+        """
+        Returns the predictive mean.
+
+        Returns:
+            np.ndarray: mu
+        """
         return self.mu
     
     def var(self):
         """
-        For the Normal-Inverse Gamma, the variance can be derived from the parameters.
+        Computes total predictive variance.
+
+        Returns:
+            np.ndarray: Predictive variance (aleatoric + epistemic).
         """
         # Aleatoric variance (σ²) = β / (α - 1)
         aleatoric = self.beta / (self.alpha - 1)
@@ -280,12 +374,29 @@ class NormalInverseGamma(RegressionDistn):
         #return aleatoric
     
     def predict_variance(self, X):
-        # predict_dist returns a list/array of NormalInverseGamma instances
+        """
+        Returns the predicted total variance per test input.
+
+        Parameters:
+            X (array-like): Input data.
+
+        Returns:
+            np.ndarray: Predictive variances.
+        """
         dists = self.predict_dist(X)
         # call .var() on each to get aleatoric+epistemic
         return np.array([dist.var() for dist in dists])
 
     def logpdf(self, Y):
+        """
+        Computes the log probability density function using the implied Student-t marginal.
+
+        Parameters:
+            Y (np.ndarray): Target values.
+
+        Returns:
+            np.ndarray: Log-pdf values.
+        """
         mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
 
         # Degrees of freedom
