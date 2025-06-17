@@ -36,3 +36,30 @@ conda activate pdmm
 
 # Install dependencies
 pip install -r requirements.txt
+
+---
+
+## 📄 Citation
+
+If you use this codebase in your research or project, please cite:
+
+ ```bibtex
+@misc{MMPred 2025,
+title = {tabular multi-modal prediction for medical purposes},
+author = {Georg Tirpitz,
+year = {2025},
+howpublished = {\url{https://github.com/GeorgTirp/PD-MultiModal-Prediction}},
+note = {Accessed: 2025-06-17}
+}  ``` </pre>
+## 📬 Contact
+
+For questions, suggestions, or collaborations, feel free to contact:
+
+**Your Name**  
+Email: [your.email@example.com](mailto:geotir@gmx.de)  
+GitHub: [@yourusername](https://github.com/GeorgTirp)
+
+## 📜 License
+
+This project is licensed under the **MIT License**.  
+See the [LICENSE](./LICENSE) file for details.
