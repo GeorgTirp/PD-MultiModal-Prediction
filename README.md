@@ -59,9 +59,9 @@ note = {Accessed: 2025-06-17}
 
 For questions, suggestions, or collaborations, feel free to contact:
 
-**Your Name**  
-Email: [your.email@example.com](mailto:geotir@gmx.de)  
-GitHub: [@yourusername](https://github.com/GeorgTirp)
+**Georg Tirpitz**  
+Email: [geotir@gmx.de](mailto:geotir@gmx.de)  
+GitHub: [@GeorgTirp](https://github.com/GeorgTirp)
 
 ## 📜 License
 
