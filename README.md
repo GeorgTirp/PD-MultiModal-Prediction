@@ -36,6 +36,7 @@ conda activate pdmm
 
 # Install dependencies
 pip install -r requirements.txt
+```
 
 ---
 
