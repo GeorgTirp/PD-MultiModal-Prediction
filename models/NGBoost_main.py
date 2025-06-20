@@ -11,6 +11,8 @@ from matplotlib import pyplot as plt
 import numpy as np
 import logging
 from xgboost import XGBRegressor
+from sklearn.datasets import load_diabetes
+from sklearn.preprocessing import StandardScaler
 
 
 
@@ -19,26 +21,32 @@ from xgboost import XGBRegressor
 
 
 def main(folder_path, data_path, target, identifier, out, folds=10):
-    target_col = identifier + "_" + target
-    possible_targets = ["ratio", "diff"] 
-    ignored_targets = [t for t in possible_targets if t != target]
-    ignored_target_cols = [identifier + "_" + t for t in ignored_targets]
-    data_df = pd.read_csv(folder_path + data_path)
-    columns_to_drop = ['Pat_ID'] + [col for col in ignored_target_cols if col in data_df.columns]
-    data_df = data_df.drop(columns=columns_to_drop)
     test_split_size = 0.2
     Feature_Selection = {}
-    
-    ### test
-    #X, y = load_diabetes(return_X_y=True, as_frame=True)
-    #data_df = pd.concat([X, y.rename("target")], axis=1)
-    #Feature_Selection['target'] = "target"
+    #target_col = identifier + "_" + target
+    #possible_targets = ["ratio", "diff"] 
+    #ignored_targets = [t for t in possible_targets if t != target]
+    #ignored_target_cols = [identifier + "_" + t for t in ignored_targets]
+    #data_df = pd.read_csv(folder_path + data_path)
+    #columns_to_drop = ['Pat_ID'] + [col for col in ignored_target_cols if col in data_df.columns]
+    #data_df = data_df.drop(columns=columns_to_drop)
+    #Feature_Selection['target'] = target_col
     #Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
-    #safe_path = os.path.join(folder_path, "test/results/XGBoost")
-    ### test ende
-    Feature_Selection['target'] = target_col
+    #safe_path = os.path.join(folder_path, out)
+
+    ### test
+    X, y = load_diabetes(return_X_y=True, as_frame=True)
+    X = X.sample(n=150, random_state=42)
+    y = y.loc[X.index]
+    std = y.std()
+    y = (y - y.mean()) / std  # Standardize the target variable
+    data_df = pd.concat([X, y.rename("target")], axis=1)
+    Feature_Selection['target'] = "target"
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
-    safe_path = os.path.join(folder_path, out)
+    safe_path = os.path.join(folder_path, "test/results/test_diabetes/NGBoost")
+    ### test ende
+
+    
     if not os.path.exists(safe_path):
         os.makedirs(safe_path)
     # Random Forest Model
@@ -66,8 +74,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     NGB_Hparams = {
         'Dist': NormalInverseGamma,
         'Score' : NIGLogScore,
-        'n_estimators': 600,
-        'learning_rate': 0.1,
+        'n_estimators': 100,
+        'learning_rate': 0.01,
         'natural_gradient': True,
         #'Score_kwargs': {'evid_strength': 0.1, 'kl_strength': 0.01},
         'verbose': False,
@@ -99,8 +107,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
-    _,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=-1)
-    model.calibration_analysis()
+    #_,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=-1)
+    #model.calibration_analysis()
     
     
     #summands = [0, 0, 1, 0]
@@ -125,5 +133,5 @@ if __name__ == "__main__":
     #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
     folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "results/level2_test/NGBoost", -1)
+    main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2_test/NGBoost", 20)
     

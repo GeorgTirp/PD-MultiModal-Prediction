@@ -377,7 +377,7 @@ class BaseRegressionModel:
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
             if tune:
-                self.tune_hparams_ray(X_train_kf, y_train_kf, self.param_grid, tune_folds)
+                self.tune_hparams(X_train_kf, y_train_kf, self.param_grid, tune_folds)
                 #tune = False
             else:
                 self.model.fit(X_train_kf, y_train_kf)

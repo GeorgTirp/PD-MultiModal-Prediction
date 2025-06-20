@@ -43,18 +43,18 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
             lower_bound, upper_bound = 0, 30
     
     ## Linear Regression Model
-    #linear_model = LinearRegressionModel(
-    #    data_df, 
-    #    Feature_Selection, 
-    #    target,
-    #    test_split_size, 
-    #    safe_path_linear, 
-    #    identifier, 
-    #    n_top_features,
-    #    )
-    #linear_metrics = linear_model.evaluate(folds=folds, get_shap=False)
-    #linear_model.plot(f"Actual vs. Prediction (Linear Regression) - {identifier}", identifier)
-    #_,_, removals= linear_model.feature_ablation()
+    linear_model = LinearRegressionModel(
+        data_df, 
+        Feature_Selection, 
+        target,
+        test_split_size, 
+        safe_path_linear, 
+        identifier, 
+        n_top_features,
+        )
+    linear_metrics = linear_model.evaluate(folds=folds, get_shap=False)
+    linear_model.plot(f"Actual vs. Prediction (Linear Regression) - {identifier}", identifier)
+    _,_, removals= linear_model.feature_ablation()
 #
     rf_hparams  = {
         'n_estimators': [50, 100, 150, 200],
@@ -62,21 +62,21 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     }
 
     # Random Forest Model
-    rf_model = RandomForestModel(
-        data_df, 
-        Feature_Selection, 
-        target,
-        RandomForest_Hparams, 
-        test_split_size, 
-        safe_path_rf, 
-        identifier, 
-        n_top_features,
-        param_grid=rf_hparams)
-    rf_model.fit()
-    rf_metrics = rf_model.evaluate(folds=folds, get_shap=True, tune=True, nested=True, tune_folds=-1)
-    rf_model.plot(f"Actual vs. Prediction (Random Forest) - {identifier}", identifier)
-    _,_, removals= rf_model.feature_ablation()
-   # _,_, removals= linear_model.feature_ablation()
+    #rf_model = RandomForestModel(
+    #    data_df, 
+    #    Feature_Selection, 
+    #    target,
+    #    RandomForest_Hparams, 
+    #    test_split_size, 
+    #    safe_path_rf, 
+    #    identifier, 
+    #    n_top_features,
+    #    param_grid=rf_hparams)
+    #rf_model.fit()
+    #rf_metrics = rf_model.evaluate(folds=folds, get_shap=True, tune=True, nested=True, tune_folds=-1)
+    #rf_model.plot(f"Actual vs. Prediction (Random Forest) - {identifier}", identifier)
+    #_,_, removals= rf_model.feature_ablation()
+   ## _,_, removals= linear_model.feature_ablation()
 
     logging.info("Finished main execution.")
 
@@ -85,10 +85,10 @@ if __name__ == "__main__":
     #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
     folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
-    main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "/results/level1/", 20)
-    main(folder_path, "data/BDI/level1/bdi_df.csv", "ratio", "BDI", "/results/level1/", 20)
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "/results/level2/", 20)
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "/results/level2/", 20)
-    main(folder_path, "data/BDI/level3/bdi_df.csv", "diff", "BDI", "/results/level3/", 20)
-    main(folder_path, "data/BDI/level3/bdi_df.csv", "ratio", "BDI", "/results/level3/", 20)
+    #main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "/results/level1/", 20)
+    #main(folder_path, "data/BDI/level1/bdi_df.csv", "ratio", "BDI", "/results/level1/", 20)
+    #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "/results/level2/", 20)
+    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "/results/level2_LOO_Linear/", -1)
+    #main(folder_path, "data/BDI/level3/bdi_df.csv", "diff", "BDI", "/results/level3/", 20)
+    #main(folder_path, "data/BDI/level3/bdi_df.csv", "ratio", "BDI", "/results/level3/", 20)
     
