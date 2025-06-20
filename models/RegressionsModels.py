@@ -511,7 +511,7 @@ class BaseRegressionModel:
         logging.info("Finished model evaluation.")
         return metrics
     
-    def feature_ablation(self) -> Dict:
+    def feature_ablation(self, folds: int = -1, get_shap=True, tune=False, tune_folds: int = 10) -> Dict:
         """
         Perform iterative feature ablation analysis using nested cross-validation.
 
@@ -523,7 +523,7 @@ class BaseRegressionModel:
         removals = []
         number_of_features = len(self.feature_selection['features'])
         for i in range(number_of_features):
-            metrics = self.nested_eval(folds=-1, get_shap=True, tune=False, tune_folds=10, ablation_idx=i)
+            metrics = self.nested_eval(folds=folds, get_shap=get_shap, tune=tune, tune_folds=tune_folds, ablation_idx=i)
             r2s.append(metrics['r2'])
             p_values.append(metrics['p_value'])
             importance = metrics['feature_importance']
