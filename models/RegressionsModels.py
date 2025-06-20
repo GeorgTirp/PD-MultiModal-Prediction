@@ -372,7 +372,7 @@ class BaseRegressionModel:
         all_shap_values = []
         all_shap_mean = []
         all_shap_variance = []
-
+        iter_idx = 0
         for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation", leave=False):
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
@@ -407,11 +407,11 @@ class BaseRegressionModel:
                     if isinstance(self, NGBoostRegressionModel):
                         shap_values_mean = self.feature_importance_mean(
                             top_n=-1, save_results=True,  
-                            iter_idx=val_index)
+                            iter_idx=iter_idx)
                         shap_values_variance, _, _ = self.feature_importance_variance(
                             top_n=-1, 
                             save_results=True, 
-                            iter_idx=val_index)
+                            iter_idx=iter_idx)
                         all_shap_mean.append(shap_values_mean)
                         all_shap_variance.append(shap_values_variance)
                     else:
@@ -419,7 +419,7 @@ class BaseRegressionModel:
                             top_n=-1, save_results=True, 
                             iter_idx=val_index)
                         all_shap_values.append(shap_values) 
-
+            iter_idx += 1
         if isinstance(self, NGBoostRegressionModel):
             pred_dists = np.vstack(pred_dists)
         preds = np.concatenate(preds)
