@@ -394,6 +394,7 @@ class BaseRegressionModel:
 
             # Get paramters of predictive Distribution
             if isinstance(self, NGBoostRegressionModel):
+                #if
                 pred_dist = self.model.pred_dist(X_val_kf).params
                 pred_dist = np.column_stack([pred_dist[key] for key in pred_dist.keys()])
                 pred_dists.append(pred_dist)
@@ -408,10 +409,18 @@ class BaseRegressionModel:
                         shap_values_mean = self.feature_importance_mean(
                             top_n=-1, save_results=True,  
                             iter_idx=iter_idx)
-                        shap_values_variance, _, _ = self.feature_importance_variance(
-                            top_n=-1, 
-                            save_results=True, 
-                            iter_idx=iter_idx)
+                        if self.prob_func == NormalInverseGamma:
+                            shap_values_variance, _, _ = self.feature_importance_variance(
+                                mode="nig",
+                                top_n=-1, 
+                                save_results=True, 
+                                iter_idx=iter_idx)
+                        elif self.prob_func == Normal:
+                            shap_values_variance = self.feature_importance_variance(
+                                mode="normal",
+                                top_n=-1, 
+                                save_results=True, 
+                                iter_idx=iter_idx)
                         all_shap_mean.append(shap_values_mean)
                         all_shap_variance.append(shap_values_variance)
                     else:
@@ -431,13 +440,16 @@ class BaseRegressionModel:
             aleatoric_uncertainty = np.concatenate(aleatorics)
         mse = mean_squared_error(y_vals, preds)
 
+        if ablation_idx is not None:
+            save_path = f'{self.save_path}/ablation/ablation_step[{ablation_idx}]/'
+            os.makedirs(save_path, exist_ok=True)
+            save_path = f'{save_path}{self.identifier}_{self.target_name}'
+        else:
+            save_path = f'{self.save_path}/{self.identifier}_{self.target_name}'
+
+        
         if get_shap:
-            if ablation_idx is not None:
-                save_path = f'{self.save_path}/ablation/'
-                os.makedirs(save_path, exist_ok=True)
-                save_path = f'{save_path}{self.identifier}_{self.target_name}_{ablation_idx}'
-            else:
-                save_path = f'{self.save_path}/{self.identifier}_{self.target_name}'
+            
             
             if isinstance(self, NGBoostRegressionModel):
                 all_shap_mean_array = np.stack(all_shap_mean, axis=0)
@@ -461,7 +473,10 @@ class BaseRegressionModel:
                 shap.summary_plot(variance_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
                 plt.title(f'{self.identifier} Summary Plot (Aggregated - Variance)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
-                plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated.png')
+                if self.prob_func == NormalInverseGamma:
+                    plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated.png')
+                elif self.prob_func == Normal:
+                    plt.savefig(f'{save_path}_std_shap_aggregated.png')
                 plt.close()
             else:
                 all_shap_mean_array = np.stack(all_shap_values, axis=0)
@@ -497,17 +512,14 @@ class BaseRegressionModel:
         }
         self.metrics = metrics
         metrics_df = pd.DataFrame([metrics])
-        metrics_df.to_csv(f'{self.save_path}/{self.identifier}_metrics.csv', index=False)
-        if ablation_idx == None:
-            # Save the trained model to a file
-            model_save_path = f'{self.save_path}/{self.identifier}_trained_model.pkl'
-            with open(model_save_path, 'wb') as model_file:
-                pickle.dump(self.model, model_file)
-        else:
-            model_save_path = f'{self.save_path}/{self.identifier}_{ablation_idx}_trained_model.pkl'
-            with open(model_save_path, 'wb') as model_file:
-                pickle.dump(self.model, model_file)
-            logging.info(f"Trained model saved to {model_save_path}.")
+        metrics_df.to_csv(f'{save_path}_metrics.csv', index=False)
+        
+        # Save the trained model to a file
+        model_save_path = f'{save_path}_trained_model.pkl'
+        with open(model_save_path, 'wb') as model_file:
+            pickle.dump(self.model, model_file)
+        
+        logging.info(f"Trained model saved to {model_save_path}.")
         logging.info("Finished model evaluation.")
         return metrics
     
@@ -523,7 +535,10 @@ class BaseRegressionModel:
         removals = []
         number_of_features = len(self.feature_selection['features'])
         for i in range(number_of_features):
+            save_path = f'{self.save_path}/ablation/'
             metrics = self.nested_eval(folds=folds, get_shap=get_shap, tune=tune, tune_folds=tune_folds, ablation_idx=i)
+            metrics_df = pd.DataFrame([metrics])
+            metrics_df.to_csv(f'{save_path}/ablation_step[{i}]/{self.identifier}_{self.target_name}_metrics.csv', index=False)
             r2s.append(metrics['r2'])
             p_values.append(metrics['p_value'])
             importance = metrics['feature_importance']
@@ -534,18 +549,20 @@ class BaseRegressionModel:
             self.y = self.y.drop(columns=[least_important_feature])
             self.feature_selection['features'].remove(least_important_feature)
             removals.append(least_important_feature)
+            if isinstance(self, NGBoostRegressionModel):
+                self.calibration_analysis(ablation_idx=i)
         
         # Define the custom color palette from your image
         custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
                 # Set Seaborn style, context, and custom palette
         sns.set_theme(style="whitegrid", context="paper")
         sns.set_palette(custom_palette)
-        path = f'{self.save_path}/{self.identifier}_{self.target_name}_feature_ablation.png'
+        path = f'{save_path}{self.identifier}_{self.target_name}_feature_ablation.png'
                 # Read in the CSV
         
         # Save the removals list as a CSV file
         removals_df = pd.DataFrame({'Removed_Features': removals})
-        removals_df.to_csv(f'{self.save_path}/{self.identifier}_ablation_history.csv', index=False)
+        removals_df.to_csv(f'{save_path}{self.identifier}_ablation_history.csv', index=False)
         # Create a figure
         plt.figure(figsize=(6, 4))
         x = np.arange(number_of_features)
@@ -1032,7 +1049,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
             }
         self.ngb_hparams = ngb_hparams
         self.model = NGBRegressor(**self.ngb_hparams)
-        self.model_name = "NGBoost Regression"
+        self.model_name = "NGBoost"
+        self.prob_func = ngb_hparams["Dist"]
         self.param_grid = param_grid
         if top_n == -1:
             self.top_n = len(self.feature_selection['features'])
@@ -1222,8 +1240,6 @@ class NGBoostRegressionModel(BaseRegressionModel):
     def feature_importance_mean(self, top_n: int = None, batch_size: int = 10, save_results: bool = True, iter_idx=None, ablation_idx=None) -> Dict:
         """ Compute feature importance for the predicted mean using SHAP KernelExplainer. """
         shap.initjs()
-        # Use a small random sample as background
-        background = shap.sample(self.X, 20)
 
         explainer = shap.TreeExplainer(self.model, model_output=0)
         shap_values = explainer.shap_values(self.X, check_additivity=True)
@@ -1245,6 +1261,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
 
     def feature_importance_variance(
             self, 
+            mode = "nig",
             top_n: int = None, 
             batch_size: int = 10, 
             save_results: bool = True, 
@@ -1252,71 +1269,91 @@ class NGBoostRegressionModel(BaseRegressionModel):
             ablation_idx=None) -> Dict:
         """ Compute feature importance for the predicted variance using SHAP KernelExplainer. """
         
+        if mode == "nig":
+            pred_dist = self.model.pred_dist(self.X).params
+            pred_dist = np.column_stack([pred_dist[key] for key in pred_dist.keys()]).T  # shape = (n_samples, 4)
+            lam_vals   =  pred_dist[1]                # λ: precision
+            alpha_vals =  pred_dist[2]            # α: shape
+            beta_vals  =  pred_dist[3]             # β: rate
 
-        pred_dist = self.model.pred_dist(self.X).params
-        pred_dist = np.column_stack([pred_dist[key] for key in pred_dist.keys()]).T  # shape = (n_samples, 4)
-        lam_vals   =  pred_dist[1]                # λ: precision
-        alpha_vals =  pred_dist[2]            # α: shape
-        beta_vals  =  pred_dist[3]             # β: rate
+            # 2) Compute predictive, epistemic, and aleatoric variances
+            var_pred = beta_vals / (lam_vals * (alpha_vals - 1))  # predictive
+            var_epi  = beta_vals / (lam_vals * (alpha_vals - 1)**2)  # epistemic
+            var_alea = beta_vals / (alpha_vals - 1)                  # aleatoric
 
-        # 2) Compute predictive, epistemic, and aleatoric variances
-        var_pred = beta_vals / (lam_vals * (alpha_vals - 1))  # predictive
-        var_epi  = beta_vals / (lam_vals * (alpha_vals - 1)**2)  # epistemic
-        var_alea = beta_vals / (alpha_vals - 1)                  # aleatoric
+            # 3) Derivatives for Taylor approx (∂var/∂param)
+            # Predictive
+            dpred_dbeta  = 1 / (lam_vals * (alpha_vals - 1))
+            dpred_dalpha = -beta_vals / (lam_vals * (alpha_vals - 1)**2)
+            dpred_dlam   = -beta_vals / (lam_vals**2 * (alpha_vals - 1))
 
-        # 3) Derivatives for Taylor approx (∂var/∂param)
-        # Predictive
-        dpred_dbeta  = 1 / (lam_vals * (alpha_vals - 1))
-        dpred_dalpha = -beta_vals / (lam_vals * (alpha_vals - 1)**2)
-        dpred_dlam   = -beta_vals / (lam_vals**2 * (alpha_vals - 1))
+            # Epistemic
+            depi_dbeta  = 1 / (lam_vals * (alpha_vals - 1)**2)
+            depi_dalpha = -2 * beta_vals / (lam_vals * (alpha_vals - 1)**3)
+            depi_dlam   = -beta_vals / (lam_vals**2 * (alpha_vals - 1)**2)
 
-        # Epistemic
-        depi_dbeta  = 1 / (lam_vals * (alpha_vals - 1)**2)
-        depi_dalpha = -2 * beta_vals / (lam_vals * (alpha_vals - 1)**3)
-        depi_dlam   = -beta_vals / (lam_vals**2 * (alpha_vals - 1)**2)
+            # Aleatoric
+            dalea_dbeta  = 1 / (alpha_vals - 1)
+            dalea_dalpha = -beta_vals / (alpha_vals - 1)**2
+            # dalpha_dlam = 0 (lam not involved)
 
-        # Aleatoric
-        dalea_dbeta  = 1 / (alpha_vals - 1)
-        dalea_dalpha = -beta_vals / (alpha_vals - 1)**2
-        # dalpha_dlam = 0 (lam not involved)
+            # 4) Get SHAP values per param
+            explainer = shap.TreeExplainer(self.model, model_output=1)
+            sh_lam = explainer.shap_values(self.X)
+            explainer = shap.TreeExplainer(self.model, model_output=2)
+            sh_alpha = explainer.shap_values(self.X)
+            explainer = shap.TreeExplainer(self.model, model_output=3)
+            sh_beta = explainer.shap_values(self.X)
 
-        # 4) Get SHAP values per param
-        explainer = shap.TreeExplainer(self.model, model_output=1)
-        sh_lam = explainer.shap_values(self.X)
-        explainer = shap.TreeExplainer(self.model, model_output=2)
-        sh_alpha = explainer.shap_values(self.X)
-        explainer = shap.TreeExplainer(self.model, model_output=3)
-        sh_beta = explainer.shap_values(self.X)
+
+            # 5) Apply chain rule (broadcast derivatives over feature axis)
+            shap_pred = (dpred_dbeta[:, None]  * sh_beta
+                       + dpred_dalpha[:, None] * sh_alpha
+                       + dpred_dlam[:, None]   * sh_lam)
+
+            shap_epi = (depi_dbeta[:, None]  * sh_beta
+                      + depi_dalpha[:, None] * sh_alpha
+                      + depi_dlam[:, None]   * sh_lam)
+
+            shap_alea = (dalea_dbeta[:, None]  * sh_beta
+               + dalea_dalpha[:, None] * sh_alpha)
+
+            shap.summary_plot(shap_pred, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+            plt.title(f'{self.identifier} NGBoost Variance SHAP Summary Plot (Aggregated)', fontsize=16)
+            if save_results:
+                plt.subplots_adjust(top=0.90)
+                if iter_idx is not None:
+                    save_path = self.save_path + "/singleSHAPs"
+                    os.makedirs(save_path, exist_ok=True)
+                    plt.savefig(f'{save_path}/{self.identifier}_ngboost_predicitve_uncertainty_shap_aggregated{iter_idx}.png')
+                elif ablation_idx is not None:
+                    save_path = self.save_path + "/ablationSHAPs"
+                    os.makedirs(save_path, exist_ok=True)
+                    plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_predicitve_uncertainty_shap_aggregated{ablation_idx}.png')
+                else:
+                    plt.savefig(f'{self.save_path}/{self.identifier}_predicitve_uncertainty_shap_aggregated.png')
+                plt.close()
+            return shap_pred, shap_epi, shap_alea
         
-
-        # 5) Apply chain rule (broadcast derivatives over feature axis)
-        shap_pred = (dpred_dbeta[:, None]  * sh_beta
-                   + dpred_dalpha[:, None] * sh_alpha
-                   + dpred_dlam[:, None]   * sh_lam)
-
-        shap_epi = (depi_dbeta[:, None]  * sh_beta
-                  + depi_dalpha[:, None] * sh_alpha
-                  + depi_dlam[:, None]   * sh_lam)
-
-        shap_alea = (dalea_dbeta[:, None]  * sh_beta
-           + dalea_dalpha[:, None] * sh_alpha)
-        
-        shap.summary_plot(shap_pred, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-        plt.title(f'{self.identifier} NGBoost Variance SHAP Summary Plot (Aggregated)', fontsize=16)
-        if save_results:
-            plt.subplots_adjust(top=0.90)
-            if iter_idx is not None:
-                save_path = self.save_path + "/singleSHAPs"
-                os.makedirs(save_path, exist_ok=True)
-                plt.savefig(f'{save_path}/{self.identifier}_ngboost_predicitve_uncertainty_shap_aggregated{iter_idx}.png')
-            elif ablation_idx is not None:
-                save_path = self.save_path + "/ablationSHAPs"
-                os.makedirs(save_path, exist_ok=True)
-                plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_predicitve_uncertainty_shap_aggregated{ablation_idx}.png')
-            else:
-                plt.savefig(f'{self.save_path}/{self.identifier}_predicitve_uncertainty_shap_aggregated.png')
-            plt.close()
-        return shap_pred, shap_epi, shap_alea
+        elif mode == "normal":
+            shap.initjs()
+            explainer = shap.TreeExplainer(self.model, model_output=1)
+            shap_values = explainer.shap_values(self.X, check_additivity=True)
+            shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+            plt.title(f'{self.identifier} NGBoost Variance SHAP Summary Plot (Aggregated)', fontsize=16)
+            if save_results:
+                plt.subplots_adjust(top=0.90)
+                if iter_idx is not None:
+                    save_path = self.save_path + "/singleSHAPs"
+                    os.makedirs(save_path, exist_ok=True)
+                    plt.savefig(f'{save_path}/{self.identifier}_std_shap_aggregated_beeswarm_{iter_idx}.png')
+                elif ablation_idx is not None:
+                    save_path = self.save_path + "/ablationSHAPs"
+                    plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_std_shap_aggregated_beeswarm{ablation_idx}.png')
+                else:
+                    plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_std_shap_aggregated_beeswarm.png')
+                plt.close()
+            return shap_values
     
     def compute_uncertainties(self, mode=["nig", "ensemble"], X: pd.DataFrame = None,  members: int = 10) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -1371,7 +1408,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
 
     
 
-    def calibration_analysis(self):
+    def calibration_analysis(self, ablation_idx = None):
         """
         Generate PIT histogram, QQ-plot, quantile‐calibration diagram, and CRPS.
         Assumes that after LOOCV you have stored in self.metrics:
@@ -1379,7 +1416,11 @@ class NGBoostRegressionModel(BaseRegressionModel):
           - 'y_test'   : the true y's for those held-out samples, length n_samples
         """
         # prepare output folder
-        save_path = os.path.join(self.save_path, "calibration")
+        if ablation_idx is not None:
+            save_path = f'{self.save_path}/ablation/ablation_step[{ablation_idx}]/calibration'
+        else:
+            save_path = f'{self.save_path}/calibration'
+        
         os.makedirs(save_path, exist_ok=True)
 
         # pull out true values + predicted parameters
@@ -1469,12 +1510,24 @@ class NGBoostRegressionModel(BaseRegressionModel):
         ece = np.mean(np.abs(np.array(obs) - qs))
         print(f"Expected Calibration Error (ECE): {ece:.4f}")
 
-        return {
-            'pit':          pit,
-            'quantile_cal': (qs, np.array(obs)),
-            'crps':         crps_vals,
-            'ece':          ece,
+        calibration_results = {
+            'ece': ece,
+            'avg_crps': avg_crps,
+            'baseline_crps': baseline_crps,
         }
+        # Save calibration_results as CSV
+        # Flatten the dict for CSV saving
+        cal_df = pd.DataFrame([calibration_results],)
+        cal_df.to_csv(f'{save_path}/calibration_metrics.csv', index=False)
+
+        # Save PIT and quantile calibration arrays as separate CSVs for clarity
+        pd.DataFrame({'pit': pit}).to_csv(f'{save_path}/pit_values.csv', index=False)
+        pd.DataFrame({'qs': qs, 'obs': obs}).to_csv(f'{save_path}/quantile_calibration.csv', index=False)
+        pd.DataFrame({'crps': crps_vals}).to_csv(f'{save_path}/crps_values.csv', index=False)
+        
+        return calibration_results
+       
+        
 
 class TabPFNRegression(BaseRegressionModel):
     """ TabPFN Regression Model """

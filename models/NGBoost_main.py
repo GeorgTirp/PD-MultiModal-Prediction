@@ -39,11 +39,11 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     X = X.sample(n=150, random_state=42)
     y = y.loc[X.index]
     std = y.std()
-    y = (y - y.mean()) / std  # Standardize the target variable
+    #y = (y - y.mean()) / std  # Standardize the target variable
     data_df = pd.concat([X, y.rename("target")], axis=1)
     Feature_Selection['target'] = "target"
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
-    safe_path = os.path.join(folder_path, "test/results/test_diabetes/NGBoost")
+    safe_path = os.path.join(folder_path, "test/test_diabetes/NGBoost")
     ### test ende
 
     
@@ -72,8 +72,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     
     # BEST ONES: 600, 0.1 and for regs 0.1 and 0.001
     NGB_Hparams = {
-        'Dist': NormalInverseGamma,
-        'Score' : NIGLogScore,
+        'Dist': Normal, #NormalInverseGamma,
+        'Score' : NormalCRPScore ,#NIGLogScore,
         'n_estimators': 100,
         'learning_rate': 0.01,
         'natural_gradient': True,
@@ -107,8 +107,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
-    #_,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=-1)
-    #model.calibration_analysis()
+    _,_, removals= model.feature_ablation(folds=folds, tune=False, tune_folds=-1)
+    model.calibration_analysis()
     
     
     #summands = [0, 0, 1, 0]
@@ -131,7 +131,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
 
 if __name__ == "__main__":
     #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
-    #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
+    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/level2_test/NGBoost", 20)
     
