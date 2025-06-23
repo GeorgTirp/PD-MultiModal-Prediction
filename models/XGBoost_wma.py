@@ -2,19 +2,16 @@ import warnings
 warnings.filterwarnings("ignore")
 import os
 os.environ["PYTHONWARNINGS"] = "ignore"
-from RegressionsModels import NGBoostRegressionModel
+from RegressionsModels import XGBoostRegressionModel
 import pandas as pd
 from faster_evidential_boost import NormalInverseGamma, NIGLogScore
 from ngboost.distns.normal import Normal, NormalCRPScore, NormalLogScore
 from sklearn.tree import DecisionTreeRegressor
 from matplotlib import pyplot as plt
 import numpy as np
+import logging
 from sklearn.preprocessing import StandardScaler
 from sklearn.datasets import load_diabetes
-from utils.my_logging import Logging
-from utils.messages import Messages
-from pprint import pformat
-
 
 # --- Dynamic Tobit bound functions ---
 ## Calculate wma specific scores
@@ -68,30 +65,8 @@ def load_updrs_subscores(path_to_updrs3, path_to_updrs2, demographics, set_of_su
 
 
 def main(folder_path, data_path, target, identifier, out, folds=10):
-    # --- DISPLAY WELCOME MESSAGE ---
-    Messages().welcome_message()
 
-    # --- SETUP PATHS ---
-    safe_path = os.path.join(folder_path, out)
-    if not os.path.exists(safe_path):
-        os.makedirs(safe_path)
-        os.makedirs(os.path.join(safe_path, 'log'))
-
-    # --- SETUP LOGGING ---
-    logging = Logging(f'{safe_path}/log').get_logger()
-
-    # --- Print all selected parameters ---
-    logging.info('-------------------------------------------')
-    logging.info(f"Folder Path: {folder_path}")
-    logging.info(f"Data Path: {data_path}")
-    logging.info(f"Target: {target}")
-    logging.info(f"Identifier: {identifier}")
-    logging.info(f"Output Path: {out}")
-    logging.info(f"Folds: {folds}")
-    logging.info('-------------------------------------------\n')
-
-
-    # --- WMA specific preprocessing ---
+    ###### WMA specific preprocessing ######
     df = pd.read_excel(data_path)
 
     # 1. Preprocess the specific columns
@@ -107,6 +82,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
 
     # 2. Standard scaling for numerical stability
     scaler_X = StandardScaler()
+
     scaler_y = StandardScaler()
     feature_cols = [col for col in data_df.columns if col != target]
     data_df[feature_cols] = scaler_X.fit_transform(data_df[feature_cols])
@@ -116,57 +92,53 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     # 3. Remove NaN values
     data_df = data_df.dropna()
     #
-    
-    # --- Data overview ---
-    num_subjects = data_df.shape[0]
-    num_features = data_df.shape[1] - 1  # exclude target
-    logging.info(f"Number of subjects: {num_subjects}")
-    logging.info(f"Number of features (excluding target): {num_features}")
-    logging.info("Sample of the processed data:")
-    logging.info(f"\n{data_df.head(5)}")
-    # --- WMA specific preprocessing end ---
-    
+    ### WMA specific preprocessing end ###
+
 
     Feature_Selection = {}
     Feature_Selection['target'] = target
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
+    safe_path = os.path.join(folder_path, out)
+    if not os.path.exists(safe_path):
+        os.makedirs(safe_path)
 
 
-    param_grid_ngb = {
-    'n_estimators': [300, 400, 500, 600],
-    'learning_rate': [0.05, 0.1],
-    'Base__max_depth': [3, 4],
-    'Score__evid_strength': [0.05, 0.1, 0.2],
-    'Score__kl_strength': [0.01, 0.05, 0.1],
+
+    test_split_size = 0.2
+    # XGBoost hyperparameter grid
+    param_grid_xgb = {
+        'n_estimators': [100, 200, 300],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'max_depth': [3, 4, 6],
+        'subsample': [0.7, 0.9],
+#        'colsample_bytree': [0.6, 0.8, 1.0],
+        'reg_alpha': [0, 0.1, 0.5],
+#        'reg_lambda': [1, 2, 5]
     }
 
-    logging.info(f"----- Parameter grid for NGBoost ----- \n" + pformat(param_grid_ngb) + "\n")
-    
-    # BEST ONES: 600, 0.1 and for regs 0.1 and 0.001
-    NGB_Hparams = {
-        'Dist': Normal, #NormalInverseGamma,
-        'Score' : NormalCRPScore ,#NIGLogScore,
-        'n_estimators': 600,
-        'learning_rate': 0.1,
-        'natural_gradient': True,
-        #'minibatch_frac': 0.1,
-        'verbose': False,
-        'Base': DecisionTreeRegressor(max_depth=3)  # specify the depth here
+    # Default XGBoost hyperparameters
+    XGB_Hparams = {
+        'n_estimators': 200,
+        'learning_rate': 0.05,
+        'max_depth': 4,
+        'subsample': 0.9,
+        'colsample_bytree': 0.8,
+        'reg_alpha': 0.1,
+        'reg_lambda': 2,
+        'random_state': 42,
+        'verbosity': 0
     }
-    logging.info(f"----- NGBoost Hyperparameters ----- \n" + pformat(NGB_Hparams) + "\n")
 
-    model = NGBoostRegressionModel(
+    model = XGBoostRegressionModel(
         data_df, 
         Feature_Selection, 
         target,
-        NGB_Hparams, 
-        0.2, 
+        XGB_Hparams, 
+        test_split_size, 
         safe_path, 
         identifier,
         -1,
-        param_grid_ngb,
-        logging=logging)
-    logging.info("Fitting the NGBoost model...")
+        param_grid_xgb)
     metrics = model.evaluate(
         folds=folds, 
         tune=False, 
@@ -174,16 +146,16 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         tune_folds=20, 
         get_shap=True,
         uncertainty=False)
-    logging.info("NGBoost model evaluation completed. \n")
     
+    # Set up logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    
+    # Log the metrics
+    logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
+    logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
-
-    logging.info("----- Starting the feature ablation process... -----")
-    _,_, removals= model.feature_ablation(folds=folds, tune=False, tune_folds=10)
-    logging.info("Feature ablation process completed. \n")
-    logging.info("----- Starting the calibration analysis... -----")
+    _,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=5)
     model.calibration_analysis()
-    logging.info("Calibration analysis completed. \n")
     
     
     summands = [0, 0, 1, 0]
@@ -207,5 +179,5 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
 if __name__ == "__main__":
     folder_path = "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Code/PD-MultiModal-Prediction/"
 
-    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features.xlsx", "updrs3_score", "WMA", "results/WMA/NGBoost_updrs3_Gauss", 10)
+    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features.xlsx", "moca", "WMA_XGBoost", "results/WMA/XGBoost_moca", 10)
     

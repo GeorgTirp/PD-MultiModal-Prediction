@@ -17,7 +17,6 @@ from typing import Tuple, Dict
 import matplotlib.pyplot as plt
 import numpy as np
 import shap
-import logging
 from tqdm import tqdm
 from xgboost import XGBRegressor
 from tabpfn import TabPFNRegressor
@@ -46,10 +45,6 @@ search_alg = BasicVariantGenerator()
 
 from hyperopt import hp
 #matplotlib.use('TkAgg') 
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
     
 class BaseRegressionModel:
     """Base class for supervised regression models using scikit-learn and SHAP.
@@ -82,7 +77,8 @@ class BaseRegressionModel:
             test_split_size: float = 0.2,
             save_path: str = None,
             identifier: str = None,
-            top_n: int = 10):
+            top_n: int = 10,
+            logging = None):
         """
         Initialize the regression model framework with dataset, feature selection, and settings.
 
@@ -94,9 +90,10 @@ class BaseRegressionModel:
             save_path (str, optional): Path to save model outputs and results. Defaults to None.
             identifier (str, optional): Unique identifier for this model run. Defaults to None.
             top_n (int, optional): Number of top features to display in SHAP plots. Defaults to 10.
+            logging (optional): Logger instance for logging messages. Defaults to None.
         """
-        
-        logging.info("Initializing BaseRegressionModel class...")
+        self.logging = logging if logging is not None else print
+        self.logging.info("Initializing BaseRegressionModel class...")
         self.feature_selection = feature_selection
         self.top_n = top_n
         self.X, self.y = self.model_specific_preprocess(data_df)
@@ -108,7 +105,7 @@ class BaseRegressionModel:
         self.target_name = target_name
         if not os.path.exists(save_path):
             os.makedirs(save_path)
-        logging.info("Finished initializing BaseRegressionModel class.")
+        self.logging.info("Finished initializing BaseRegressionModel class.")
 
     def model_specific_preprocess(self, data_df: pd.DataFrame, ceiling: list =["BDI", "MoCA"]) -> Tuple:
         """
@@ -122,7 +119,7 @@ class BaseRegressionModel:
             Tuple[pd.DataFrame, pd.Series]: Tuple containing preprocessed features (X) and target variable (y).
         """
 
-        logging.info("Starting model-specific preprocessing...")
+        self.logging.info("Starting model-specific preprocessing...")
         # Drop rows with missing values for features and target
         data_df = data_df.dropna(subset=self.feature_selection['features'] + [self.feature_selection['target']])
         X = data_df[self.feature_selection['features']]
@@ -138,17 +135,17 @@ class BaseRegressionModel:
         X = X.fillna(X.mean())
         X = X.apply(pd.to_numeric, errors='coerce')
         
-        logging.info("Finished model-specific preprocessing.")
+        self.logging.info("Finished model-specific preprocessing.")
         return X, y
 
     def fit(self) -> None:
         """
         Train the model on the training dataset split.
         """
-        logging.info(f"Starting {self.model_name} model training...")
+        self.logging.info(f"Starting {self.model_name} model training...")
         X_train, X_test, y_train, y_test = self.train_split
         self.model.fit(X_train, y_train)
-        logging.info(f"Finished {self.model_name} model training.")
+        self.logging.info(f"Finished {self.model_name} model training.")
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         """
@@ -160,9 +157,9 @@ class BaseRegressionModel:
         Returns:
             np.ndarray: Predicted target values.
         """
-        logging.info("Starting prediction...")
+        self.logging.info("Starting prediction...")
         pred = self.model.predict(X)
-        logging.info("Finished prediction.")
+        self.logging.info("Finished prediction.")
         return pred
 
     def evaluate(self, folds=10, get_shap=True, tune=False, tune_folds=10, nested=False, uncertainty=False) -> Dict:
@@ -209,7 +206,7 @@ class BaseRegressionModel:
         Returns:
             dict: Evaluation metrics including MSE, R², SHAP, and optional uncertainty.
         """
-        logging.info("Starting model evaluation...")
+        self.logging.info("Starting model evaluation...")
 
         if tune:
             if self.param_grid is None:
@@ -335,8 +332,8 @@ class BaseRegressionModel:
         model_save_path = f'{self.save_path}/{self.identifier}_{ablation_idx}_trained_model.pkl' if ablation_idx is not None else f'{self.save_path}/{self.identifier}_trained_model.pkl'
         with open(model_save_path, 'wb') as model_file:
             pickle.dump(self.model, model_file)
-        logging.info(f"Trained model saved to {model_save_path}.")
-        logging.info("Finished model evaluation.")
+        self.logging.info(f"Trained model saved to {model_save_path}.")
+        self.logging.info("Finished model evaluation.")
 
         return metrics
 
@@ -356,7 +353,7 @@ class BaseRegressionModel:
         Returns:
             dict: Dictionary of performance metrics, uncertainties, SHAP values, and predictions.
         """
-        logging.info("Starting model evaluation...")
+        self.logging.info("Starting model evaluation...")
         if folds == -1:
             kf = LeaveOneOut()
         else:
@@ -520,11 +517,11 @@ class BaseRegressionModel:
         with open(model_save_path, 'wb') as model_file:
             pickle.dump(self.model, model_file)
         
-        logging.info(f"Trained model saved to {model_save_path}.")
-        logging.info("Finished model evaluation.")
+        self.logging.info(f"Trained model saved to {model_save_path}.")
+        self.logging.info("Finished model evaluation.")
         return metrics
     
-    def feature_ablation(self, folds: int = -1, get_shap=True, tune=False, tune_folds: int = 10) -> Dict:
+    def feature_ablation(self, folds: int = -1, get_shap=True, tune=False, tune_folds: int = 10, features_per_step: int = 1, threshold_to_one_fps: int = 10) -> Dict:
         """
         Perform iterative feature ablation analysis using nested cross-validation.
 
@@ -535,7 +532,16 @@ class BaseRegressionModel:
         p_values = []
         removals = []
         number_of_features = len(self.feature_selection['features'])
-        for i in range(number_of_features):
+        i = 0
+        while number_of_features > 0:
+            # Determine the number of features to remove in this step
+            if number_of_features > threshold_to_one_fps:
+                # Remove multiple features (up to `features_per_step` if more than the threshold)
+                features_to_remove = min(features_per_step, number_of_features)
+            else:
+                # Remove just one feature at a time once the threshold is passed
+                features_to_remove = 1
+
             save_path = f'{self.save_path}/ablation/'
             metrics = self.nested_eval(folds=folds, get_shap=get_shap, tune=tune, tune_folds=tune_folds, ablation_idx=i)
             metrics_df = pd.DataFrame([metrics])
@@ -544,13 +550,31 @@ class BaseRegressionModel:
             p_values.append(metrics['p_value'])
             importance = metrics['feature_importance']
             importance_indices = np.argsort(importance)
-            least_important_feature = self.feature_selection['features'][importance_indices[0]]
-            self.X = self.X.drop(columns=[least_important_feature])
-            self.y = self.y.drop(columns=[least_important_feature])
-            self.feature_selection['features'].remove(least_important_feature)
-            removals.append(least_important_feature)
+
+            # Remove the least important features
+            least_important_features = [self.feature_selection['features'][idx] for idx in importance_indices[:features_to_remove]]
+            
+            # Update X, y, and feature list
+            self.X = self.X.drop(columns=least_important_features)
+            self.y = self.y.drop(columns=least_important_features)
+            for feature in least_important_features:
+                self.feature_selection['features'].remove(feature)
+            
+            removals.extend(least_important_features)
+
+            # Update the number of remaining features
+            number_of_features -= features_to_remove
+            
+            # If using a specific model, perform additional calibration if needed
             if isinstance(self, NGBoostRegressionModel):
                 self.calibration_analysis(ablation_idx=i)
+
+            # Increment the iteration counter (this is crucial when removing multiple features per step)
+            i += 1
+
+            # If features remaining are fewer than the threshold, switch to one-by-one ablation
+            if number_of_features <= threshold_to_one_fps:
+                features_per_step = 1  # From here on, remove only one feature at a time
         
         # Define the custom color palette from your image
         custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
@@ -629,7 +653,7 @@ class BaseRegressionModel:
             title (str): Title of the plot.
             modality (str, optional): Modality string to label axes (e.g., "MRI"). Defaults to empty string.
         """
-        logging.info("Starting plot generation.")
+        self.logging.info("Starting plot generation.")
         
         colors = {
             "deterioration": "04E762",
@@ -721,7 +745,7 @@ class BaseRegressionModel:
         plt.close()
 
         # Log info (optional)
-        logging.info("Plot saved to %s/%s_%s_actual_vs_predicted.png", 
+        self.logging.info("Plot saved to %s/%s_%s_actual_vs_predicted.png", 
                  self.save_path, self.identifier, self.target_name)
 
 
@@ -770,7 +794,7 @@ class LinearRegressionModel(BaseRegressionModel):
         """
     
         if iter_idx is None:
-            logging.info("Starting feature importance evaluation for Linear Regression...")
+            self.logging.info("Starting feature importance evaluation for Linear Regression...")
         # Use absolute value of coefficients (normalized)
         attribution = np.abs(self.model.coef_) / np.sum(np.abs(self.model.coef_))
         feature_names = self.feature_selection['features']
@@ -804,7 +828,7 @@ class LinearRegressionModel(BaseRegressionModel):
             plt.close()
             
         if iter_idx is None:
-            logging.info("Finished feature importance evaluation for Linear Regression.")
+            self.logging.info("Finished feature importance evaluation for Linear Regression.")
         return shap_values
 
 
@@ -857,7 +881,7 @@ class RandomForestModel(BaseRegressionModel):
             Dict: SHAP values for each feature across the dataset.
         """
         if iter_idx is None:
-            logging.info("Starting feature importance evaluation for Random Forest...")
+            self.logging.info("Starting feature importance evaluation for Random Forest...")
         # Use the feature_importances_ attribute of RandomForest
         attribution = self.model.feature_importances_
         feature_names = self.feature_selection['features']
@@ -890,7 +914,7 @@ class RandomForestModel(BaseRegressionModel):
             plt.close()
             
         if iter_idx is None:
-            logging.info("Finished feature importance evaluation for Random Forest.")
+            self.logging.info("Finished feature importance evaluation for Random Forest.")
         return shap_values
 
     def tune_hparams(self, X, y, param_grid: dict, folds=5) -> Dict:
@@ -908,7 +932,7 @@ class RandomForestModel(BaseRegressionModel):
         """
         if folds == -1:
             folds = len(X)
-        #logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
+        #self.logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
@@ -921,7 +945,7 @@ class RandomForestModel(BaseRegressionModel):
         self.model = grid_search.best_estimator_
         self.model.set_params(**best_params)
         self.rf_hparams.update(best_params)
-        #logging.info(f"Best parameters found: {best_params}")
+        #self.logging.info(f"Best parameters found: {best_params}")
         return best_params
     
 
@@ -989,7 +1013,7 @@ class XGBoostRegressionModel(BaseRegressionModel):
         """
         if folds == -1:
             folds = len(X)
-        #logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
+        #self.logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
@@ -1003,7 +1027,7 @@ class XGBoostRegressionModel(BaseRegressionModel):
         self.model = grid_search.best_estimator_
         self.xgb_hparams.update(best_params)
         self.model.set_params(**best_params)
-        #logging.info(f"Best parameters found: {best_params}")
+        #self.logging.info(f"Best parameters found: {best_params}")
         return best_params
     
 
@@ -1022,9 +1046,10 @@ class NGBoostRegressionModel(BaseRegressionModel):
             save_path: str = None,
             identifier: str = None,
             top_n: int = -1,
-            param_grid: dict = None):
+            param_grid: dict = None,
+            logging = None):
         
-        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n)
+        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n, logging=logging)
         # Set default hyperparameters if not provided
         if ngb_hparams is None:
             ngb_hparams = {
@@ -1045,15 +1070,15 @@ class NGBoostRegressionModel(BaseRegressionModel):
         """ Predict using the trained NGBoost model.
             By default, return the mean predictions.
         """
-        logging.info("Starting NGBoost prediction...")
+        self.logging.info("Starting NGBoost prediction...")
         # NGBoost's predict method returns the mean predictions
         pred = self.model.predict(X)
-        logging.info("Finished NGBoost prediction.")
+        self.logging.info("Finished NGBoost prediction.")
         return pred
 
     def predict_with_uncertainty(self, X: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """ Returns both the mean predictions and the variance (from the predictive distribution). """
-        logging.info("Starting NGBoost prediction with uncertainty estimation...")
+        self.logging.info("Starting NGBoost prediction with uncertainty estimation...")
         pred_dist = self.model.pred_dist(X)
         pass
 
@@ -1533,26 +1558,26 @@ class TabPFNRegression(BaseRegressionModel):
 
     def model_specific_preprocess(self, data_df: pd.DataFrame) -> Tuple:
         """ Preprocess the data for the TabPFN model """
-        logging.info("Starting TabPFN model-specific preprocessing...")
+        self.logging.info("Starting TabPFN model-specific preprocessing...")
         # Drop rows with missing values for features and target
         data_df = data_df.dropna(subset=self.feature_selection['features'] + [self.feature_selection['target']])
         X = data_df[self.feature_selection['features']]
         y = data_df[self.feature_selection['target']]
         # Ensure features are numeric
         X = X.apply(pd.to_numeric, errors='coerce')
-        logging.info("Finished TabPFN model-specific preprocessing.")
+        self.logging.info("Finished TabPFN model-specific preprocessing.")
         return X, y
 
     def feature_importance(self, top_n: int = 10, batch_size: int = 10, save_results=True) -> Tuple:
         """ Compute feature importance for TabPFN using LOCO and SHAP evaluations """
-        logging.info("Starting feature importance evaluation for TabPFN Regression.")
+        self.logging.info("Starting feature importance evaluation for TabPFN Regression.")
         X_train, X_test, y_train, y_test = self.train_split
 
         def loco_importances(X_train, y_test):
-            logging.info("Starting LOCO importance evaluation...")
+            self.logging.info("Starting LOCO importance evaluation...")
             importances = {}
             for i, feature in enumerate(X_train.columns):
-                logging.info(f"Evaluating LOCO importance for feature {i + 1}/{len(X_train.columns)}: {feature}")
+                self.logging.info(f"Evaluating LOCO importance for feature {i + 1}/{len(X_train.columns)}: {feature}")
                 # Remove the feature from the training and test sets
                 X_train_loco = X_train.drop(columns=[feature])
                 X_test_loco = X_test.drop(columns=[feature])
@@ -1563,12 +1588,12 @@ class TabPFNRegression(BaseRegressionModel):
                 loco_mse = mean_squared_error(y_test, loco_pred)
                 importances[feature] = abs(loco_mse - self.metrics['mse']) / self.metrics['mse']
                 if (i + 1) % 10 == 0 or (i + 1) == len(X_train.columns):
-                    logging.info(f"Progress: {i + 1}/{len(X_train.columns)} features evaluated.")
-            logging.info("Finished LOCO importance evaluation.")
+                    self.logging.info(f"Progress: {i + 1}/{len(X_train.columns)} features evaluated.")
+            self.logging.info("Finished LOCO importance evaluation.")
             return importances
 
         def shap_importances(batch_size):
-            logging.info("Starting SHAP importance evaluation for TabPFN...")
+            self.logging.info("Starting SHAP importance evaluation for TabPFN...")
             shap.initjs()
             # Use a small background sample for the KernelExplainer
             background = shap.sample(self.X, 20)
@@ -1584,7 +1609,7 @@ class TabPFNRegression(BaseRegressionModel):
                 shap_values_batch = explainer.shap_values(batch, nsamples=300)
                 all_shap_values.append(shap_values_batch)
             shap_values = np.concatenate(all_shap_values, axis=0)
-            logging.info(f"SHAP values shape: {shap_values.shape}")
+            self.logging.info(f"SHAP values shape: {shap_values.shape}")
             # Plot aggregated SHAP values (beeswarm and bar plots)
             shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=top_n)
             plt.title(f'{self.identifier} SHAP Summary Plot (Aggregated)', fontsize=16)
@@ -1595,19 +1620,19 @@ class TabPFNRegression(BaseRegressionModel):
                 shap.summary_plot(shap_values, self.X, plot_type="bar", show=False)
                 plt.savefig(f'{self.save_path}/{self.identifier}_tabpfn_shap_aggregated_bar.png')
                 plt.close()
-            logging.info("Finished SHAP importance evaluation for TabPFN.")
+            self.logging.info("Finished SHAP importance evaluation for TabPFN.")
             return shap_values
 
-        logging.info("Evaluating SHAP feature importances for TabPFN...")
+        self.logging.info("Evaluating SHAP feature importances for TabPFN...")
         shap_attributions = shap_importances(batch_size)
-        logging.info("SHAP importance evaluation completed for TabPFN.")
+        self.logging.info("SHAP importance evaluation completed for TabPFN.")
     
-        logging.info("Evaluating LOCO feature importances for TabPFN...")
+        self.logging.info("Evaluating LOCO feature importances for TabPFN...")
         loco_attributions = loco_importances(X_train, y_test)
-        logging.info("LOCO importance evaluation completed for TabPFN.")
+        self.logging.info("LOCO importance evaluation completed for TabPFN.")
     
         if save_results:
-            logging.info(f"Saving SHAP attributions to {self.save_path}/{self.identifier}_tabpfn_mean_shap_values.npy")
+            self.logging.info(f"Saving SHAP attributions to {self.save_path}/{self.identifier}_tabpfn_mean_shap_values.npy")
             np.save(f'{self.save_path}/{self.identifier}_tabpfn_mean_shap_values.npy', shap_attributions)
     
         return loco_attributions, shap_attributions
