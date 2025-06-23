@@ -9,3 +9,4 @@ __pycache__/
 # Georg's ignores
 /results
 /data
+/test
