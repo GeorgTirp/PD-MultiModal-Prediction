@@ -425,8 +425,9 @@ class BaseRegressionModel:
                         all_shap_variance.append(shap_values_variance)
                     else:
                         shap_values = self.feature_importance(
-                            top_n=-1, save_results=True, 
-                            iter_idx=val_index)
+                            top_n=-1, 
+                            save_results=True, 
+                            iter_idx=iter_idx)
                         all_shap_values.append(shap_values) 
             iter_idx += 1
         if isinstance(self, NGBoostRegressionModel):
@@ -956,40 +957,26 @@ class XGBoostRegressionModel(BaseRegressionModel):
         if top_n == -1:
             self.top_n = len(self.feature_selection['features'])
 
-    def feature_importance(self, top_n: int = None, save_results=True, iter_idx = None) -> Dict:
-        """ Compute feature importance using the built-in attribute for XGBoost """
-        
-        if iter_idx is None:
-            logging.info("Starting feature importance evaluation for XGBoost Regression...")
-        # Use the feature_importances_ attribute of XGBoost
-        attribution = self.model.feature_importances_
-        feature_names = self.feature_selection['features']
-        indices = np.argsort(attribution)[-self.top_n:][::-1]
-        top_features = {feature_names[i]: attribution[i] for i in indices}
-        if save_results:
-            np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_feature_importance.npy', top_features)
-        
-        self.importances = top_features
-
-        # Compute SHAP values using a tree explainer
+    def feature_importance(self, top_n: int = None, batch_size: int = 10, save_results: bool = True, iter_idx=None, ablation_idx=None) -> Dict:
+        """ Compute feature importance for the predicted mean using SHAP KernelExplainer. """
         shap.initjs()
+
         explainer = shap.TreeExplainer(self.model)
-        shap_values = explainer.shap_values(self.X)
-        # Plot aggregated SHAP values (beeswarm and bar plots)
+        shap_values = explainer.shap_values(self.X, check_additivity=True)
         shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-        plt.title(f'{self.identifier} {self.target_name}  SHAP Summary Plot (aggregated)', fontsize=16)
+        plt.title(f'{self.identifier} NGBoost Mean SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
             if iter_idx is not None:
                 save_path = self.save_path + "/singleSHAPs"
                 os.makedirs(save_path, exist_ok=True)
-                plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_xgb_shap_beeswarm_{iter_idx}.png')
+                plt.savefig(f'{save_path}/{self.identifier}_mean_shap_aggregated_beeswarm_{iter_idx}.png')
+            elif ablation_idx is not None:
+                save_path = self.save_path + "/ablationSHAPs"
+                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm{ablation_idx}.png')
             else:
-                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_xgb_shap_aggregated_beeswarm.png')
+                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_aggregated_beeswarm.png')
             plt.close()
-            
-        if iter_idx is None:  
-            logging.info("Finished feature importance evaluation for XGBoost Regression.")
         return shap_values
     
     def tune_hparams(self, X, y, param_grid: dict, folds=5) -> Dict:
