@@ -177,25 +177,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
-    _,_, removals= model.feature_ablation(folds=folds, tune=False, tune_folds=5)
-    model.calibration_analysis()
-    
-    
-    summands = [0, 0, 1, 0]
-    param_names  = ["mu", "lambda", "alpha", "beta"]
-    for i in range(len(param_names)):
-        if i == 0:
-            param = metrics["pred_dist"][i] + summands[i]
-        param = np.exp(metrics["pred_dist"][i]) + summands[i]
-        print(metrics["pred_dist"][i].shape)
-        plt.figure()
-        plt.hist(param, bins=20, alpha=0.7, color='blue', edgecolor='black')
-        plt.title(f"Histogram of {param_names[i]} - Sample {i+1}")
-        plt.xlabel(f"{param_names[i]} values")
-        plt.ylabel("Frequency")
-        plt.grid(True)
-        plt.savefig(os.path.join(safe_path, f"histogram_{param_names[i]}_sample.png"))
-        plt.close()
+    _,_, removals= model.feature_ablation(folds=folds, tune=False, tune_folds=5, features_per_step=5, threshold_to_one_fps=10)
         
         
 

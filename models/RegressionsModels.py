@@ -539,7 +539,6 @@ class BaseRegressionModel:
         with open(model_save_path, 'wb') as model_file:
             pickle.dump(self.model, model_file)
         
-        self.logging.info(f"Trained model saved to {model_save_path}.")
         self.logging.info("Finished model evaluation.")
         return metrics
     
@@ -555,6 +554,8 @@ class BaseRegressionModel:
         removals = []
         number_of_features = len(self.feature_selection['features'])
         i = 0
+        steps = []
+
         while number_of_features > 0:
             self.logging.info(f"---- Starting ablation step {i} with {number_of_features} features remaining. ----")
             # Determine the number of features to remove in this step
@@ -592,45 +593,37 @@ class BaseRegressionModel:
             if isinstance(self, NGBoostRegressionModel):
                 self.calibration_analysis(ablation_idx=i)
 
-            # Increment the iteration counter (this is crucial when removing multiple features per step)
             i += 1
+            steps.append(i)
 
             # If features remaining are fewer than the threshold, switch to one-by-one ablation
             if number_of_features <= threshold_to_one_fps:
                 features_per_step = 1  # From here on, remove only one feature at a time
 
-            self.logging.info(f"Feature ablation finished. Final R2: {r2s[-1] if r2s else 'N/A'}, min R2: {np.min(r2s) if r2s else 'N/A'}, max R2: {np.max(r2s) if r2s else 'N/A'}")
+            self.logging.info(f"Ablation step finished. Final R2: {r2s[-1] if r2s else 'N/A'}, min R2: {np.min(r2s) if r2s else 'N/A'}, max R2: {np.max(r2s) if r2s else 'N/A'} \n")
         
-        # Define the custom color palette from your image
         custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
-                # Set Seaborn style, context, and custom palette
         sns.set_theme(style="whitegrid", context="paper")
         sns.set_palette(custom_palette)
         path = f'{save_path}{self.identifier}_{self.target_name}_feature_ablation.png'
-                # Read in the CSV
-        
+
         # Save the removals list as a CSV file
         removals_df = pd.DataFrame({'Removed_Features': removals})
         removals_df.to_csv(f'{save_path}{self.identifier}_ablation_history.csv', index=False)
-        # Create a figure
-        plt.figure(figsize=(6, 4))
-        x = np.arange(number_of_features)
-                # Create a figure
-        plt.figure(figsize=(6, 4))
-                # Plot each model's R² scores in a loop, using sample_sizes on the x-axis
-        #for model_name, r2_scores in results.items():
-        plot_df = pd.DataFrame({'x': x, 'r2s': r2s})
-        sns.lineplot(data=plot_df, x='x', y='r2s', label="R Score", marker='o')
 
-                # Optionally use a log scale for the x-axis if you want to emphasize the “logarithmic” nature
-        # Label the axes and set the title
-        plt.xlabel("Number of removed features")
-        plt.ylabel("R Score")
-        plt.title("R Scores Over Feature Ablation")
+        # Create a plot for R² scores over feature ablation steps
+        plt.figure(figsize=(6, 4))
+        plot_df = pd.DataFrame({'x': steps, 'r2s': r2s})
+        sns.lineplot(data=plot_df, x='x', y='r2s', label="R² Score", marker='o')
+
+        plt.xlabel("Number of ablation steps")
+        plt.ylabel("R² Score")
+        plt.title("R² Scores Over Feature Ablation")
         plt.legend()
         plt.tight_layout()
         plt.savefig(path, dpi=300, bbox_inches='tight')
         plt.close()
+
         return r2s, p_values, removals
             
 
