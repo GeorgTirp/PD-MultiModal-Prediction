@@ -113,8 +113,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     
     # BEST ONES: 600, 0.1 and for regs 0.1 and 0.001
     NGB_Hparams = {
-        'Dist': NormalInverseGamma,
-        'Score' : NIGLogScore,
+        'Dist': Normal, #NormalInverseGamma,
+        'Score' : NormalCRPScore ,#NIGLogScore,
         'n_estimators': 600,
         'learning_rate': 0.1,
         'natural_gradient': True,
@@ -148,7 +148,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
-    _,_, removals= model.feature_ablation()
+    _,_, removals= model.feature_ablation(folds=folds, tune=False, tune_folds=10)
     model.calibration_analysis()
     
     
@@ -173,5 +173,5 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
 if __name__ == "__main__":
     folder_path = "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Code/PD-MultiModal-Prediction/"
 
-    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features.xlsx", "moca", "WMA", "results/WMA/NGBoost_Moca", 10)
+    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features.xlsx", "moca", "WMA", "results/WMA/NGBoost_Moca_Gauss", 10)
     
