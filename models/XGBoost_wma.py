@@ -100,7 +100,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
                             set_of_subjects='baseline',
                             clinical_score=target)
     data_df = pd.merge(df, updrs_subscores[['PATNO', 'TDPIGD', 'TD_avg', 'PIGD_avg']], on='PATNO', how='left')
-    data_df = data_df[[target] + [col for col in data_df.columns if col.startswith('nmf_')] + ['Age'] + ['Sex'] + ['DOMSIDE']]
+    data_df = data_df[[target] + [col for col in data_df.columns if col.startswith('nmf_')] + ['Age'] + ['Sex'] + ['DOMSIDE'] + ['duration_yrs'] + ['moca'] + ['td_pigd']]
     data_df['Sex'] = data_df['Sex'].map({'M': 1, 'F': 0})
     #
 
@@ -110,8 +110,10 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     feature_cols = [col for col in data_df.columns if col != target]
     data_df[feature_cols] = scaler_X.fit_transform(data_df[feature_cols])
     data_df[target] = scaler_y.fit_transform(data_df[[target]])
-    #
-
+    # Shuffle the target variable
+    #shuffled_target = data_df[target].sample(frac=1, random_state=42).reset_index(drop=True)
+    #data_df[target] = shuffled_target
+    
     # 3. Remove NaN values
     data_df = data_df.dropna()
     #
@@ -130,12 +132,12 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     test_split_size = 0.2
     # XGBoost hyperparameter grid
     param_grid_xgb = {
-        'n_estimators': [100, 200, 300],
+        'n_estimators': [50, 100, 200],
         'learning_rate': [0.01, 0.05, 0.1],
         'max_depth': [3, 4, 6],
-        'subsample': [0.7, 0.9],
-#        'colsample_bytree': [0.6, 0.8, 1.0],
-        'reg_alpha': [0, 0.1, 0.5],
+        'subsample': [0.5, 0.7],
+        'colsample_bytree': [0.6, 0.8, 1.0],
+#        'reg_alpha': [0, 0.1, 0.5],
 #        'reg_lambda': [1, 2, 5]
     }
     logging.info(f"----- Parameter grid for XGBoost ----- \n" + pformat(param_grid_xgb) + "\n")
@@ -177,12 +179,12 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
-    _,_, removals= model.feature_ablation(folds=folds, tune=False, tune_folds=5, features_per_step=5, threshold_to_one_fps=10)
+    _,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=5, features_per_step=2, threshold_to_one_fps=10)
         
         
 
 if __name__ == "__main__":
     folder_path = "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Code/PD-MultiModal-Prediction/"
 
-    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features.xlsx", "moca", "WMA_XGBoost", "results/WMA/XGBoost_moca", 10)
+    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs_totscore", "WMA", "results/WMA_refined/XGBoost_updrs_totscore_tuned", 10)
     

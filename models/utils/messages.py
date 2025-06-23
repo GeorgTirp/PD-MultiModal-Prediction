@@ -8,7 +8,7 @@ class Messages:
         # --- DISPLAY FULL PREPROCESSING PIPELINE MESSAGE ---
         print("""
 ==================================================
-        🧠  PD Multi-Modal Prediction Pipeline  🧠
+    🧠  PD Multi-Modal Prediction Pipeline  🧠
 ==================================================
 
 Welcome to the **PD-MultiModal-Prediction** framework!

@@ -442,7 +442,9 @@ class BaseRegressionModel:
             os.makedirs(save_path, exist_ok=True)
             save_path = f'{save_path}{self.identifier}_{self.target_name}'
         else:
-            save_path = f'{self.save_path}/{self.identifier}_{self.target_name}'
+            eval_save_path = f'{self.save_path}/model_evaluation'
+            os.makedirs(eval_save_path, exist_ok=True)
+            save_path = f'{eval_save_path}/{self.identifier}_{self.target_name}'
 
         
         if get_shap:
@@ -487,6 +489,7 @@ class BaseRegressionModel:
                 with open(f'{save_path}_shap_explanations.pkl', 'wb') as fp:
                     pickle.dump(mean_shap_values, fp)
                 plt.close()
+
             np.save(f'{save_path}_all_shap_values(mu).npy', all_shap_mean_array)
             
             
@@ -494,7 +497,7 @@ class BaseRegressionModel:
             feature_importances = np.mean(np.abs(mean_shap_values), axis=0)
             feature_importance_dict = dict(zip(self.X.columns, feature_importances))
             # Save feature importances to a file
-            
+        
 
         metrics = {
         'mse': mse,
@@ -527,6 +530,7 @@ class BaseRegressionModel:
             Tuple[list, list, list]: Lists of R² scores, p-values, and removed feature names after each ablation step.
         """
         r2s = []
+        mses = []
         p_values = []
         removals = []
         number_of_features = len(self.feature_selection['features'])
@@ -548,6 +552,7 @@ class BaseRegressionModel:
             metrics_df = pd.DataFrame([metrics])
             metrics_df.to_csv(f'{save_path}/ablation_step[{i}]/{self.identifier}_{self.target_name}_metrics.csv', index=False)
             r2s.append(metrics['r2'])
+            mses.append(metrics['mse'])
             p_values.append(metrics['p_value'])
             importance = metrics['feature_importance']
             importance_indices = np.argsort(importance)
@@ -577,12 +582,14 @@ class BaseRegressionModel:
             if number_of_features <= threshold_to_one_fps:
                 features_per_step = 1  # From here on, remove only one feature at a time
 
-            self.logging.info(f"Ablation step finished. Final R2: {r2s[-1] if r2s else 'N/A'}, min R2: {np.min(r2s) if r2s else 'N/A'}, max R2: {np.max(r2s) if r2s else 'N/A'} \n")
+            self.logging.info(f"✅ Done. Pearson-R: {metrics['r2']}, p-value: {metrics['p_value']} \n")
+        
         
         custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
         sns.set_theme(style="whitegrid", context="paper")
         sns.set_palette(custom_palette)
-        path = f'{save_path}{self.identifier}_{self.target_name}_feature_ablation.png'
+        path_r2 = f'{save_path}{self.identifier}_{self.target_name}_feature_ablation.png'
+        path_mse = f'{save_path}{self.identifier}_{self.target_name}_feature_ablation_mse.png'
 
         # Save the removals list as a CSV file
         removals_df = pd.DataFrame({'Removed_Features': removals})
@@ -591,14 +598,25 @@ class BaseRegressionModel:
         # Create a plot for R² scores over feature ablation steps
         plt.figure(figsize=(6, 4))
         plot_df = pd.DataFrame({'x': steps, 'r2s': r2s})
-        sns.lineplot(data=plot_df, x='x', y='r2s', label="R² Score", marker='o')
-
+        sns.lineplot(data=plot_df, x='x', y='r2s', label="Pearson-R Score", marker='o', color=custom_palette[2])
         plt.xlabel("Number of ablation steps")
-        plt.ylabel("R² Score")
-        plt.title("R² Scores Over Feature Ablation")
+        plt.ylabel("Pearson-R Score")
+        plt.title("Pearson-R Scores Over Feature Ablation")
         plt.legend()
         plt.tight_layout()
-        plt.savefig(path, dpi=300, bbox_inches='tight')
+        plt.savefig(path_r2, dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # Create a plot for MSE over feature ablation steps
+        plt.figure(figsize=(6, 4))
+        plot_df_mse = pd.DataFrame({'x': steps, 'mse': mses})
+        sns.lineplot(data=plot_df_mse, x='x', y='mse', label="MSE", marker='o', color=custom_palette[1])
+        plt.xlabel("Number of ablation steps")
+        plt.ylabel("MSE")
+        plt.title("MSE Over Feature Ablation")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(path_mse, dpi=300, bbox_inches='tight')
         plt.close()
 
         return r2s, p_values, removals
@@ -740,7 +758,7 @@ class BaseRegressionModel:
         plt.close()
 
         # Log info (optional)
-        self.logging.info("Plot saved to %s/%s_%s_actual_vs_predicted.png", 
+        self.logging.info("Plot saved to %s/%s_%s_actual_vs_predicted.png \n", 
                  self.save_path, self.identifier, self.target_name)
 
 

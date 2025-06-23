@@ -179,7 +179,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
 
     logging.info("----- Starting the feature ablation process... -----")
-    _,_, removals= model.feature_ablation(folds=folds, tune=False, tune_folds=10)
+    _,_, removals= model.feature_ablation(folds=folds, tune=False, tune_folds=10, features_per_step=5, threshold_to_one_fps=10)
     logging.info("Feature ablation process completed. \n")
     logging.info("----- Starting the calibration analysis... -----")
     model.calibration_analysis()
