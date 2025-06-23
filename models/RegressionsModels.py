@@ -78,7 +78,8 @@ class BaseRegressionModel:
             save_path: str = None,
             identifier: str = None,
             top_n: int = 10,
-            logging = None):
+            logging = None,
+            standardize: bool = False) -> None:
         """
         Initialize the regression model framework with dataset, feature selection, and settings.
 
@@ -96,7 +97,7 @@ class BaseRegressionModel:
         self.logging.info("Initializing BaseRegressionModel class...")
         self.feature_selection = feature_selection
         self.top_n = top_n
-        self.X, self.y = self.model_specific_preprocess(data_df)
+        self.X, self.y, self.z, self.m, self.std = self.model_specific_preprocess(data_df)
         self.train_split = train_test_split(self.X, self.y, test_size=test_split_size, random_state=42)
         self.save_path = save_path
         self.identifier = identifier
@@ -135,8 +136,11 @@ class BaseRegressionModel:
         X = X.fillna(X.mean())
         X = X.apply(pd.to_numeric, errors='coerce')
         
+        m = y.mean()
+        std = y.std()
+        z = (y - m) / std  # Standardize the target variable
         self.logging.info("Finished model-specific preprocessing.")
-        return X, y
+        return X, y, z, m, std
 
     def fit(self) -> None:
         """
@@ -337,7 +341,14 @@ class BaseRegressionModel:
         return metrics
 
 
-    def nested_eval(self, folds=10, get_shap=True, tune=False, tune_folds=10, uncertainty=False, ablation_idx=None) -> Dict:
+    def nested_eval(
+            self, 
+            folds=10, 
+            get_shap=True, 
+            tune=False, 
+            tune_folds=10, 
+            uncertainty=False, 
+            ablation_idx=None) -> Dict:
         """
         Perform nested cross-validation evaluation with optional tuning, SHAP, uncertainty estimation, and ablation.
 
@@ -371,7 +382,16 @@ class BaseRegressionModel:
         iter_idx = 0
         for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation", leave=False):
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
+            
+            
+            
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
+
+            if self.standardize:
+                self.m = y_train_kf.mean()
+                self.std = y_train_kf.std()
+                y_train_kf = (y_train_kf - self.m) / self.std
+                y_val_kf = (y_val_kf - self.m) / self.std  # Standardize the target variable
             if tune:
                 self.tune_hparams(X_train_kf, y_train_kf, self.param_grid, tune_folds)
                 #tune = False
@@ -379,6 +399,9 @@ class BaseRegressionModel:
                 self.model.fit(X_train_kf, y_train_kf)
 
             pred = self.model.predict(X_val_kf)
+            if self.standardize:
+                pred = pred * self.std + self.m
+                y_vals = y_val_kf * self.std + self.m
             preds.append(pred)
             y_vals.append(y_val_kf)
 
@@ -1271,6 +1294,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
             else:
                 plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_aggregated_beeswarm.png')
             plt.close()
+        if self.standardize:
+            shap_values = shap_values * self.std
         return shap_values
 
     def feature_importance_variance(
@@ -1347,6 +1372,10 @@ class NGBoostRegressionModel(BaseRegressionModel):
                 else:
                     plt.savefig(f'{self.save_path}/{self.identifier}_predicitve_uncertainty_shap_aggregated.png')
                 plt.close()
+            if self.standardize:
+                shap_pred = shap_pred * self.std
+                shap_epi = shap_epi * self.std
+                shap_alea = shap_alea * self.std
             return shap_pred, shap_epi, shap_alea
         
         elif mode == "normal":
@@ -1367,6 +1396,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
                 else:
                     plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_std_shap_aggregated_beeswarm.png')
                 plt.close()
+            if self.standardize:
+                shap_values = shap_values * self.std
             return shap_values
     
     def compute_uncertainties(self, mode=["nig", "ensemble"], X: pd.DataFrame = None,  members: int = 10) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
