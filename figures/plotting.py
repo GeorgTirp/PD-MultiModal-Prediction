@@ -402,7 +402,6 @@ def regression_figures(
         N = len(plot_df)
         # Color the background: left of y=0 as improvement, right as deterioration
         ax = plt.gca()
-        ax = plt.gca()
         # get current y‐limits
         min_y, max_y = ax.get_ylim()
 
@@ -570,22 +569,47 @@ def threshold_figure(
         feature_neg_shap = feature[mask_neg]
         feature_pos_shap = feature[mask_pos]
 
+
         # Common bins over the raw feature range
         fmin, fmax = feature.min(), feature.max()
         bins = np.linspace(fmin, fmax, 30)
 
-        ax.hist(
-            feature_neg_shap,
-            bins=bins,
+        # Compute histogram counts manually
+        counts_neg, _ = np.histogram(feature_neg_shap, bins=bins)
+        counts_pos, _ = np.histogram(feature_pos_shap, bins=bins)
+
+        # Compute error bars as Poisson (sqrt of counts)
+        err_neg = np.sqrt(counts_neg)
+        err_pos = np.sqrt(counts_pos)
+
+        # Bar positions and width
+        bar_positions = (bins[:-1] + bins[1:]) / 2
+        bar_width = bins[1] - bins[0]
+
+        # Plot negative‐SHAP bars
+        ax.bar(
+            bar_positions,
+            counts_neg,
+            #yerr=err_neg,
+            #capsize=5,
+            width=bar_width,
             color=colors["improvement"],
             alpha=0.7,
+            edgecolor=colors["imp_edge"],
+            linewidth=1.5,
             label="negative SHAPs"
         )
-        ax.hist(
-            feature_pos_shap,
-            bins=bins,
+        # Plot positive‐SHAP bars
+        ax.bar(
+            bar_positions,
+            counts_pos,
+            #yerr=err_pos,
+            #capsize=5,
+            width=bar_width,
             color=colors["deterioration"],
             alpha=0.7,
+            edgecolor=colors["det_edge"],
+            linewidth=1.5,
             label="positive SHAPs"
         )
 
@@ -678,7 +702,7 @@ def shap_importance_histo_figure(
     fig, ax = plt.subplots(figsize=(10, 6))
     bar_positions = np.arange(len(x_values))
     sem_values = np.std(sorted_shap_matrix, axis=0) / np.sqrt(sorted_shap_matrix.shape[0])
-
+    print(f"SEM values for SHAP columns: {sem_values}")
     # 1) Plot a simple bar chart of mean |SHAP| per feature
     ax.bar(
         x=bar_positions,

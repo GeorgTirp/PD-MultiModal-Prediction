@@ -545,7 +545,6 @@ class BaseRegressionModel:
             importance = metrics['feature_importance']
             importance_indices = np.argsort(importance)
             least_important_feature = self.feature_selection['features'][importance_indices[0]]
-            least_important_name = self.X.columns[importance_indices[0]]
             self.X = self.X.drop(columns=[least_important_feature])
             self.y = self.y.drop(columns=[least_important_feature])
             self.feature_selection['features'].remove(least_important_feature)

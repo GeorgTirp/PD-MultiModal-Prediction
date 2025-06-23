@@ -261,7 +261,7 @@ class NormalInverseGamma(RegressionDistn):
         self.alpha = np.exp(params[2]) + 1      # Enforce α > 1
         self.beta  = np.exp(params[3])     # Avoid zero
         #print(f"Initialized NIG with params: mu={self.mu}, lam={self.lam}, alpha={self.alpha}, beta={self.beta}")
-        print(f"Mean beta: {np.mean(self.beta)}, Min: {np.min(self.beta)}, Max: {np.max(self.beta)}")
+        #print(f"Mean beta: {np.mean(self.beta)}, Min: {np.min(self.beta)}, Max: {np.max(self.beta)}")
 
     @staticmethod
     def fit(Y):
