@@ -332,7 +332,6 @@ class BaseRegressionModel:
         model_save_path = f'{self.save_path}/{self.identifier}_{ablation_idx}_trained_model.pkl' if ablation_idx is not None else f'{self.save_path}/{self.identifier}_trained_model.pkl'
         with open(model_save_path, 'wb') as model_file:
             pickle.dump(self.model, model_file)
-        self.logging.info(f"Trained model saved to {model_save_path}.")
         self.logging.info("Finished model evaluation.")
 
         return metrics
@@ -534,6 +533,7 @@ class BaseRegressionModel:
         number_of_features = len(self.feature_selection['features'])
         i = 0
         while number_of_features > 0:
+            self.logging.info(f"---- Starting ablation step {i} with {number_of_features} features remaining. ----")
             # Determine the number of features to remove in this step
             if number_of_features > threshold_to_one_fps:
                 # Remove multiple features (up to `features_per_step` if more than the threshold)
@@ -575,6 +575,8 @@ class BaseRegressionModel:
             # If features remaining are fewer than the threshold, switch to one-by-one ablation
             if number_of_features <= threshold_to_one_fps:
                 features_per_step = 1  # From here on, remove only one feature at a time
+
+            self.logging.info(f"Feature ablation finished. Final R2: {r2s[-1] if r2s else 'N/A'}, min R2: {np.min(r2s) if r2s else 'N/A'}, max R2: {np.max(r2s) if r2s else 'N/A'}")
         
         # Define the custom color palette from your image
         custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
@@ -961,9 +963,10 @@ class XGBoostRegressionModel(BaseRegressionModel):
             save_path: str = None,
             identifier: str = None,
             top_n: int = -1,
-            param_grid: dict = None):
+            param_grid: dict = None,
+            logging = None):
         
-        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n)
+        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n, logging=logging)
         self.xgb_hparams = xgb_hparams
         if torch.cuda.is_available():
             device = torch.device("cuda:0")

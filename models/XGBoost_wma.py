@@ -12,6 +12,11 @@ import numpy as np
 import logging
 from sklearn.preprocessing import StandardScaler
 from sklearn.datasets import load_diabetes
+# Logging
+from utils.my_logging import Logging
+from utils.messages import Messages
+from pprint import pformat
+
 
 # --- Dynamic Tobit bound functions ---
 ## Calculate wma specific scores
@@ -62,9 +67,28 @@ def load_updrs_subscores(path_to_updrs3, path_to_updrs2, demographics, set_of_su
     return updrs3
 
 
-
-
 def main(folder_path, data_path, target, identifier, out, folds=10):
+    # --- DISPLAY WELCOME MESSAGE ---
+    Messages().welcome_message()
+
+    # --- SETUP PATHS ---
+    safe_path = os.path.join(folder_path, out)
+    if not os.path.exists(safe_path):
+        os.makedirs(safe_path)
+        os.makedirs(os.path.join(safe_path, 'log'))
+
+    # --- SETUP LOGGING ---
+    logging = Logging(f'{safe_path}/log').get_logger()
+
+    # --- Print all selected parameters ---
+    logging.info('-------------------------------------------')
+    logging.info(f"Folder Path: {folder_path}")
+    logging.info(f"Data Path: {data_path}")
+    logging.info(f"Target: {target}")
+    logging.info(f"Identifier: {identifier}")
+    logging.info(f"Output Path: {out}")
+    logging.info(f"Folds: {folds}")
+    logging.info('-------------------------------------------\n')
 
     ###### WMA specific preprocessing ######
     df = pd.read_excel(data_path)
@@ -82,7 +106,6 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
 
     # 2. Standard scaling for numerical stability
     scaler_X = StandardScaler()
-
     scaler_y = StandardScaler()
     feature_cols = [col for col in data_df.columns if col != target]
     data_df[feature_cols] = scaler_X.fit_transform(data_df[feature_cols])
@@ -115,6 +138,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         'reg_alpha': [0, 0.1, 0.5],
 #        'reg_lambda': [1, 2, 5]
     }
+    logging.info(f"----- Parameter grid for XGBoost ----- \n" + pformat(param_grid_xgb) + "\n")
 
     # Default XGBoost hyperparameters
     XGB_Hparams = {
@@ -128,6 +152,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         'random_state': 42,
         'verbosity': 0
     }
+    logging.info(f"----- XGBoost Hyperparameters ----- \n" + pformat(XGB_Hparams) + "\n")
 
     model = XGBoostRegressionModel(
         data_df, 
@@ -138,7 +163,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         safe_path, 
         identifier,
         -1,
-        param_grid_xgb)
+        param_grid_xgb, 
+        logging=logging)
     metrics = model.evaluate(
         folds=folds, 
         tune=False, 
@@ -147,14 +173,11 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         get_shap=True,
         uncertainty=False)
     
-    # Set up logging
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    
     # Log the metrics
     logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
-    _,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=5)
+    _,_, removals= model.feature_ablation(folds=folds, tune=False, tune_folds=5)
     model.calibration_analysis()
     
     
