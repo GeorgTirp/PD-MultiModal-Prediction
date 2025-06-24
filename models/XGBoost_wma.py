@@ -92,25 +92,33 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     df = pd.read_excel(data_path)
 
     # 1. Preprocess the specific columns
-    updrs3_subscores, updrs2, updrs1_patient, updrs1_exam = load_updrs_subscores(path_to_updrs3='data/MDS-UPDRS_Part_III_05Oct2024.csv',
-                            path_to_updrs2='data/MDS_UPDRS_Part_II__Patient_Questionnaire_05Oct2024.csv',
+    updrs3_subscores, updrs2, updrs1_patient, updrs1_exam = load_updrs_subscores(path_to_updrs3='data/MDS-UPDRS_Part_III_24Jun2025.csv',
+                            path_to_updrs2='/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Code/PD-MultiModal-Prediction/data/MDS_UPDRS_Part_II__Patient_Questionnaire_24Jun2025.csv',
                             demographics=df,
                             set_of_subjects='baseline',
                             clinical_score=target)
-    data_df = pd.merge(df, updrs3_subscores[['PATNO', 'TDPIGD', 'TD_avg', 'PIGD_avg']], on='PATNO', how='left')
+    if target == 'updrs1_pat_score':
+        updrs1_subscores = updrs1_patient[['PATNO', 'NP1PTOT']]
+        updrs1_subscores.rename(columns={'NP1PTOT': 'updrs1_pat_score'}, inplace=True)
+        updrs3_subscores = pd.merge(updrs3_subscores, updrs1_subscores, on='PATNO', how='left')
+    elif target == 'updrs1_exam_score':
+        updrs1_subscores = updrs1_exam[['PATNO', 'NP1RTOT']]
+        updrs1_subscores.rename(columns={'NP1RTOT': 'updrs1_exam_score'}, inplace=True)
+        updrs3_subscores = pd.merge(updrs3_subscores, updrs1_subscores, on='PATNO', how='left')
+    data_df = pd.merge(df, updrs3_subscores, on='PATNO', how='left')
     data_df = data_df[[target] + [col for col in data_df.columns if col.startswith('nmf_')]] #+ ['Age'] + ['Sex'] + ['DOMSIDE'] + ['duration_yrs'] + ['moca'] + ['td_pigd']]
     #data_df['Sex'] = data_df['Sex'].map({'M': 1, 'F': 0})
     #
 
     # 2. Standard scaling for numerical stability
-    scaler_X = StandardScaler()
-    scaler_y = StandardScaler()
-    feature_cols = [col for col in data_df.columns if col != target]
-    data_df[feature_cols] = scaler_X.fit_transform(data_df[feature_cols])
-    data_df[target] = scaler_y.fit_transform(data_df[[target]])
+    #scaler_X = StandardScaler()
+    #scaler_y = StandardScaler()
+    #feature_cols = [col for col in data_df.columns if col != target]
+    #data_df[feature_cols] = scaler_X.fit_transform(data_df[feature_cols])
+    #data_df[target] = scaler_y.fit_transform(data_df[[target]])
     # Shuffle the target variable
-    #shuffled_target = data_df[target].sample(frac=1, random_state=42).reset_index(drop=True)
-    #data_df[target] = shuffled_target
+    shuffled_target = data_df[target].sample(frac=1, random_state=42).reset_index(drop=True)
+    data_df[target] = shuffled_target
     
     # 3. Remove NaN values
     data_df = data_df.dropna()
@@ -130,13 +138,13 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     test_split_size = 0.2
     # XGBoost hyperparameter grid
     param_grid_xgb = {
-        'n_estimators': [100, 200],
-        'learning_rate': [0.01, 0.05],
-        'max_depth': [3, 4, 5],
+        'n_estimators': [150, 200],
+        'learning_rate': [0.05],
+        'max_depth': [4],
         'subsample': [0.9],
         'colsample_bytree': [0.8],
-        'reg_alpha': [0, 0.1],
-        'reg_lambda': [0, 2],
+        'reg_alpha': [0.1],
+        'reg_lambda': [2],
         'random_state': [42],
         'verbosity': [0]    
     }
@@ -167,18 +175,18 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         -1,
         param_grid_xgb, 
         logging=logging)
-    metrics = model.evaluate(
-        folds=folds, 
-        tune=False, 
-        nested=True, 
-        tune_folds=20, 
-        get_shap=True,
-        uncertainty=False)
+    #metrics = model.evaluate(
+    #    folds=folds, 
+    #    tune=False, 
+    #    nested=True, 
+    #    tune_folds=20, 
+    #    get_shap=True,
+    #    uncertainty=False)
     
     # Log the metrics
-    logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
-    logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
-    model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
+    #logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
+    #logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
+    #model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
     _,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=10, features_per_step=1, threshold_to_one_fps=10)
         
         
@@ -186,5 +194,9 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
 if __name__ == "__main__":
     folder_path = "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Code/PD-MultiModal-Prediction/"
 
-    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs3_score", "WMA", "results/WMA_refined/XGBoost_updrs3_nodem", -1)
+    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs1_pat_score", "WMA", "results/Paper_runs/XGBoost_updrs1_pat_nodem_shuffeled", -1)
+#    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs1_exam_score", "WMA", "results/Paper_runs/XGBoost_updrs1_exam_nodem_shuffeled", -1)
+#    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs2_score", "WMA", "results/Paper_runs/XGBoost_updrs2_nodem_shuffeled", -1)
+#    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs3_score", "WMA", "results/Paper_runs/XGBoost_updrs3_nodem_shuffeled", -1)
+#    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs4_score", "WMA", "results/Paper_runs/XGBoost_updrs4_nodem_shuffeled", -1)
     

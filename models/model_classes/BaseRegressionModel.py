@@ -71,7 +71,6 @@ class BaseRegressionModel:
             logging (optional): Logger instance for logging messages. Defaults to None.
         """
         self.logging = logging if logging is not None else print
-        self.logging.info("Initializing BaseRegressionModel class...")
         self.feature_selection = feature_selection
         self.top_n = top_n
         self.X, self.y = self.model_specific_preprocess(data_df)
@@ -352,13 +351,13 @@ class BaseRegressionModel:
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
             if tune:
                 self.tune_hparams(X_train_kf, y_train_kf, self.param_grid, tune_folds)
-                #tune = False
-            else:
-                self.model.fit(X_train_kf, y_train_kf)
-
+            
+            self.model.fit(X_train_kf, y_train_kf)
             pred = self.model.predict(X_val_kf)
             preds.append(pred)
             y_vals.append(y_val_kf)
+            if len(y_val_kf) != 1:
+                tqdm.write(f'Fold [{iter_idx + 1}/{folds}]: Pearson-R: {pearsonr(y_val_kf, pred)[0]:.4f}, MSE: {mean_squared_error(y_val_kf, pred):.4f}')
 
             # Get uncertainties
             if uncertainty == True:
@@ -512,7 +511,7 @@ class BaseRegressionModel:
         p_values = []
         removals = []
         number_of_features = len(self.feature_selection['features'])
-        i = 0
+        i = 1
         steps = []
 
         while number_of_features > 0:
@@ -553,6 +552,8 @@ class BaseRegressionModel:
             if self.__class__.__name__ == "NGBoostRegressionModel":
                 self.calibration_analysis(ablation_idx=i)
 
+            self.plot(title='Actual vs Predicted', save_path=f'{save_path}ablation_step[{i}]/')
+
             i += 1
             steps.append(i)
 
@@ -560,7 +561,6 @@ class BaseRegressionModel:
             if number_of_features <= threshold_to_one_fps:
                 features_per_step = 1  # From here on, remove only one feature at a time
 
-            self.plot(title='Actual vs Predicted', save_path=save_path)
 
             self.logging.info(f"✅ Done. Pearson-R: {metrics['r2']}, p-value: {metrics['p_value']} \n")
         

@@ -80,7 +80,7 @@ class XGBoostRegressionModel(BaseRegressionModel):
             estimator=self.model,
             param_grid=param_grid,
             cv=folds,
-            scoring='neg_mean_squared_error',
+            scoring='r2',
             n_jobs=-1
         )
 
