@@ -2,7 +2,7 @@ import warnings
 warnings.filterwarnings("ignore")
 import os
 os.environ["PYTHONWARNINGS"] = "ignore"
-from RegressionsModels import XGBoostRegressionModel
+from models.model_classes.RegressionsModels import XGBoostRegressionModel
 import pandas as pd
 from faster_evidential_boost import NormalInverseGamma, NIGLogScore
 from ngboost.distns.normal import Normal, NormalCRPScore, NormalLogScore

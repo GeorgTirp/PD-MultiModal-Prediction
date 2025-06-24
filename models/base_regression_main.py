@@ -1,7 +1,7 @@
 import os
 import logging
 import pandas as pd
-from RegressionsModels import LinearRegressionModel, RandomForestModel
+from models.model_classes.RegressionsModels import LinearRegressionModel, RandomForestModel
 #from sklearn.datasets import load_diabetes
 
 
