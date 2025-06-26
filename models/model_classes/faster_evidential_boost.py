@@ -5,7 +5,7 @@ from scipy.special import gammaln, digamma, polygamma, psi
 import scipy.stats as st
 from scipy.optimize import approx_fprime
 from numba import njit, prange
-from ngb_jit import d_score_numba, full_score_numba, compute_diag_fim#, digamma, trigamma, psi, gammaln
+from model_classes.ngb_jit import d_score_numba, full_score_numba, compute_diag_fim#, digamma, trigamma, psi, gammaln
 import line_profiler
 
 def softplus(x):
