@@ -262,6 +262,9 @@ class NormalInverseGamma(RegressionDistn):
         self.beta  = np.exp(params[3])     # Avoid zero
         #print(f"Initialized NIG with params: mu={self.mu}, lam={self.lam}, alpha={self.alpha}, beta={self.beta}")
         #print(f"Mean beta: {np.mean(self.beta)}, Min: {np.min(self.beta)}, Max: {np.max(self.beta)}")
+        #print(f"Mean lam: {np.mean(self.lam)}, Min: {np.min(self.lam)}, Max: {np.max(self.lam)}")
+        #print(f"Mean alpha: {np.mean(self.alpha)}, Min: {np.min(self.alpha)}, Max: {np.max(self.alpha)}")
+        #print(self.pred_uncertainty()["epistemic"])
 
     @staticmethod
     def fit(Y):
@@ -277,6 +280,29 @@ class NormalInverseGamma(RegressionDistn):
         m = np.mean(Y)
         s = np.std(Y)
         return np.array([m, 0.0, np.log(1.0), np.log(s**2)])  
+        #Y = np.asarray(Y).ravel()
+        #mu_y  = np.mean(Y)
+        #var_y = np.std(Y)
+#
+        ## 1) Choose simple prior hyperparameters
+        #mu0    = mu_y
+        #lam0   = 1.0
+        #alpha0 = 2.0               # minimal >2 so epi‐variance finite
+        #beta0  = var_y * (alpha0-1) # makes aleatoric var = beta0/(alpha0-1) = var_y
+#
+        ## 2) Clip to safe ranges
+        #lam0   = np.clip(lam0,   1e-3, 1e3)
+        #alpha0 = np.clip(alpha0, 1+1e-3, 1e3)
+        #beta0  = np.clip(beta0,  1e-6, 1e3)
+#
+        ## 3) Return NGBoost raw parameters:
+        ##    [ mu, log(lambda), log(alpha-1), log(beta) ]
+        #return np.array([
+        #    mu0,
+        #    np.log(lam0),
+        #    np.log(alpha0 - 1.0),
+        #    np.log(beta0)
+        #]) 
 
     def sample(self, m):
         """
