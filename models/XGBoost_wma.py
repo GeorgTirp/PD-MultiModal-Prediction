@@ -106,7 +106,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         updrs1_subscores.rename(columns={'NP1RTOT': 'updrs1_exam_score'}, inplace=True)
         updrs3_subscores = pd.merge(updrs3_subscores, updrs1_subscores, on='PATNO', how='left')
     data_df = pd.merge(df, updrs3_subscores, on='PATNO', how='left')
-    data_df = data_df[[target] + [col for col in data_df.columns if col.startswith('nmf_')] + ['Age'] + ['Sex'] + ['DOMSIDE'] + ['duration_yrs'] + ['moca'] + ['td_pigd']]
+    data_df = data_df[[target] + [col for col in data_df.columns if col.startswith('nmf_')]]# + ['Age'] + ['Sex'] + ['DOMSIDE'] + ['duration_yrs'] + ['moca'] + ['td_pigd']]
     # Convert 'Sex' column to 0 (female) and 1 (male)
     if 'Sex' in data_df.columns:
         data_df['Sex'] = data_df['Sex'].map({'F': 0, 'M': 1})
@@ -131,16 +131,17 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     test_split_size = 0.2
     # XGBoost hyperparameter grid
     param_grid_xgb = {
-        'n_estimators': [100, 150, 200],
-        'learning_rate': [0.01, 0.05],
-        'max_depth': [4, 5],
-        'subsample': [0.9],
-        'colsample_bytree': [0.8],
-        'reg_alpha': [0, 0.1],
-        'reg_lambda': [0, 2],
+        'n_estimators': [100, 200],  
+        'learning_rate': [0.01, 0.05, 0.1],  
+        'max_depth': [3, 5],  
+        'subsample': [0.8, 1.0], 
+        'colsample_bytree': [0.6, 0.8], 
+        'reg_alpha': [0, 0.1], 
+        'reg_lambda': [1, 5], 
         'random_state': [42],
-        'verbosity': [0]    
+        'verbosity': [0]
     }
+
     logging.info(f"----- Parameter grid for XGBoost ----- \n" + pformat(param_grid_xgb) + "\n")
 
     # Default XGBoost hyperparameters
@@ -168,19 +169,16 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         -1,
         param_grid_xgb, 
         logging=logging)
-    #metrics = model.evaluate(
-    #    folds=folds, 
-    #    tune=False, 
-    #    nested=True, 
-    #    tune_folds=20, 
-    #    get_shap=True,
-    #    uncertainty=False)
+    metrics = model.evaluate(
+        folds=folds, 
+        tune=False, 
+        nested=True, 
+        tune_folds=10, 
+        get_shap=True,
+        uncertainty=False)
     
-    # Log the metrics
-    #logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
-    #logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
-    #model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
-    _,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=10, features_per_step=1, threshold_to_one_fps=10)
+    model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}", save_path=safe_path + '/model_evaluation')
+    #_,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=-1, features_per_step=1, threshold_to_one_fps=10)
         
         
 
@@ -190,6 +188,6 @@ if __name__ == "__main__":
 #    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs1_pat_score", "WMA", "results/Paper_runs/XGBoost_updrs1_pat", -1)
 #    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs1_exam_score", "WMA", "results/Paper_runs/XGBoost_updrs1_exam", -1)
 #    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs2_score", "WMA", "results/Paper_runs/XGBoost_updrs2_nodem_shuffeled", -1)
-    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs3_score", "WMA", "results/Paper_runs/XGBoost_updrs3", -1)
+    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs3_score", "WMA", "results/hyperopt/XGBoost_updrs3_notune", 10)
 #    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "moca", "WMA", "results/Paper_runs/XGBoost_moca_nodem", -1)
     
