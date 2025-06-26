@@ -106,19 +106,12 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         updrs1_subscores.rename(columns={'NP1RTOT': 'updrs1_exam_score'}, inplace=True)
         updrs3_subscores = pd.merge(updrs3_subscores, updrs1_subscores, on='PATNO', how='left')
     data_df = pd.merge(df, updrs3_subscores, on='PATNO', how='left')
-    data_df = data_df[[target] + [col for col in data_df.columns if col.startswith('nmf_')]] #+ ['Age'] + ['Sex'] + ['DOMSIDE'] + ['duration_yrs'] + ['moca'] + ['td_pigd']]
-    #data_df['Sex'] = data_df['Sex'].map({'M': 1, 'F': 0})
-    #
-
-    # 2. Standard scaling for numerical stability
-    #scaler_X = StandardScaler()
-    #scaler_y = StandardScaler()
-    #feature_cols = [col for col in data_df.columns if col != target]
-    #data_df[feature_cols] = scaler_X.fit_transform(data_df[feature_cols])
-    #data_df[target] = scaler_y.fit_transform(data_df[[target]])
-    # Shuffle the target variable
-    shuffled_target = data_df[target].sample(frac=1, random_state=42).reset_index(drop=True)
-    data_df[target] = shuffled_target
+    data_df = data_df[[target] + [col for col in data_df.columns if col.startswith('nmf_')] + ['Age'] + ['Sex'] + ['DOMSIDE'] + ['duration_yrs'] + ['moca'] + ['td_pigd']]
+    # Convert 'Sex' column to 0 (female) and 1 (male)
+    if 'Sex' in data_df.columns:
+        data_df['Sex'] = data_df['Sex'].map({'F': 0, 'M': 1})
+    #shuffled_target = data_df[target].sample(frac=1, random_state=42).reset_index(drop=True)
+    #data_df[target] = shuffled_target
     
     # 3. Remove NaN values
     data_df = data_df.dropna()
@@ -138,13 +131,13 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     test_split_size = 0.2
     # XGBoost hyperparameter grid
     param_grid_xgb = {
-        'n_estimators': [150, 200],
-        'learning_rate': [0.05],
-        'max_depth': [4],
+        'n_estimators': [100, 150, 200],
+        'learning_rate': [0.01, 0.05],
+        'max_depth': [4, 5],
         'subsample': [0.9],
         'colsample_bytree': [0.8],
-        'reg_alpha': [0.1],
-        'reg_lambda': [2],
+        'reg_alpha': [0, 0.1],
+        'reg_lambda': [0, 2],
         'random_state': [42],
         'verbosity': [0]    
     }
@@ -194,9 +187,9 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
 if __name__ == "__main__":
     folder_path = "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Code/PD-MultiModal-Prediction/"
 
-    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs1_pat_score", "WMA", "results/Paper_runs/XGBoost_updrs1_pat_nodem_shuffeled", -1)
-#    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs1_exam_score", "WMA", "results/Paper_runs/XGBoost_updrs1_exam_nodem_shuffeled", -1)
+#    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs1_pat_score", "WMA", "results/Paper_runs/XGBoost_updrs1_pat", -1)
+#    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs1_exam_score", "WMA", "results/Paper_runs/XGBoost_updrs1_exam", -1)
 #    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs2_score", "WMA", "results/Paper_runs/XGBoost_updrs2_nodem_shuffeled", -1)
-#    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs3_score", "WMA", "results/Paper_runs/XGBoost_updrs3_nodem_shuffeled", -1)
-#    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs4_score", "WMA", "results/Paper_runs/XGBoost_updrs4_nodem_shuffeled", -1)
+    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs3_score", "WMA", "results/Paper_runs/XGBoost_updrs3", -1)
+#    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "moca", "WMA", "results/Paper_runs/XGBoost_moca_nodem", -1)
     

@@ -82,7 +82,6 @@ class BaseRegressionModel:
         self.target_name = target_name
         if not os.path.exists(save_path):
             os.makedirs(save_path)
-        self.logging.info("Finished initializing BaseRegressionModel class.")
 
     def model_specific_preprocess(self, data_df: pd.DataFrame, ceiling: list =["BDI", "MoCA"]) -> Tuple:
         """
