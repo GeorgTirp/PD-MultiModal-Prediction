@@ -18,6 +18,10 @@ import shap
 from model_classes.BaseRegressionModel import BaseRegressionModel
 from model_classes.NGBoostRegressionModel import NGBoostRegressionModel
 
+from sklearn.metrics import make_scorer
+from scipy.stats import pearsonr
+from sklearn.model_selection import RepeatedKFold
+
 
 class XGBoostRegressionModel(BaseRegressionModel):
     """ XGBoost Regression Model """
@@ -73,14 +77,20 @@ class XGBoostRegressionModel(BaseRegressionModel):
         Returns:
             dict: Best hyperparameters found.
         """
+        def pearson_corr(y_true, y_pred):
+                    return pearsonr(y_true, y_pred)[0]
+
+        pearson_scorer = make_scorer(pearson_corr, greater_is_better=True)
         if folds == -1:
             folds = len(X)
+
+        rkf = RepeatedKFold(n_splits=folds, n_repeats=3, random_state=42)
         #self.logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
             cv=folds,
-            scoring='r2',
+            scoring='neg_mean_squared_error',
             n_jobs=-1
         )
 
@@ -89,4 +99,7 @@ class XGBoostRegressionModel(BaseRegressionModel):
         self.model = grid_search.best_estimator_
         self.xgb_hparams.update(best_params)
         self.model.set_params(**best_params)
+        if self.logging:
+            self.logging.info(f"Best parameters found: {best_params}")
+            self.logging.info(f"Best CV score: {grid_search.best_score_}")
         return best_params
