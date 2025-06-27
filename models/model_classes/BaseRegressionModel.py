@@ -362,9 +362,6 @@ class BaseRegressionModel:
         iter_idx = 0
         for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation", leave=False):
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
-            
-            
-            
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
 
             if self.standardize:
@@ -384,6 +381,8 @@ class BaseRegressionModel:
                 y_vals_kf = y_val_kf * self.std + self.m
             preds.append(pred)
             y_vals.append(y_val_kf)
+            if len(preds) != 1:
+                tqdm.write(f'Current Pearson-r: {pearsonr(np.concatenate(y_vals), np.concatenate(preds))[0]}')
 
             # Get uncertainties
             if uncertainty == True:
@@ -531,7 +530,7 @@ class BaseRegressionModel:
         p_values = []
         removals = []
         number_of_features = len(self.feature_selection['features'])
-        i = 0
+        i = 1
         while number_of_features > 0:
             self.logging.info(f"---- Starting ablation step {i} with {number_of_features} features remaining. ----")
             # Determine the number of features to remove in this step
@@ -591,19 +590,17 @@ class BaseRegressionModel:
         removals_df.to_csv(f'{save_path}{self.identifier}_ablation_history.csv', index=False)
         # Create a figure
         plt.figure(figsize=(6, 4))
-        x = np.arange(number_of_features)
+        x = range(i - 1)
                 # Create a figure
         plt.figure(figsize=(6, 4))
                 # Plot each model's R² scores in a loop, using sample_sizes on the x-axis
         #for model_name, r2_scores in results.items():
         plot_df = pd.DataFrame({'x': x, 'r2s': r2s})
         sns.lineplot(data=plot_df, x='x', y='r2s', label="R Score", marker='o')
-
-                # Optionally use a log scale for the x-axis if you want to emphasize the “logarithmic” nature
         # Label the axes and set the title
         plt.xlabel("Number of removed features")
-        plt.ylabel("R Score")
-        plt.title("R Scores Over Feature Ablation")
+        plt.ylabel("Pearson-R Score")
+        plt.title("Pearson-R Scores Over Feature Ablation")
         plt.legend()
         plt.tight_layout()
         plt.savefig(path, dpi=300, bbox_inches='tight')

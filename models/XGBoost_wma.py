@@ -107,7 +107,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     #    updrs1_subscores.rename(columns={'NP1RTOT': 'updrs1_exam_score'}, inplace=True)
     #    updrs3_subscores = pd.merge(updrs3_subscores, updrs1_subscores, on='PATNO', how='left')
     #data_df = pd.merge(df, updrs3_subscores, on='PATNO', how='left')
-    data_df = df[[target] + [col for col in df.columns if col.startswith('nmf_')] + ['Age'] + ['Sex'] + ['DOMSIDE'] + ['duration_yrs'] + ['moca'] + ['td_pigd']]
+    data_df = df[[target] + [col for col in df.columns if col.startswith('nmf_')]] #+ ['Age'] + ['Sex'] + ['DOMSIDE'] + ['duration_yrs'] + ['moca'] + ['td_pigd']]
     # Convert 'Sex' column to 0 (female) and 1 (male)
     if 'Sex' in data_df.columns:
         data_df['Sex'] = data_df['Sex'].map({'F': 0, 'M': 1})
@@ -132,13 +132,13 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     test_split_size = 0.2
     # XGBoost hyperparameter grid
     param_grid_xgb = {
-    'n_estimators': [100, 150],
-    'learning_rate': [0.05],
+    'n_estimators': [100, 200, 300],
+    'learning_rate': [0.05, 0.1],
     'max_depth': [3, 4],
-    'subsample': [0.8],
-    'colsample_bytree': [0.8],
-    'reg_alpha': [0, 0.1],
-    'reg_lambda': [1, 2],
+    'subsample': [0.9],
+    'colsample_bytree': [0.8, 1],
+    'reg_alpha': [0.1, 0.5],
+    'reg_lambda': [1, 2, 5],
     'random_state': [42],
     'verbosity': [0]
 }
@@ -181,7 +181,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     #logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     #logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     #model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}",  save_path=safe_path + '/model_evaluation/')
-    _,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=10, features_per_step=1, threshold_to_one_fps=10)
+    _,_, removals= model.feature_ablation(folds=folds, tune=False, tune_folds=20, features_per_step=1, threshold_to_one_fps=10)
         
         
 
@@ -191,6 +191,6 @@ if __name__ == "__main__":
 #    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs1_pat_score", "WMA", "results/Paper_runs/XGBoost_updrs1_pat", -1)
 #    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs1_exam_score", "WMA", "results/Paper_runs/XGBoost_updrs1_exam", -1)
 #    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs2_score", "WMA", "results/Paper_runs/XGBoost_updrs2_nodem_shuffeled", -1)
-    main(folder_path, "data/merged_demographics_features_diff_20.xlsx", "updrs3_score", "WMA", "results/Paper_runs/XGBoost_updrs3_withdem", -1)
+    main(folder_path, "data/merged_demographics_features_diff_20.xlsx", "updrs3_score", "WMA", "results/Paper_runs/XGBoost_updrs3_test", 5)
 #    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "moca", "WMA", "results/Paper_runs/XGBoost_moca_nodem", -1)
     

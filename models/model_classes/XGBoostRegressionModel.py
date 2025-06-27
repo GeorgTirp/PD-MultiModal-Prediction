@@ -9,6 +9,9 @@ import pandas as pd
 # Machine Learning and Modeling
 from xgboost import XGBRegressor
 from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import RepeatedKFold
+from sklearn.metrics import make_scorer
+from scipy.stats import pearsonr
 
 # Visualization and Explainability
 import matplotlib.pyplot as plt
@@ -17,10 +20,6 @@ import shap
 # Custom Base Model
 from model_classes.BaseRegressionModel import BaseRegressionModel
 from model_classes.NGBoostRegressionModel import NGBoostRegressionModel
-from sklearn.model_selection import RepeatedKFold
-from sklearn.metrics import make_scorer
-from scipy.stats import pearsonr
-
 
 
 class XGBoostRegressionModel(BaseRegressionModel):
@@ -83,14 +82,11 @@ class XGBoostRegressionModel(BaseRegressionModel):
         if folds == -1:
             folds = len(X)
 
-        rkf = RepeatedKFold(n_splits=folds, n_repeats=3, random_state=42)
-
-        rkf = RepeatedKFold(n_splits=folds, n_repeats=3, random_state=42)
         #self.logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
-            cv=rkf,
+            cv=folds,
             scoring=pearson_scorer,  
             n_jobs=-1,
             verbose=0,
