@@ -71,6 +71,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
 
     # --- SETUP PATHS ---
     safe_path = os.path.join(folder_path, out)
+    print(safe_path)
     if not os.path.exists(safe_path):
         os.makedirs(safe_path)
         os.makedirs(os.path.join(safe_path, 'log'))
@@ -92,21 +93,21 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     df = pd.read_excel(data_path)
 
     # 1. Preprocess the specific columns
-    updrs3_subscores, updrs2, updrs1_patient, updrs1_exam = load_updrs_subscores(path_to_updrs3='data/MDS-UPDRS_Part_III_24Jun2025.csv',
-                            path_to_updrs2='/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Code/PD-MultiModal-Prediction/data/MDS_UPDRS_Part_II__Patient_Questionnaire_24Jun2025.csv',
-                            demographics=df,
-                            set_of_subjects='baseline',
-                            clinical_score=target)
-    if target == 'updrs1_pat_score':
-        updrs1_subscores = updrs1_patient[['PATNO', 'NP1PTOT']]
-        updrs1_subscores.rename(columns={'NP1PTOT': 'updrs1_pat_score'}, inplace=True)
-        updrs3_subscores = pd.merge(updrs3_subscores, updrs1_subscores, on='PATNO', how='left')
-    elif target == 'updrs1_exam_score':
-        updrs1_subscores = updrs1_exam[['PATNO', 'NP1RTOT']]
-        updrs1_subscores.rename(columns={'NP1RTOT': 'updrs1_exam_score'}, inplace=True)
-        updrs3_subscores = pd.merge(updrs3_subscores, updrs1_subscores, on='PATNO', how='left')
-    data_df = pd.merge(df, updrs3_subscores, on='PATNO', how='left')
-    data_df = data_df[[target] + [col for col in data_df.columns if col.startswith('nmf_')] + ['Age'] + ['Sex'] + ['DOMSIDE'] + ['duration_yrs'] + ['moca'] + ['td_pigd']]
+    #updrs3_subscores, updrs2, updrs1_patient, updrs1_exam = load_updrs_subscores(path_to_updrs3='data/MDS-UPDRS_Part_III_24Jun2025.csv',
+    #                        path_to_updrs2='/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Code/PD-MultiModal-Prediction/data/MDS_UPDRS_Part_II__Patient_Questionnaire_24Jun2025.csv',
+    #                        demographics=df,
+    #                        set_of_subjects='baseline',
+    #                        clinical_score=target)
+    #if target == 'updrs1_pat_score':
+    #    updrs1_subscores = updrs1_patient[['PATNO', 'NP1PTOT']]
+    #    updrs1_subscores.rename(columns={'NP1PTOT': 'updrs1_pat_score'}, inplace=True)
+    #    updrs3_subscores = pd.merge(updrs3_subscores, updrs1_subscores, on='PATNO', how='left')
+    #elif target == 'updrs1_exam_score':
+    #    updrs1_subscores = updrs1_exam[['PATNO', 'NP1RTOT']]
+    #    updrs1_subscores.rename(columns={'NP1RTOT': 'updrs1_exam_score'}, inplace=True)
+    #    updrs3_subscores = pd.merge(updrs3_subscores, updrs1_subscores, on='PATNO', how='left')
+    #data_df = pd.merge(df, updrs3_subscores, on='PATNO', how='left')
+    data_df = df[[target] + [col for col in df.columns if col.startswith('nmf_')] + ['Age'] + ['Sex'] + ['DOMSIDE'] + ['duration_yrs'] + ['moca'] + ['td_pigd']]
     # Convert 'Sex' column to 0 (female) and 1 (male)
     if 'Sex' in data_df.columns:
         data_df['Sex'] = data_df['Sex'].map({'F': 0, 'M': 1})
@@ -131,27 +132,27 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     test_split_size = 0.2
     # XGBoost hyperparameter grid
     param_grid_xgb = {
-        'n_estimators': [100, 150, 200],
-        'learning_rate': [0.01, 0.05],
-        'max_depth': [4, 5],
-        'subsample': [0.9],
-        'colsample_bytree': [0.8],
-        'reg_alpha': [0, 0.1],
-        'reg_lambda': [0, 2],
-        'random_state': [42],
-        'verbosity': [0]    
-    }
+    'n_estimators': [100, 150],
+    'learning_rate': [0.05],
+    'max_depth': [3, 4],
+    'subsample': [0.8],
+    'colsample_bytree': [0.8],
+    'reg_alpha': [0, 0.1],
+    'reg_lambda': [1, 2],
+    'random_state': [42],
+    'verbosity': [0]
+}
     logging.info(f"----- Parameter grid for XGBoost ----- \n" + pformat(param_grid_xgb) + "\n")
 
     # Default XGBoost hyperparameters
     XGB_Hparams = {
-        'n_estimators': 200,
-        'learning_rate': 0.05,
+        'n_estimators': 100,
+        'learning_rate': 0.01,
         'max_depth': 4,
         'subsample': 0.9,
         'colsample_bytree': 0.8,
-        'reg_alpha': 0.1,
-        'reg_lambda': 2,
+        'reg_alpha': 0,
+        'reg_lambda': 0,
         'random_state': 42,
         'verbosity': 0
     }
@@ -170,7 +171,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         logging=logging)
     #metrics = model.evaluate(
     #    folds=folds, 
-    #    tune=False, 
+    #    tune=True, 
     #    nested=True, 
     #    tune_folds=20, 
     #    get_shap=True,
@@ -179,17 +180,17 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     # Log the metrics
     #logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     #logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
-    #model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
+    #model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}",  save_path=safe_path + '/model_evaluation/')
     _,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=10, features_per_step=1, threshold_to_one_fps=10)
         
         
 
 if __name__ == "__main__":
-    folder_path = "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Code/PD-MultiModal-Prediction/"
+    folder_path = "/home/ubuntu/STN_WMA/PD-MultiModal-Prediction/"
 
 #    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs1_pat_score", "WMA", "results/Paper_runs/XGBoost_updrs1_pat", -1)
 #    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs1_exam_score", "WMA", "results/Paper_runs/XGBoost_updrs1_exam", -1)
 #    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs2_score", "WMA", "results/Paper_runs/XGBoost_updrs2_nodem_shuffeled", -1)
-    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "updrs3_score", "WMA", "results/Paper_runs/XGBoost_updrs3", -1)
+    main(folder_path, "data/merged_demographics_features_diff_20.xlsx", "updrs3_score", "WMA", "results/Paper_runs/XGBoost_updrs3_withdem", -1)
 #    main(folder_path, "/media/sn/Frieder_Data/Projects/White_Matter_Alterations/STN/Results/PPMI_White_Matter_Alteration_Analysis/TDDR_PPMI_BASELINE/merged_demographics_features_diff_20.xlsx", "moca", "WMA", "results/Paper_runs/XGBoost_moca_nodem", -1)
     

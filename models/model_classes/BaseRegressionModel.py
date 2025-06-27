@@ -350,8 +350,10 @@ class BaseRegressionModel:
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
             if tune:
                 self.tune_hparams(X_train_kf, y_train_kf, self.param_grid, tune_folds)
-            
-            self.model.fit(X_train_kf, y_train_kf)
+            else:
+                self.model.fit(X_train_kf, y_train_kf)
+
+                
             pred = self.model.predict(X_val_kf)
             preds.append(pred)
             y_vals.append(y_val_kf)
