@@ -84,6 +84,8 @@ class XGBoostRegressionModel(BaseRegressionModel):
             folds = len(X)
 
         rkf = RepeatedKFold(n_splits=folds, n_repeats=3, random_state=42)
+
+        rkf = RepeatedKFold(n_splits=folds, n_repeats=3, random_state=42)
         #self.logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
         grid_search = GridSearchCV(
             estimator=self.model,
@@ -99,4 +101,7 @@ class XGBoostRegressionModel(BaseRegressionModel):
         self.model = grid_search.best_estimator_
         self.xgb_hparams.update(best_params)
         self.model.set_params(**best_params)
+        if self.logging:
+            self.logging.info(f"Best parameters found: {best_params}")
+            self.logging.info(f"Best CV score: {grid_search.best_score_}")
         return best_params

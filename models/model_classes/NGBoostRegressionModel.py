@@ -51,9 +51,10 @@ class NGBoostRegressionModel(BaseRegressionModel):
             identifier: str = None,
             top_n: int = -1,
             param_grid: dict = None,
-            logging = None):
+            logging = None,
+            standardize=False):
         
-        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n, logging=logging)
+        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n, logging=logging, standardize=standardize)
         # Set default hyperparameters if not provided
         if ngb_hparams is None:
             ngb_hparams = {
@@ -272,6 +273,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
             else:
                 plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_aggregated_beeswarm.png')
             plt.close()
+        if self.standardize:
+            shap_values *= self.std
         return shap_values
 
     def feature_importance_variance(
@@ -348,6 +351,11 @@ class NGBoostRegressionModel(BaseRegressionModel):
                 else:
                     plt.savefig(f'{self.save_path}/{self.identifier}_predicitve_uncertainty_shap_aggregated.png')
                 plt.close()
+            if self.standardize:
+                shap_pred *= self.std
+                shap_epi *= self.std
+                shap_alea *= self.std
+
             return shap_pred, shap_epi, shap_alea
         
         elif mode == "normal":
@@ -368,6 +376,10 @@ class NGBoostRegressionModel(BaseRegressionModel):
                 else:
                     plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_std_shap_aggregated_beeswarm.png')
                 plt.close()
+
+            if self.standardize:
+                shap_values *= self.std
+            
             return shap_values
     
     def compute_uncertainties(self, mode=["nig", "ensemble"], X: pd.DataFrame = None,  members: int = 10) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
