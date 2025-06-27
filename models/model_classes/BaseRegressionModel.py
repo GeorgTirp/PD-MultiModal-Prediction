@@ -448,7 +448,7 @@ class BaseRegressionModel:
 
         
         if get_shap:
-            if elf.model_name == "NGBoost":
+            if self.model_name == "NGBoost":
                 all_shap_mean_array = np.stack(all_shap_mean, axis=0)
                 all_shap_variance_array = np.stack(all_shap_variance, axis=0)
                 # Average over the folds to get an aggregated array of shape (n_samples, n_features)
@@ -566,7 +566,7 @@ class BaseRegressionModel:
             number_of_features -= features_to_remove
             
             # If using a specific model, perform additional calibration if needed
-            if isinstance(self, NGBoostRegressionModel):
+            if self.model_name == "NGBoost":
                 self.calibration_analysis(ablation_idx=i)
 
             # Increment the iteration counter (this is crucial when removing multiple features per step)
@@ -612,7 +612,7 @@ class BaseRegressionModel:
             
 
     
-    def feature_importance(self, top_n: int = 10, batch_size=None, save_results=True) -> Dict:
+    def feature_importance(self, top_n: int = 10, batch_size=None, iter_idx=None, ablation_idx=None, save_results=True) -> Dict:
         """
         Compute feature importance scores (e.g., SHAP values). Must be implemented by subclasses.
 

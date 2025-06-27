@@ -13,6 +13,8 @@ from model_classes.faster_evidential_boost import NormalInverseGamma
 from ngboost.distns import Normal
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.model_selection import GridSearchCV, train_test_split
+from scipy.stats import pearsonr
+from sklearn.metrics import make_scorer
 
 # Visualization and Explainability
 import matplotlib.pyplot as plt
@@ -94,11 +96,15 @@ class NGBoostRegressionModel(BaseRegressionModel):
             folds = len(X)
         # Perform grid search on the current NGBoost model
         #ss = ShuffleSplit(n_splits=50, test_size= 0.01, random_state=7)
+        def pearson_corr(y_true, y_pred):
+            return pearsonr(y_true, y_pred)[0]
+        pearson_scorer = make_scorer(pearson_corr, greater_is_better=True)
+
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
             cv=folds,
-            scoring='neg_mean_squared_error',
+            scoring=pearson_scorer,
             n_jobs=-1
         )
         grid_search.fit(X, y)
@@ -126,7 +132,6 @@ class NGBoostRegressionModel(BaseRegressionModel):
         self.model.fit(X, y)
         # Force an immediate fit on the tuning data to initialize internal parameters.
         self.model.fit(X, y)
-        self.model_name += " (Tuned)"
         print(f"Best parameters found: {best_params}")
         return best_params
 
