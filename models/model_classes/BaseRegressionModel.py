@@ -448,9 +448,7 @@ class BaseRegressionModel:
 
         
         if get_shap:
-            
-            
-            if isinstance(self, NGBoostRegressionModel):
+            if elf.model_name == "NGBoost":
                 all_shap_mean_array = np.stack(all_shap_mean, axis=0)
                 all_shap_variance_array = np.stack(all_shap_variance, axis=0)
                 # Average over the folds to get an aggregated array of shape (n_samples, n_features)
