@@ -109,6 +109,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
         )
         grid_search.fit(X, y)
         best_params = grid_search.best_params_
+        best_score = grid_search.best_score_
         
         # Separate base learner parameters and other NGBoost hyperparameters
         score_params = {k.replace("Score__", ""): v for k, v in best_params.items() if k.startswith("Score__")}
@@ -132,7 +133,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
         self.model.fit(X, y)
         # Force an immediate fit on the tuning data to initialize internal parameters.
         self.model.fit(X, y)
-        print(f"Best parameters found: {best_params}")
+        #print(f"Best parameters found: {best_params}")
+        #print(f"Best score: {best_score}")
         return best_params
 
     def tune_hparams_ray(self, X, y, param_grid: dict, folds=5, algo: str ="BayesOpt") -> dict:

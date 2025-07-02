@@ -32,6 +32,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     data_df = pd.read_csv(folder_path + data_path)
     columns_to_drop = ['Pat_ID'] + [col for col in ignored_target_cols if col in data_df.columns]
     data_df = data_df.drop(columns=columns_to_drop)
+    data_df[target_col] = data_df[target_col].sample(frac=1, random_state=42).reset_index(drop=True)
     Feature_Selection['target'] = target_col
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
     save_path = os.path.join(folder_path, out)
@@ -75,9 +76,9 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     param_grid_ngb = {
     #'Dist': [NormalInverseGamma],
     #'Score' : [NIGLogScore],
-    'n_estimators': [450, 500, 550, 600, 650],
+    'n_estimators': [500, 550, 600],
     'learning_rate': [0.01, 0.1],
-    'Base__max_depth': [3, 4, 5],
+    'Base__max_depth': [3, 4],
     'Score__evid_strength': [0.1],
     'Score__kl_strength': [0.01],
     }
@@ -136,5 +137,5 @@ if __name__ == "__main__":
     #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
-    main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA", "results/MoCA/level2/NGBoost", -1)
+    main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA", "results/MoCA_shuffeled/level2/NGBoost", -1)
     

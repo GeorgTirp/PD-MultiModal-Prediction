@@ -75,7 +75,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     param_grid_ngb = {
     #'Dist': [NormalInverseGamma],
     #'Score' : [NIGLogScore],
-    'n_estimators': [450, 500, 550, 600, 650],
+    'n_estimators': [500, 550, 600, 650],
     'learning_rate': [0.01, 0.1],
     'Base__max_depth': [3, 4, 5],
     'Score__evid_strength': [0.1],
@@ -85,8 +85,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     
     # BEST ONES: 600, 0.1 and for regs 0.1 and 0.001
     NGB_Hparams = {
-        'Dist': NormalInverseGamma,
-        'Score' : NIGLogScore,
+        'Dist': Normal,
+        'Score' : NormalCRPScore,
         'n_estimators': 600,
         'learning_rate': 0.01,
         'natural_gradient': True,
@@ -136,5 +136,5 @@ if __name__ == "__main__":
     #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
-    main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA", "results/MoCA/level2/NGBoost", -1)
+    main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA", "results/MoCA_Normal/level2/NGBoost", -1)
     
