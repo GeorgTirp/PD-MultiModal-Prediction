@@ -9,6 +9,9 @@ import pandas as pd
 # Machine Learning and Modeling
 from xgboost import XGBRegressor
 from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import RepeatedKFold
+from sklearn.metrics import make_scorer
+from scipy.stats import pearsonr
 
 # Visualization and Explainability
 import matplotlib.pyplot as plt
@@ -73,15 +76,20 @@ class XGBoostRegressionModel(BaseRegressionModel):
         Returns:
             dict: Best hyperparameters found.
         """
+        def pearson_corr(y_true, y_pred):
+            return pearsonr(y_true, y_pred)[0]
+        pearson_scorer = make_scorer(pearson_corr, greater_is_better=True)
         if folds == -1:
             folds = len(X)
+
         #self.logging.info(f"Starting hyperparameter tuning using GridSearchCV with {folds}-fold CV...")
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
             cv=folds,
-            scoring='r2',
-            n_jobs=-1
+            scoring=pearson_scorer,  
+            n_jobs=-1,
+            verbose=0,
         )
 
         grid_search.fit(X, y)
@@ -89,4 +97,7 @@ class XGBoostRegressionModel(BaseRegressionModel):
         self.model = grid_search.best_estimator_
         self.xgb_hparams.update(best_params)
         self.model.set_params(**best_params)
+        if self.logging:
+            self.logging.info(f"Best parameters found: {best_params}")
+            self.logging.info(f"Best CV score: {grid_search.best_score_}")
         return best_params

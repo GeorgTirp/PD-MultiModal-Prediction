@@ -13,6 +13,8 @@ from model_classes.faster_evidential_boost import NormalInverseGamma
 from ngboost.distns import Normal
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.model_selection import GridSearchCV, train_test_split
+from scipy.stats import pearsonr
+from sklearn.metrics import make_scorer
 
 # Visualization and Explainability
 import matplotlib.pyplot as plt
@@ -51,9 +53,10 @@ class NGBoostRegressionModel(BaseRegressionModel):
             identifier: str = None,
             top_n: int = -1,
             param_grid: dict = None,
-            logging = None):
+            logging = None,
+            standardize=False):
         
-        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n, logging=logging)
+        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n, logging=logging, standardize=standardize)
         # Set default hyperparameters if not provided
         if ngb_hparams is None:
             ngb_hparams = {
@@ -93,15 +96,20 @@ class NGBoostRegressionModel(BaseRegressionModel):
             folds = len(X)
         # Perform grid search on the current NGBoost model
         #ss = ShuffleSplit(n_splits=50, test_size= 0.01, random_state=7)
+        def pearson_corr(y_true, y_pred):
+            return pearsonr(y_true, y_pred)[0]
+        pearson_scorer = make_scorer(pearson_corr, greater_is_better=True)
+
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
             cv=folds,
-            scoring='neg_mean_squared_error',
+            scoring=pearson_scorer,
             n_jobs=-1
         )
         grid_search.fit(X, y)
         best_params = grid_search.best_params_
+        best_score = grid_search.best_score_
         
         # Separate base learner parameters and other NGBoost hyperparameters
         score_params = {k.replace("Score__", ""): v for k, v in best_params.items() if k.startswith("Score__")}
@@ -125,8 +133,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
         self.model.fit(X, y)
         # Force an immediate fit on the tuning data to initialize internal parameters.
         self.model.fit(X, y)
-        self.model_name += " (Tuned)"
-        print(f"Best parameters found: {best_params}")
+        #print(f"Best parameters found: {best_params}")
+        #print(f"Best score: {best_score}")
         return best_params
 
     def tune_hparams_ray(self, X, y, param_grid: dict, folds=5, algo: str ="BayesOpt") -> dict:
@@ -272,6 +280,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
             else:
                 plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_aggregated_beeswarm.png')
             plt.close()
+        if self.standardize:
+            shap_values *= self.std
         return shap_values
 
     def feature_importance_variance(
@@ -348,6 +358,11 @@ class NGBoostRegressionModel(BaseRegressionModel):
                 else:
                     plt.savefig(f'{self.save_path}/{self.identifier}_predicitve_uncertainty_shap_aggregated.png')
                 plt.close()
+            if self.standardize:
+                shap_pred *= self.std
+                shap_epi *= self.std
+                shap_alea *= self.std
+
             return shap_pred, shap_epi, shap_alea
         
         elif mode == "normal":
@@ -368,6 +383,10 @@ class NGBoostRegressionModel(BaseRegressionModel):
                 else:
                     plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_std_shap_aggregated_beeswarm.png')
                 plt.close()
+
+            if self.standardize:
+                shap_values *= self.std
+            
             return shap_values
     
     def compute_uncertainties(self, mode=["nig", "ensemble"], X: pd.DataFrame = None,  members: int = 10) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:

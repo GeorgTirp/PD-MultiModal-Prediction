@@ -56,7 +56,8 @@ class BaseRegressionModel:
             save_path: str = None,
             identifier: str = None,
             top_n: int = 10,
-            logging = None):
+            logging = None,
+            standardize: bool = False) -> None:
         """
         Initialize the regression model framework with dataset, feature selection, and settings.
 
@@ -71,17 +72,21 @@ class BaseRegressionModel:
             logging (optional): Logger instance for logging messages. Defaults to None.
         """
         self.logging = logging if logging is not None else print
+        self.logging.info("Initializing BaseRegressionModel class...")
         self.feature_selection = feature_selection
         self.top_n = top_n
-        self.X, self.y = self.model_specific_preprocess(data_df)
+        self.X, self.y, self.z, self.m, self.std = self.model_specific_preprocess(data_df)
         self.train_split = train_test_split(self.X, self.y, test_size=test_split_size, random_state=42)
         self.save_path = save_path
         self.identifier = identifier
         self.metrics = None
         self.model_name = None
         self.target_name = target_name
+        self.standardize = standardize
+        
         if not os.path.exists(save_path):
             os.makedirs(save_path)
+        self.logging.info("Finished initializing BaseRegressionModel class.")
 
     def model_specific_preprocess(self, data_df: pd.DataFrame, ceiling: list =["BDI", "MoCA"]) -> Tuple:
         """
@@ -111,8 +116,11 @@ class BaseRegressionModel:
         X = X.fillna(X.mean())
         X = X.apply(pd.to_numeric, errors='coerce')
         
+        m = y.mean()
+        std = y.std()
+        z = (y - m) / std  # Standardize the target variable
         self.logging.info("Finished model-specific preprocessing.")
-        return X, y
+        return X, y, z, m, std
 
     def fit(self) -> None:
         """
@@ -217,7 +225,7 @@ class BaseRegressionModel:
                 epistemics.append(epistemic)
                 aleatorics.append(aleatoric)
 
-            if self.__class__.__name__ == "NGBoostRegressionModel":
+            if isinstance(self, NGBoostRegressionModel):
                 pred_dist = self.model.pred_dist(X_val_kf).params
                 pred_dist = np.column_stack([pred_dist[key] for key in pred_dist.keys()])
                 pred_dists.append(pred_dist)
@@ -226,7 +234,7 @@ class BaseRegressionModel:
                 with io.capture_output():
                     if ablation_idx is not None:
                         val_index = None
-                    if self.__class__.__name__ == "NGBoostRegressionModel":
+                    if isinstance(self, NGBoostRegressionModel):
                         shap_values_mean = self.feature_importance_mean(top_n=-1, save_results=True, iter_idx=val_index)
                         shap_values_variance, _, _ = self.feature_importance_variance(top_n=-1, save_results=True, iter_idx=val_index)
                         all_shap_mean.append(shap_values_mean)
@@ -252,7 +260,7 @@ class BaseRegressionModel:
             else:
                 save_path = f'{self.save_path}/{self.identifier}_{self.target_name}'
 
-            if self.__class__.__name__ == "NGBoostRegressionModel":
+            if isinstance(self, NGBoostRegressionModel):
                 all_shap_mean_array = np.stack(all_shap_mean, axis=0)
                 all_shap_variance_array = np.stack(all_shap_variance, axis=0)
                 mean_shap_values = np.mean(all_shap_mean_array, axis=0)
@@ -295,7 +303,7 @@ class BaseRegressionModel:
             'p_value': p,
             'y_pred': preds,
             'y_test': y_vals,
-            'pred_dist': np.vstack(pred_dists) if self.__class__.__name__ == "NGBoostRegressionModel" else None,
+            'pred_dist': np.vstack(pred_dists) if isinstance(self, NGBoostRegressionModel) else None,
             'epistemic': epistemic_uncertainty if uncertainty else None,
             'aleatoric': aleatoric_uncertainty if uncertainty else None,
             'feature_importance': feature_importances if get_shap else None
@@ -313,7 +321,14 @@ class BaseRegressionModel:
         return metrics
 
 
-    def nested_eval(self, folds=10, get_shap=True, tune=False, tune_folds=10, uncertainty=False, ablation_idx=None) -> Dict:
+    def nested_eval(
+            self, 
+            folds=10, 
+            get_shap=True, 
+            tune=False, 
+            tune_folds=10, 
+            uncertainty=False, 
+            ablation_idx=None) -> Dict:
         """
         Perform nested cross-validation evaluation with optional tuning, SHAP, uncertainty estimation, and ablation.
 
@@ -348,15 +363,26 @@ class BaseRegressionModel:
         for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation", leave=False):
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
+
+            if self.standardize:
+                self.m = y_train_kf.mean()
+                self.std = y_train_kf.std()
+                y_train_kf = (y_train_kf - self.m) / self.std
+                y_val_kf = (y_val_kf - self.m) / self.std  # Standardize the target variable
             if tune:
                 self.tune_hparams(X_train_kf, y_train_kf, self.param_grid, tune_folds)
-            
-            self.model.fit(X_train_kf, y_train_kf)
+            else:
+                self.model.fit(X_train_kf, y_train_kf)
+
+                
             pred = self.model.predict(X_val_kf)
+            if self.standardize:
+                pred = pred * self.std + self.m
+                y_vals_kf = y_val_kf * self.std + self.m
             preds.append(pred)
             y_vals.append(y_val_kf)
-            if len(y_val_kf) != 1:
-                tqdm.write(f'Fold [{iter_idx + 1}/{folds}]: Pearson-R: {pearsonr(y_val_kf, pred)[0]:.4f}, MSE: {mean_squared_error(y_val_kf, pred):.4f}')
+            if len(preds) != 1:
+                tqdm.write(f'Current Pearson-r: {pearsonr(np.concatenate(y_vals), np.concatenate(preds))[0]}')
 
             # Get uncertainties
             if uncertainty == True:
@@ -365,8 +391,7 @@ class BaseRegressionModel:
                 aleatorics.append(aleatoric)
 
             # Get paramters of predictive Distribution
-            if self.__class__.__name__ == "NGBoostRegressionModel":
-                #if
+            if self.model_name == "NGBoost":
                 pred_dist = self.model.pred_dist(X_val_kf).params
                 pred_dist = np.column_stack([pred_dist[key] for key in pred_dist.keys()])
                 pred_dists.append(pred_dist)
@@ -377,7 +402,7 @@ class BaseRegressionModel:
                 with io.capture_output():
                     if ablation_idx is not None:
                         val_index = None
-                    if self.__class__.__name__ == "NGBoostRegressionModel":
+                    if self.model_name == "NGBoost":
                         shap_values_mean = self.feature_importance_mean(
                             top_n=-1, save_results=True,  
                             iter_idx=iter_idx)
@@ -402,7 +427,7 @@ class BaseRegressionModel:
                             iter_idx=iter_idx)
                         all_shap_values.append(shap_values) 
             iter_idx += 1
-        if self.__class__.__name__ == "NGBoostRegressionModel":
+        if self.model_name == "NGBoost":
             pred_dists = np.vstack(pred_dists)
         preds = np.concatenate(preds)
         y_vals = np.concatenate(y_vals)
@@ -418,15 +443,11 @@ class BaseRegressionModel:
             os.makedirs(save_path, exist_ok=True)
             save_path = f'{save_path}{self.identifier}_{self.target_name}'
         else:
-            eval_save_path = f'{self.save_path}/model_evaluation'
-            os.makedirs(eval_save_path, exist_ok=True)
-            save_path = f'{eval_save_path}/{self.identifier}_{self.target_name}'
+            save_path = f'{self.save_path}/{self.identifier}_{self.target_name}'
 
         
         if get_shap:
-            
-            
-            if self.__class__.__name__ == "NGBoostRegressionModel":
+            if self.model_name == "NGBoost":
                 all_shap_mean_array = np.stack(all_shap_mean, axis=0)
                 all_shap_variance_array = np.stack(all_shap_variance, axis=0)
                 # Average over the folds to get an aggregated array of shape (n_samples, n_features)
@@ -465,7 +486,6 @@ class BaseRegressionModel:
                 with open(f'{save_path}_shap_explanations.pkl', 'wb') as fp:
                     pickle.dump(mean_shap_values, fp)
                 plt.close()
-
             np.save(f'{save_path}_all_shap_values(mu).npy', all_shap_mean_array)
             
             
@@ -473,7 +493,7 @@ class BaseRegressionModel:
             feature_importances = np.mean(np.abs(mean_shap_values), axis=0)
             feature_importance_dict = dict(zip(self.X.columns, feature_importances))
             # Save feature importances to a file
-        
+            
 
         metrics = {
         'mse': mse,
@@ -495,6 +515,7 @@ class BaseRegressionModel:
         with open(model_save_path, 'wb') as model_file:
             pickle.dump(self.model, model_file)
         
+        self.logging.info(f"Trained model saved to {model_save_path}.")
         self.logging.info("Finished model evaluation.")
         return metrics
     
@@ -506,13 +527,10 @@ class BaseRegressionModel:
             Tuple[list, list, list]: Lists of R² scores, p-values, and removed feature names after each ablation step.
         """
         r2s = []
-        mses = []
         p_values = []
         removals = []
         number_of_features = len(self.feature_selection['features'])
         i = 1
-        steps = []
-
         while number_of_features > 0:
             self.logging.info(f"---- Starting ablation step {i} with {number_of_features} features remaining. ----")
             # Determine the number of features to remove in this step
@@ -528,7 +546,6 @@ class BaseRegressionModel:
             metrics_df = pd.DataFrame([metrics])
             metrics_df.to_csv(f'{save_path}/ablation_step[{i}]/{self.identifier}_{self.target_name}_metrics.csv', index=False)
             r2s.append(metrics['r2'])
-            mses.append(metrics['mse'])
             p_values.append(metrics['p_value'])
             importance = metrics['feature_importance']
             importance_indices = np.argsort(importance)
@@ -548,60 +565,51 @@ class BaseRegressionModel:
             number_of_features -= features_to_remove
             
             # If using a specific model, perform additional calibration if needed
-            if self.__class__.__name__ == "NGBoostRegressionModel":
+            if self.model_name == "NGBoost":
                 self.calibration_analysis(ablation_idx=i)
 
-            self.plot(title='Actual vs Predicted', save_path=f'{save_path}ablation_step[{i}]/')
-
+            # Increment the iteration counter (this is crucial when removing multiple features per step)
             i += 1
-            steps.append(i)
 
             # If features remaining are fewer than the threshold, switch to one-by-one ablation
             if number_of_features <= threshold_to_one_fps:
                 features_per_step = 1  # From here on, remove only one feature at a time
 
-
-            self.logging.info(f"✅ Done. Pearson-R: {metrics['r2']}, p-value: {metrics['p_value']} \n")
+            self.logging.info(f"Feature ablation finished. Final R2: {r2s[-1] if r2s else 'N/A'}, min R2: {np.min(r2s) if r2s else 'N/A'}, max R2: {np.max(r2s) if r2s else 'N/A'}")
         
+        # Define the custom color palette from your image
         custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
+                # Set Seaborn style, context, and custom palette
         sns.set_theme(style="whitegrid", context="paper")
         sns.set_palette(custom_palette)
-        path_r2 = f'{save_path}{self.identifier}_{self.target_name}_feature_ablation.png'
-        path_mse = f'{save_path}{self.identifier}_{self.target_name}_feature_ablation_mse.png'
-
+        path = f'{save_path}{self.identifier}_{self.target_name}_feature_ablation.png'
+                # Read in the CSV
+        
         # Save the removals list as a CSV file
         removals_df = pd.DataFrame({'Removed_Features': removals})
         removals_df.to_csv(f'{save_path}{self.identifier}_ablation_history.csv', index=False)
-
-        # Create a plot for R² scores over feature ablation steps
+        # Create a figure
         plt.figure(figsize=(6, 4))
-        plot_df = pd.DataFrame({'x': steps, 'r2s': r2s})
-        sns.lineplot(data=plot_df, x='x', y='r2s', label="Pearson-R Score", marker='o', color=custom_palette[2])
-        plt.xlabel("Number of ablation steps")
+        x = range(i - 1)
+                # Create a figure
+        plt.figure(figsize=(6, 4))
+                # Plot each model's R² scores in a loop, using sample_sizes on the x-axis
+        #for model_name, r2_scores in results.items():
+        plot_df = pd.DataFrame({'x': x, 'r2s': r2s})
+        sns.lineplot(data=plot_df, x='x', y='r2s', label="R Score", marker='o')
+        # Label the axes and set the title
+        plt.xlabel("Number of removed features")
         plt.ylabel("Pearson-R Score")
         plt.title("Pearson-R Scores Over Feature Ablation")
         plt.legend()
         plt.tight_layout()
-        plt.savefig(path_r2, dpi=300, bbox_inches='tight')
+        plt.savefig(path, dpi=300, bbox_inches='tight')
         plt.close()
-
-        # Create a plot for MSE over feature ablation steps
-        plt.figure(figsize=(6, 4))
-        plot_df_mse = pd.DataFrame({'x': steps, 'mse': mses})
-        sns.lineplot(data=plot_df_mse, x='x', y='mse', label="MSE", marker='o', color=custom_palette[1])
-        plt.xlabel("Number of ablation steps")
-        plt.ylabel("MSE")
-        plt.title("MSE Over Feature Ablation")
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(path_mse, dpi=300, bbox_inches='tight')
-        plt.close()
-
         return r2s, p_values, removals
             
 
     
-    def feature_importance(self, top_n: int = 10, batch_size=None, save_results=True) -> Dict:
+    def feature_importance(self, top_n: int = 10, batch_size=None, iter_idx=None, ablation_idx=None, save_results=True) -> Dict:
         """
         Compute feature importance scores (e.g., SHAP values). Must be implemented by subclasses.
 
@@ -636,7 +644,7 @@ class BaseRegressionModel:
     
         
 
-    def plot(self, title, modality='', save_path: str=None) -> None:
+    def plot(self, title, modality='') -> None:
         """
         Generate a scatter plot of predicted vs. actual target values with regression line and confidence intervals.
 
@@ -732,8 +740,9 @@ class BaseRegressionModel:
         sns.despine()
         plt.tight_layout()
         # Save and close
-        if save_path is None:
-            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_actual_vs_predicted.png')
-        else:
-            plt.savefig(f'{save_path}{self.identifier}_{self.target_name}_actual_vs_predicted.png')
+        plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_actual_vs_predicted.png')
         plt.close()
+
+        # Log info (optional)
+        self.logging.info("Plot saved to %s/%s_%s_actual_vs_predicted.png", 
+                 self.save_path, self.identifier, self.target_name)
