@@ -17,12 +17,14 @@ from scipy.stats import linregress
 from sklearn.svm import SVC
 from sklearn.model_selection import GridSearchCV
 from scipy.stats import ttest_rel, false_discovery_control
+from matplotlib.ticker import MaxNLocator
 
 def plot_stim_positions(positions: pd.DataFrame, safe_path: str = "") -> None:
     """ Plot the stimulation positions in the brain"""
      # Create a figure with two subplots
     data_to_plot = positions.copy()
     fig = plt.figure(figsize=(14, 7))
+    
     # Left subplot for left hemisphere
     ax1 = fig.add_subplot(121, projection='3d')
     ax1.scatter(data_to_plot["X_L_stim"], data_to_plot["Y_L_stim"], data_to_plot["Z_L_stim"], c='r', label='Stim Points')
@@ -213,9 +215,16 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
             Line2D([0], [0], color=line_colors["no change"], lw=2, label="No change"),
         ]
         ax.legend(handles=legend_elements, loc="upper left")
+    plt.grid(False)
+    sns.set_context("paper")
+    # Optionally choose a style you like
+    sns.despine()
+    plt.tight_layout()    
     plt.savefig(safe_path + modality_name + "_raincloud_plot.png")
-    plt.show()
+    plt.savefig(safe_path + modality_name + "_raincloud_plot.svg")
+    #plt.show()
     plt.close()
+    
 
 
 
@@ -255,35 +264,54 @@ def demographics_pre_post(modality_path: str, model_data_path: str, modality_nam
         raincloud_plot(data, modality_name , ['Pre', 'Post'], save_path)
     
     
-def histoplot(input_path: str , save_path: str) -> None:
+def histoplot(input_path: str, feature: str,  save_path: str) -> None:
     """ Plot the demographic data before and after the treatment as raincloud plot"""
     # Load the data
     data = pd.read_csv(input_path)
     sns.set_theme(style="white", context="paper")
     sns.set_palette("deep")
     # Create a figure with two subplots
-    plt.figure(figsize=(10, 6))
-    print(data['TimeSinceSurgery'].mean())
-    print(data['TimeSinceSurgery'].std())
-    sns.histplot(data['TimeSinceSurgery'], kde=True, bins=30, color='blue')
-    plt.title('Distribution of Time Since Surgery', fontsize=16)
-    plt.xlabel('Time Since Surgery (years)', fontsize=14)
-    plt.ylabel('Frequency', fontsize=14)
-    plt.xticks(fontsize=11)
-    plt.yticks(fontsize=11)
-    plt.savefig(save_path + "time_since_surgery_histoplot.png")
-    plt.show()
+    if feature == 'TimeSinceSurgery':
+        title = 'Distribution of Time Since Surgery'
+        xlabel = 'Time Since Surgery (years)'
+        save_path = save_path + "time_since_surgery_histoplot"
+        color = 'blue'
+
+    elif feature == 'TimeSinceDiag':
+        title = 'Distribution of Time Since Diagnosis'
+        xlabel = 'Time Since Diagnosis (years)'
+        save_path = save_path + "time_since_diag_histoplot"
+        color = 'green'
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    print(data[feature].mean())
+    print(data[feature].std())
+    sns.histplot(data[feature], kde=True, bins=30, color=color)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.set_title(title, fontsize=16)
+    ax.set_xlabel(xlabel, fontsize=14)
+    ax.set_ylabel('Frequency', fontsize=14)
+    ax.tick_params(axis='both', labelsize=11)
+    ax.grid(False)
+    sns.set_context("paper")
+    # Optionally choose a style you like
+    sns.despine()
+    plt.tight_layout()
+    plt.savefig(save_path + ".png")
+    plt.savefig(save_path + ".svg")
+    #plt.show()
     plt.close()
+    
 
 
-
-def visualize_demographics(questionnaire, root_dir):
+def visualize_demographics(
+        data_path, 
+        questionnaire, 
+        save_path) -> None:
     # Example usage
-    root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
-    #root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction"
-    data_path = root_dir + "/data/" + questionnaire 
+    
+    
     stim_path = data_path + "/stim_positions.csv"
-    save_path = root_dir + "/results/data_analysis/" + questionnaire + "/"
     mds_prepost_path = data_path+ "/mupdrs3_pre_vs_post.csv"
     ledd_prepost_path = data_path + "/ledd_pre_vs_post.csv"
     if questionnaire == "MoCA":  
@@ -300,47 +328,42 @@ def visualize_demographics(questionnaire, root_dir):
     demographics_pre_post(mds_prepost_path, op_dates_path, "MDS-UPDRS III", save_path)
     demographics_pre_post(ledd_prepost_path, op_dates_path, "LEDD", save_path)
     demographics_pre_post(quest_prepost_path, op_dates_path, questionnaire, save_path)
-    histoplot(quest, save_path)
+    histoplot(quest, "TimeSinceSurgery", save_path)
+    histoplot(quest, "TimeSinceDiag", save_path)
 
-    # Load data
-    #data = pd.read_csv(data_path)
-    #X = data.drop(columns=['BDI_ratio','Pat_ID'])
-    #stim_positions = pd.read_csv(stim_path).drop(columns=['OP_DATUM'])
-    # Perform PCA
-    #pca_result = pca(X, n_components=10, safe_path=save_path)
-    #print("PCA safed into {}".format(save_path))
-    #
-    # Calculate and plot covariance matrix
-    #cov_matrix = covariance_matrix(X, safe_path=save_path)
-    #print("Covariance Matrix safed into {}".format(save_path))
-    
-    
-    # Plot stimulation positions
-    #plot_stim_positions(stim_positions, safe_path=save_path)
-    #print("Stimulation positions plotted and safed into {}".format(save_path))
 
 
 def regression_figures(
         metrics_path_best: str, 
         metrics_path_full: str , 
-        bdi_data_path: str,
-        save_path: str) -> None:
+        data_path: str,
+        save_path: str,
+        quest=None) -> None:
     """ Plot predicted vs. actual values """
-    
+    if quest == "BDI":
+        x_label = "Actual BDI Ratio"
+        y_label = "Predicted BDI Ratio"
+        
+    elif quest == "MoCA":
+        x_label = "Actual MoCA Ratio"
+        y_label = "Predicted MoCA Ratio"
+    else:
+        raise ValueError("Invalid questionnaire type. Choose 'BDI' or 'MoCA'.")
+   
     def plot_regression(
             plot_df, 
             r, 
             p, 
             save_path, 
             title, 
-            xlabel="Actual BDI Ratio", 
-            ylabel="Predicted BDI Ratio",
+            xlabel=x_label,
+            ylabel = y_label,
             type="model"):
         # Set the context for the plot
         
         
         # Create a wider (landscape) figure
-        plt.figure(figsize=(10, 6))
+        fig = plt.figure(figsize=(10, 6))
         # Create a DataFrame for Seaborn
         colors = {
             "deterioration": "04E762",
@@ -421,9 +444,9 @@ def regression_figures(
         y_min, y_max = plot_df[y].min(), plot_df[y].max()
         ax.set_xlim(x_min - pad * (x_max - x_min), x_max + pad * (x_max - x_min))
         ax.set_ylim(y_min - pad * (y_max - y_min), y_max + pad * (y_max - y_min))
-        if type == "model":
-            ax.set_ylim(-0.8, 0.8)
-            ax.set_xlim(-0.8, 0.8)
+        #if type == "model":
+        #    ax.set_ylim(y_min, y_max)
+        #    ax.set_xlim(x_min, x_max)
         # Label axes and set title
         plt.xlabel(xlabel, fontsize=12)
         plt.ylabel(ylabel, fontsize=12)
@@ -438,13 +461,13 @@ def regression_figures(
         plt.savefig(f'{save_path}_{title}.png')
         plt.savefig(f'{save_path}_{title}.svg')
         plt.close()
-    
+        
     
     def plot_model(metrics_path: str, title: str):
         # Read the metrics CSV
         metrics_df = pd.read_csv(metrics_path)
         # Read the BDI data CSV
-        bdi_df = pd.read_csv(bdi_data_path)
+        df = pd.read_csv(data_path)
         # Extract the best model's metrics
         best_model = metrics_df.iloc[0]
         # Extract the y_test and y_pred arrays from the DataFrame
@@ -467,23 +490,32 @@ def regression_figures(
         r, p = best_model["r2"], best_model["p_value"]
         plot_regression(plot_df, r, p, save_path, title)
     
-    def plot_linear_regression(bdi_data_path: str, title: str, xlabel: str = "BDI Pre Score", ylabel: str = "BDI Ratio"):
+    def plot_linear_regression(data_path: str, title: str, xlabel: str = "BDI Pre Score", ylabel: str = "BDI Ratio"):
         # Read the BDI data CSV
-        bdi_df = pd.read_csv(bdi_data_path)
+        df = pd.read_csv(data_path)
         # Extract the y_test and y_pred arrays from the DataFrame
-        plot_df = pd.DataFrame({
-            "Pre": bdi_df["BDI_sum_pre"],
-            "Ratio": bdi_df["BDI_ratio"]
-        })
+        if quest == "BDI":
+            plot_df = pd.DataFrame({
+                "Pre": df["BDI_sum_pre"],
+                "Ratio": df["BDI_ratio"]
+            })
+        elif quest == "MoCA":
+            plot_df = pd.DataFrame({
+                "Pre": df["MoCA_sum_pre"],
+                "Ratio": df["MoCA_ratio"]
+            })
+        else:
+            raise ValueError("Invalid questionnaire type. Choose 'BDI' or 'MoCA'.")
         # Fit a linear regression model
         _, _, r, p, std_err = linregress(plot_df["Pre"], plot_df["Ratio"])
 
+        
         plot_regression(plot_df, r, p, save_path, title, xlabel=xlabel, ylabel=ylabel, type="linear")
 
         
-    #plot_model(metrics_path_best, "Predicted vs. Actual Best Model")
-    #plot_model(metrics_path_full, "Predicted vs. Actual Full Model")
-    plot_linear_regression(bdi_data_path, "Pre vs. Ratio")
+    plot_model(metrics_path_full, "Model Predicted vs. Actual - Full Model")
+    plot_model(metrics_path_best, "Model Predicted vs. Actual - Best Model")
+    #plot_linear_regression(data_path, "Pre vs. Ratio")
 
 
 def threshold_figure(
@@ -631,6 +663,7 @@ def threshold_figure(
         plt.tight_layout()
         plt.tight_layout()
         plt.savefig(f'{save_path}_{feature_name}.png', dpi=300)
+        plt.savefig(f'{save_path}_{feature_name}.svg', dpi=300)
         plt.close(fig)
 
 
@@ -753,7 +786,8 @@ def shap_importance_histo_figure(
     plt.tight_layout()
 
     # 4) Save and close
-    plt.savefig(save_path, dpi=300)
+    plt.savefig(save_path + ".png", dpi=300)
+    plt.savefig(save_path + ".svg", dpi=300)
     plt.close(fig)
 
 
@@ -763,36 +797,43 @@ if __name__ == "__main__":
     #root_dir = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
     #/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/level2/level2/NGBoost/BDI_ablation_history.csv
     #visualize_demographics("BDI", root_dir)
-    metrics_path1 = root_dir + "/results/level3/NGBoost/BDI_metrics.csv"
-    metrics_path2 = root_dir + "/results/level3/NGBoost/BDI_metrics.csv"
-    bdi_data_path = root_dir + "/data/BDI/level2/bdi_df.csv"
-    
-    original_features = ['BDI_sum_pre', 'AGE_AT_OP', 'TimeSinceDiag', 'X_L', 'Y_L', 'Z_L', 'X_R',
+    metrics_path_best = root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_metrics.csv"
+    metrics_path_full = root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/MoCA_ratio_metrics.csv"
+    moca_data_path = root_dir + "/data/MoCA/level2/moca_df.csv"
+    moca_data_folder_path = root_dir + "/data/MoCA/level2"
+    original_features = ['MoCA_sum_pre', 'AGE_AT_OP', 'TimeSinceDiag', 'X_L', 'Y_L', 'Z_L', 'X_R',
        'Y_R', 'Z_R', 'Left_1_mA', 'Right_1_mA', 'LEDD_ratio']
     
-    feature_names_for_plotting = ['BDI Sum Pre', 'Age at Operation', 'Time passed Since Diagnosis', 'X Left', 'Y Left', 'Z Left', 'X Right',
+    feature_names_for_plotting = ['MoCA Sum Pre', 'Age at Operation', 'Time passed Since Diagnosis', 'X Left', 'Y Left', 'Z Left', 'X Right',
        'Y Right', 'Z Right', 'Left mA', 'Right mA', 'LEDD Reduction Ratio']
     
     feature_name_mapping = dict(zip(original_features, feature_names_for_plotting))
 
-    regression_figures(
-        metrics_path1, 
-        metrics_path2,
-        bdi_data_path,
-        save_path = root_dir + "/figures/")
+    #visualize_demographics("MoCA", root_dir)
+    visualize_demographics(
+        moca_data_folder_path, 
+        "MoCA", 
+        save_path = root_dir + "/figures/MoCA/")
     
-    threshold_figure(
-        feature_name_mapping,
-        data_path=root_dir + "/data/BDI/level2/bdi_df.csv",
-        shap_data_path=root_dir + "/results/level2/NGBoost/BDI_ratio_[6]_mean_shap_values.npy",
-        removal_list_path=root_dir + "/results/level2/NGBoost/BDI_ablation_history.csv",
-        save_path=root_dir + "/figures/bdi_threshold_figure"
-    )
-
-    shap_importance_histo_figure(
-        feature_name_mapping,
-        data_path=root_dir + "/data/BDI/level2/bdi_df.csv",
-        shap_data_path=root_dir + "/results/level2_test/NGBoost/BDI_ratio_all_shap_values(mu).npy",
-        removal_list_path=root_dir + "/results/level2/NGBoost/BDI_ablation_history.csv",
-        save_path=root_dir + "/figures/bdi_abs_importance_figure"
-    )
+    regression_figures(
+        metrics_path_best,
+        metrics_path_full,
+        moca_data_path,
+        save_path = root_dir + "/figures/MoCA/",
+        quest="MoCA")
+    
+    #threshold_figure(
+    #    feature_name_mapping,
+    #    data_path=moca_data_path,
+    #    shap_data_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_all_shap_values(mu).npy",
+    #    removal_list_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/MoCA_ablation_history.csv",
+    #    save_path=root_dir + "/figures/MoCA/moca_threshold_figure"
+    #)
+#
+    #shap_importance_histo_figure(
+    #    feature_name_mapping,
+    #    data_path=moca_data_path,
+    #    shap_data_path=root_dir +  "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_all_shap_values(mu).npy",
+    #    removal_list_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/MoCA_ablation_history.csv",
+    #    save_path=root_dir + "/figures/MoCA/moca_abs_importance_figure"
+    #)

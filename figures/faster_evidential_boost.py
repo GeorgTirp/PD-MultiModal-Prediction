@@ -149,22 +149,20 @@ class NIGLogScore(LogScore):
         else:
             # Full FIM
             return np.array([np.outer(g, g) + 1e-5*np.eye(g.shape[0]) for g in grads])
-
-
-    #def metric(self, Y=None, params=None,
-    #           evid_strength: float = 0.2,
-    #           kl_strength:    float = 0.01):
-    #    """ Empirical FIM from full‐loss gradients """
-    #    if params is None:
-    #        mu, lam, alpha, beta = self.mu, self.lam, self.alpha, self.beta
-    #        params = [mu, lam, alpha, beta]
-    #    else:
-    #        params = np.stack(params, axis=-1).T
-    #    if Y is None:
-    #        Y = self._last_Y
-    #    grads = self.d_score(Y, params=params)
-    #    FIM = np.array([np.outer(g, g) + 1e-5*np.eye(g.shape[0]) for g in grads])
-    #    return FIM
+        #a11 = ((2 * self.alpha + 1) * 0.5) * (self.lam / self.beta)
+        #a22 = (1+ (1/ self.alpha -1)) * 0.5
+        #a33 = (self.alpha -1)**2 * (polygamma(self.alpha + 0.5) - polygamma(self.alpha )) 
+        #a44 = -0.5
+        #a34 = a43 = (self.alpha -1) * (polygamma(self.alpha + 0.5) - polygamma(self.alpha ))
+        #FIM = np.zeros([4, 4])
+        #FIM[0, 0] = a11
+        #FIM[1, 1] = a22
+        #FIM[2, 2] = a33
+        #FIM[3, 3] = a44
+        #FIM[3, 2] = a34
+        #FIM[2, 3] = a43
+        #return FIM
+   
 
 
 
@@ -199,6 +197,7 @@ class NormalInverseGamma(RegressionDistn):
         self.lam   = np.exp(params[1])     # Avoid zero
         self.alpha = np.exp(params[2]) + 1      # Enforce α > 1
         self.beta  = np.exp(params[3])     # Avoid zero
+        print(f"Initialized NIG with params: {self.mu}, {self.lam}, {self.alpha}, {self.beta}")
 
 
     @staticmethod
@@ -212,9 +211,42 @@ class NormalInverseGamma(RegressionDistn):
           - raw_alpha: initialized to 0 so that alpha = exp(0)+1 = 2,
           - raw_beta: the log of the variance of Y (so that beta = variance of Y).
         """
-        m = np.mean(Y)
-        s = np.std(Y)
-        return np.array([m, 0.0, np.log(1.0), np.log(s**2)])  
+        #m = np.mean(Y)
+        #s = np.std(Y)
+        #return np.array([m, 0.0, np.log(1.0), np.log(s**2)])  
+        Y = np.asarray(Y).ravel()
+        n   = len(Y)
+        mu_y  = np.mean(Y)
+        var_y = np.var(Y)  # important: variance, not std!
+
+        # 1) Define a weak prior centered at mu_y
+        mu0, lam0 = mu_y, 1.0
+        alpha0, beta0 = 1.0, 1e-6
+
+        # 2) Compute posterior parameters (Normal‐Inverse‐Gamma conjugacy)
+        lam_n   = lam0 + n
+        mu_n    = (lam0 * mu0 + n * mu_y) / lam_n
+        alpha_n = alpha0 + n/2.0
+
+        # Sum of squares about the sample mean
+        sse = np.sum((Y - mu_y)**2)
+        # Additional term for shift of means
+        mean_diff_term = (lam0 * n * (mu_y - mu0)**2) / (2.0 * lam_n)
+        beta_n  = beta0 + 0.5 * sse + mean_diff_term
+
+        # 3) Clip to safe ranges
+        lam_n   = np.clip(lam_n,   1e-3, 1e3)
+        alpha_n = np.clip(alpha_n, 1+1e-3, 1e3)   # enforce α>1
+        beta_n  = np.clip(beta_n,  1e-6, 1e3)
+
+        # 4) Return in raw‐param form:
+        #    [ mu_n,  log(lambda_n),  log(alpha_n - 1),  log(beta_n) ]
+        return np.array([
+            mu_n,
+            np.log(lam_n),
+            np.log(alpha_n - 1.0),
+            np.log(beta_n)
+        ])
 
     def sample(self, m):
         """

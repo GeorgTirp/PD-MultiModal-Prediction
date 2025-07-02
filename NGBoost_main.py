@@ -2,7 +2,7 @@ import warnings
 warnings.filterwarnings("ignore")
 import os
 os.environ["PYTHONWARNINGS"] = "ignore"
-from models.model_classes.RegressionsModels import NGBoostRegressionModel
+from RegressionsModels import NGBoostRegressionModel
 import pandas as pd
 from faster_evidential_boost import NormalInverseGamma, NIGLogScore
 from ngboost.distns.normal import Normal, NormalCRPScore, NormalLogScore
@@ -25,31 +25,26 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     
     test_split_size = 0.2
     Feature_Selection = {}
-    target_col = identifier + "_" + target
-    possible_targets = ["ratio", "diff"] 
-    ignored_targets = [t for t in possible_targets if t != target]
-    ignored_target_cols = [identifier + "_" + t for t in ignored_targets]
-    data_df = pd.read_csv(folder_path + data_path)
-    columns_to_drop = ['Pat_ID'] + [col for col in ignored_target_cols if col in data_df.columns]
-    data_df = data_df.drop(columns=columns_to_drop)
-    data_df[target_col] = data_df[target_col].sample(frac=1, random_state=42).reset_index(drop=True)
-    Feature_Selection['target'] = target_col
-    Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
-    save_path = os.path.join(folder_path, out)
+    #target_col = identifier + "_" + target
+    #possible_targets = ["ratio", "diff"] 
+    #ignored_targets = [t for t in possible_targets if t != target]
+    #ignored_target_cols = [identifier + "_" + t for t in ignored_targets]
+    #data_df = pd.read_csv(folder_path + data_path)
+    #columns_to_drop = ['Pat_ID'] + [col for col in ignored_target_cols if col in data_df.columns]
+    #data_df = data_df.drop(columns=columns_to_drop)
+    #Feature_Selection['target'] = target_col
+    #Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
+    #save_path = os.path.join(folder_path, out)
 
     ### test
-    #X, y = load_diabetes(return_X_y=True, as_frame=True)
-    #X = X.sample(n=150, random_state=42)
-    #y = y.loc[X.index]
-    #
-    #data_df = pd.concat([X, y.rename("target")], axis=1)
-    #if "LEDD_reduc" in data_df.columns:
-    #    print("Maximal element of 'LEDD_reduc':", data_df["LEDD_reduc"].max())
-    #else:
-    #    print("'LEDD_reduc' column not found in data_df")
-    #Feature_Selection['target'] = "target"
-    #Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
-    #save_path = os.path.join(folder_path, "test/test_diabetes/NGBoost")
+    X, y = load_diabetes(return_X_y=True, as_frame=True)
+    X = X.sample(n=150, random_state=42)
+    y = y.loc[X.index]
+    
+    data_df = pd.concat([X, y.rename("target")], axis=1)
+    Feature_Selection['target'] = "target"
+    Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
+    save_path = os.path.join(folder_path, "test/test_diabetes/NGBoost")
     ### test ende
 
     os.makedirs(save_path, exist_ok=True)
