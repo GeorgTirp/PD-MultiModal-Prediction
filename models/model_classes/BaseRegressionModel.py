@@ -483,7 +483,7 @@ class BaseRegressionModel:
                 plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
                 plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png')
-                with open(f'{save_path}_shap_explanations.pkl', 'wb') as fp:
+                with open(f'{save_path}_mean_shap_explanations.pkl', 'wb') as fp:
                     pickle.dump(mean_shap_values, fp)
                 plt.close()
             np.save(f'{save_path}_all_shap_values(mu).npy', all_shap_mean_array)
@@ -591,8 +591,6 @@ class BaseRegressionModel:
         # Create a figure
         plt.figure(figsize=(6, 4))
         x = range(i - 1)
-                # Create a figure
-        plt.figure(figsize=(6, 4))
                 # Plot each model's R² scores in a loop, using sample_sizes on the x-axis
         #for model_name, r2_scores in results.items():
         plot_df = pd.DataFrame({'x': x, 'r2s': r2s})

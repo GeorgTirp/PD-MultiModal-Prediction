@@ -38,9 +38,10 @@ class LinearRegressionModel(BaseRegressionModel):
             test_split_size: float = 0.2,
             save_path: str = None,
             identifier: str = None,
-            top_n: int = 10):
+            top_n: int = 10,
+            logging=None):
         
-        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n)
+        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n, logging)
         self.model = LinearRegression()
         self.model_name = "Linear Regression"
         if top_n == -1:

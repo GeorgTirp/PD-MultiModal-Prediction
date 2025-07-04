@@ -1,12 +1,12 @@
 import os
 import logging
 import pandas as pd
-from models.model_classes.RegressionsModels import LinearRegressionModel, RandomForestModel
+from model_classes.LinearRegressionModel import LinearRegressionModel
 #from sklearn.datasets import load_diabetes
+from utils.my_logging import Logging    
 
 
 def main(folder_path, data_path, target, identifier, out, folds=10):
-    logging.info("Starting main execution...")
     target_col = identifier + "_" + target
     possible_targets = ["ratio", "diff"] 
     ignored_targets = [t for t in possible_targets if t != target]
@@ -27,6 +27,21 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     if not os.path.exists(safe_path_linear):
         os.makedirs(safe_path_linear)
     safe_path_rf = folder_path + out + "RandomForest/"
+
+    os.makedirs(safe_path_linear, exist_ok=True)
+    os.makedirs(os.path.join(safe_path_linear, 'log'), exist_ok=True)
+    logging = Logging(f'{safe_path_linear}/log').get_logger()
+
+    # --- Print all selected parameters ---
+    logging.info('-------------------------------------------')
+    logging.info(f"Folder Path: {folder_path}")
+    logging.info(f"Data Path: {data_path}")
+    logging.info(f"Target: {target}")
+    logging.info(f"Identifier: {identifier}")
+    logging.info(f"Output Path: {out}")
+    logging.info(f"Folds: {folds}")
+    logging.info('-------------------------------------------\n')
+
     if not os.path.exists(safe_path_rf):
         os.makedirs(safe_path_rf)
     RandomForest_Hparams = {
@@ -51,8 +66,9 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         safe_path_linear, 
         identifier, 
         n_top_features,
+        logging=logging
         )
-    linear_metrics = linear_model.evaluate(folds=folds, get_shap=False)
+    linear_metrics = linear_model.evaluate(folds=folds, nested=True, get_shap=False)
     linear_model.plot(f"Actual vs. Prediction (Linear Regression) - {identifier}", identifier)
     _,_, removals= linear_model.feature_ablation()
 #
@@ -83,12 +99,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
 
 if __name__ == "__main__":
     #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
-    #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
-    #main(folder_path, "data/BDI/level1/bdi_df.csv", "diff", "BDI", "/results/level1/", 20)
-    #main(folder_path, "data/BDI/level1/bdi_df.csv", "ratio", "BDI", "/results/level1/", 20)
-    #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "/results/level2/", 20)
-    main(folder_path, "data/BDI/level2/bdi_df.csv", "ratio", "BDI", "/results/level2_LOO_Linear/", -1)
-    #main(folder_path, "data/BDI/level3/bdi_df.csv", "diff", "BDI", "/results/level3/", 20)
-    #main(folder_path, "data/BDI/level3/bdi_df.csv", "ratio", "BDI", "/results/level3/", 20)
+    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
+    main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA", "results/MoCA_Linear/level2/NGBoost", -1)
+    
     

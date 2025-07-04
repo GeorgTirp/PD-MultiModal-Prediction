@@ -18,6 +18,7 @@ from sklearn.svm import SVC
 from sklearn.model_selection import GridSearchCV
 from scipy.stats import ttest_rel, false_discovery_control
 from matplotlib.ticker import MaxNLocator
+import shap
 
 def plot_stim_positions(positions: pd.DataFrame, safe_path: str = "") -> None:
     """ Plot the stimulation positions in the brain"""
@@ -62,6 +63,15 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
     x_positions = np.arange(1, len(data_list) + 1)
     
     # Define colors based on modality
+    colors = {
+            "deterioration": "#04E762",
+            "improvement": "#FF5714",
+            "det_edge": "#007C34",
+            "imp_edge": "#8A3210",
+            "line": "grey",
+            "scatter": "grey",
+            "ideal_line": "black",
+        }
 
     boxplots_colors = sns.color_palette("deep")
     violin_colors = sns.color_palette("deep")
@@ -162,9 +172,9 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
                     if np.isclose(y_start, y_end, atol=0.9):
                             line_color = "grey"
                     elif slope > 0:
-                        line_color = "red"
+                        line_color = colors["improvement"]
                     elif slope < 0:
-                        line_color = "green"
+                        line_color = colors["deterioration"]
                     else:
                         line_color = "black" 
                         
@@ -180,9 +190,9 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
                     if np.isclose(y_start, y_end, atol=1e-2):
                             line_color = "grey"
                     elif slope > 0:
-                        line_color = "green"
+                        line_color = colors["deterioration"]
                     elif slope < 0:
-                        line_color = "red"
+                        line_color = colors["improvement"]
                     else:
                         line_color = "black" 
                         
@@ -200,8 +210,8 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
     if modality_name == "BDI":
         line_colors = {"increase": "red", "decrease": "green", "no change": "grey"}
         legend_elements = [
-            Line2D([0], [0], color=line_colors["increase"], lw=2, label="Deterioration"),
-            Line2D([0], [0], color=line_colors["decrease"], lw=2, label="Improvement"),
+            Line2D([0], [0], color=colors["deterioration"], lw=2, label="Deterioration"),
+            Line2D([0], [0], color=colors["improvement"], lw=2, label="Improvement"),
             Line2D([0], [0], color=line_colors["no change"], lw=2, label="No change"),
         ]
         ax.legend(handles=legend_elements, loc="upper left")
@@ -210,8 +220,8 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
     elif modality_name == "MoCA":
         line_colors = {"increase": "green", "decrease": "red", "no change": "grey"}
         legend_elements = [
-            Line2D([0], [0], color=line_colors["increase"], lw=2, label="Improvement"),
-            Line2D([0], [0], color=line_colors["decrease"], lw=2, label="Deterioration"),
+            Line2D([0], [0], color=colors["deterioration"], lw=2, label="Improvement"),
+            Line2D([0], [0], color=colors["improvement"], lw=2, label="Deterioration"),
             Line2D([0], [0], color=line_colors["no change"], lw=2, label="No change"),
         ]
         ax.legend(handles=legend_elements, loc="upper left")
@@ -363,7 +373,7 @@ def regression_figures(
         
         
         # Create a wider (landscape) figure
-        fig = plt.figure(figsize=(10, 6))
+        fig = plt.figure(figsize=(8, 6))
         # Create a DataFrame for Seaborn
         colors = {
             "deterioration": "04E762",
@@ -495,11 +505,13 @@ def regression_figures(
         df = pd.read_csv(data_path)
         # Extract the y_test and y_pred arrays from the DataFrame
         if quest == "BDI":
+            df["BDI_sum_post"] = df["BDI_sum_pre"] + df["BDI_diff"]
             plot_df = pd.DataFrame({
                 "Pre": df["BDI_sum_pre"],
                 "Ratio": df["BDI_ratio"]
             })
         elif quest == "MoCA":
+            df["MoCA_sum_post"] = df["MoCA_sum_pre"] + df["MoCA_diff"]
             plot_df = pd.DataFrame({
                 "Pre": df["MoCA_sum_pre"],
                 "Ratio": df["MoCA_ratio"]
@@ -515,7 +527,7 @@ def regression_figures(
         
     plot_model(metrics_path_full, "Model Predicted vs. Actual - Full Model")
     plot_model(metrics_path_best, "Model Predicted vs. Actual - Best Model")
-    #plot_linear_regression(data_path, "Pre vs. Ratio")
+    plot_linear_regression(data_path, "Pre vs. Ratio", xlabel="MoCA Pre", ylabel="MoCA Ratio")
 
 
 def threshold_figure(
@@ -544,14 +556,15 @@ def threshold_figure(
         }
     # 1) Load inputs
     removals = pd.read_csv(removal_list_path)  # Assumes a single‐column CSV listing removed feature names
-    bdi_df = pd.read_csv(data_path)
+    df = pd.read_csv(data_path)
 
     shap_values = np.load(shap_data_path)      # shape = (n_samples, n_features_remaining)
     
 
     # Drop unnecessary columns from bdi_df
-    bdi_df = bdi_df.drop(columns=["BDI_diff", "BDI_ratio", "Pat_ID"], errors="ignore")
-    original_features = [col for col in bdi_df.columns if col != "BDI_diff"]
+    df = df.drop(columns=["BDI_diff", "BDI_ratio", "Pat_ID"], errors="ignore")
+    df = df.drop(columns=["MoCA_diff", "MoCA_ratio", "Pat_ID"], errors="ignore")
+    original_features = [col for col in df.columns if col != "BDI_diff"]
     n_original = len(original_features)
     n_shap_cols = shap_values.shape[1]
     n_removed_before = n_original - n_shap_cols
@@ -572,7 +585,7 @@ def threshold_figure(
     #    raise ValueError(f"Feature '{feature_name}' was already removed in the ablation history; no SHAP values available.")
     for feature_name in remaining_features:
 
-        feature = bdi_df[feature_name].values
+        feature = df[feature_name].values
         # The column index within shap_values for feature_name:
         shap_col_index = remaining_features.index(feature_name)
         shap_feature = shap_values[:, shap_col_index]
@@ -592,7 +605,7 @@ def threshold_figure(
         b = svm_clf.intercept_[0]
         threshold = -b / w  
 
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=(10, 7))
 
         # Split feature values by SHAP sign
         mask_neg = (shap_feature < 0)
@@ -790,16 +803,111 @@ def shap_importance_histo_figure(
     plt.savefig(save_path + ".svg", dpi=300)
     plt.close(fig)
 
+def shap_interaction_figure(
+        feature_name_mapping: dict,
+        data_path: str,
+        shap_data_path: str,
+        removal_list_path: str,
+        feature1: str,
+        feature2: str,
+        save_path: str) -> None:
+    """    Plots a scatter plot of SHAP values for two features, coloring points by the sign of the SHAP interaction.
+    """
+    removals = pd.read_csv(removal_list_path)  # Assumes a single‐column CSV listing removed feature names
+    df = pd.read_csv(data_path)
+
+    shap_values = np.load(shap_data_path)      # shape = (n_samples, n_features_remaining)
+    
+
+    # Drop unnecessary columns from bdi_df
+    df = df.drop(columns=["BDI_diff", "BDI_ratio", "Pat_ID"], errors="ignore")
+    df = df.drop(columns=["MoCA_diff", "MoCA_ratio", "Pat_ID"], errors="ignore")
+    original_features = [col for col in df.columns if col != "BDI_diff"]
+    n_original = len(original_features)
+    n_shap_cols = shap_values.shape[1]
+    n_removed_before = n_original - n_shap_cols
+    
+    if n_removed_before < 0 or n_removed_before > len(removals):
+        raise ValueError(
+            f"Calculated removed_count = {n_removed_before} is invalid. "
+            f"Check that shap_values and removal_list correspond."
+        )
+
+    # Take exactly the first n_removed_before entries from the removal history
+    removed_up_to_now = removals.iloc[:n_removed_before, 0].astype(str).tolist()
+
+    # Form the list of features that remain at the time SHAP values were computed
+    remaining_features = [f for f in original_features if f not in removed_up_to_now]
+    if feature1 not in remaining_features or feature2 not in remaining_features:
+        raise ValueError(f"Features '{feature1}' or '{feature2}' were already removed in the ablation history; no SHAP values available.")
+    # The column indices within shap_values for feature1 and feature2:
+    feature1_index = remaining_features.index(feature1)
+    feature2_index = remaining_features.index(feature2)
+    feature1_name = feature_name_mapping.get(feature1, feature1)
+    feature2_name = feature_name_mapping.get(feature2, feature2)
+    fig = plt.figure(figsize=(8, 5))
+    shap.initjs()
+    shap.plots.scatter(
+        shap_values[:, feature1_index],
+        shap_values[:, feature2_index],)
+    plt.title(f'Dependence of {feature1_name} and {feature2_name}', fontsize=16)
+    plt.grid(False)
+    sns.set_context("paper")
+        # Optionally choose a style you like
+    sns.despine()
+    plt.tight_layout()
+    plt.tight_layout()
+    plt.savefig(f'{save_path}_{feature1_name}x{feature2_name}.png', dpi=300)
+    plt.savefig(f'{save_path}_{feature1_name}x{feature2_name}.svg', dpi=300)
+    plt.close(fig)
+
+    
+def ablation_plot(
+        questionnaire: str,
+        ablation_folder_path: str,
+        save_path: str,
+        title: str = "Pearson-R Scores Over Feature Ablation") -> None:
+    ablation = pd.read_csv(ablation_folder_path+ "/" + questionnaire + "_ablation_history.csv")
+    custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
+    sns.set_theme(style="whitegrid", context="paper")
+                # Set Seaborn style, context, and custom palette
+    r2_scores = []
+    for i in range(1, 14):
+        df = pd.read_csv(ablation_folder_path + f"/ablation_step[{i}]/{questionnaire}_ratio_metrics.csv")
+        r2_scores.append(df["r2"].values[0])
+    x = np.arange(len(r2_scores))
+    sns.set_palette(custom_palette)
+            # Read in the CS
+    # Create a figure
+    plt.figure(figsize=(8, 4))
+            # Create a figure
+            # Plot each model's R² scores in a loop, using sample_sizes on the x-axis
+    #for model_name, r2_scores in results.items():
+    plot_df = pd.DataFrame({'x': x, 'r2s': r2_scores})
+    sns.lineplot(data=plot_df, x='x', y='r2s', label="R Score", marker='o')
+    # Label the axes and set the title
+    plt.xlabel("Number of removed features")
+    plt.ylabel("Pearson-R Score")
+    plt.title(title)
+    plt.legend()
+    
+
+    sns.despine()
+    plt.tight_layout()
+    plt.savefig(save_path+ ".png", dpi=300)
+    plt.savefig(save_path+ ".svg", dpi=300, bbox_inches='tight')
+    plt.close()
 
 if __name__ == "__main__":
-    root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
+    #root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
     #root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    #root_dir = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
+    root_dir = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
     #/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/level2/level2/NGBoost/BDI_ablation_history.csv
     #visualize_demographics("BDI", root_dir)
     metrics_path_best = root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_metrics.csv"
     metrics_path_full = root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/MoCA_ratio_metrics.csv"
     moca_data_path = root_dir + "/data/MoCA/level2/moca_df.csv"
+    
     moca_data_folder_path = root_dir + "/data/MoCA/level2"
     original_features = ['MoCA_sum_pre', 'AGE_AT_OP', 'TimeSinceDiag', 'X_L', 'Y_L', 'Z_L', 'X_R',
        'Y_R', 'Z_R', 'Left_1_mA', 'Right_1_mA', 'LEDD_ratio']
@@ -822,18 +930,40 @@ if __name__ == "__main__":
         save_path = root_dir + "/figures/MoCA/",
         quest="MoCA")
     
-    #threshold_figure(
+    threshold_figure(
+        feature_name_mapping,
+        data_path=moca_data_path,
+        shap_data_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_mean_shap_values.npy",
+        removal_list_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/MoCA_ablation_history.csv",
+        save_path=root_dir + "/figures/MoCA/moca_threshold_figure"
+    )
+
+    shap_importance_histo_figure(
+        feature_name_mapping,
+        data_path=moca_data_path,
+        shap_data_path=root_dir +  "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_all_shap_values(mu).npy",
+        removal_list_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/MoCA_ablation_history.csv",
+        save_path=root_dir + "/figures/MoCA/moca_abs_importance_figure"
+    )
+
+    #shap_interaction_figure(
     #    feature_name_mapping,
     #    data_path=moca_data_path,
-    #    shap_data_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_all_shap_values(mu).npy",
+    #    shap_data_path=root_dir +  "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_mean_shap_values.npy",
     #    removal_list_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/MoCA_ablation_history.csv",
-    #    save_path=root_dir + "/figures/MoCA/moca_threshold_figure"
-    #)
-#
-    #shap_importance_histo_figure(
-    #    feature_name_mapping,
-    #    data_path=moca_data_path,
-    #    shap_data_path=root_dir +  "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_all_shap_values(mu).npy",
-    #    removal_list_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/MoCA_ablation_history.csv",
-    #    save_path=root_dir + "/figures/MoCA/moca_abs_importance_figure"
-    #)
+    #    feature1="Z_R",
+    #    feature2="Right_1_mA",
+    #    save_path=root_dir + "/figures/MoCA/moca_dependence")
+
+    ablation_plot(
+        questionnaire="MoCA",
+        ablation_folder_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation",
+        save_path=root_dir + "/figures/MoCA/moca_ablation_plot"
+        
+    )
+    ablation_plot(
+        questionnaire="MoCA",
+        ablation_folder_path=root_dir + "/results/Paper_runs/MoCA_shuffeled/level2/NGBoost/ablation",
+        save_path=root_dir + "/figures/MoCA/moca_ablation_shuffeled_plot",
+        title="Feature Ablation with shuffeled targets"
+    )

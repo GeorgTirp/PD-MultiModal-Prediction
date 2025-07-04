@@ -19,7 +19,7 @@ from sklearn.metrics import make_scorer
 # Visualization and Explainability
 import matplotlib.pyplot as plt
 import shap
-
+import pickle
 # Uncertainty Quantification and Calibration
 import scipy.stats as st
 from properscoring import crps_ensemble
@@ -274,6 +274,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
                 save_path = self.save_path + "/singleSHAPs"
                 os.makedirs(save_path, exist_ok=True)
                 plt.savefig(f'{save_path}/{self.identifier}_mean_shap_aggregated_beeswarm_{iter_idx}.png')
+                with open(f'{save_path}/{self.identifier}_mean_shap_explanations{iter_idx}.pkl', 'wb') as fp:
+                    pickle.dump(explainer, fp)
             elif ablation_idx is not None:
                 save_path = self.save_path + "/ablationSHAPs"
                 plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm{ablation_idx}.png')
@@ -323,12 +325,12 @@ class NGBoostRegressionModel(BaseRegressionModel):
             # dalpha_dlam = 0 (lam not involved)
 
             # 4) Get SHAP values per param
-            explainer = shap.TreeExplainer(self.model, model_output=1)
-            sh_lam = explainer.shap_values(self.X)
-            explainer = shap.TreeExplainer(self.model, model_output=2)
-            sh_alpha = explainer.shap_values(self.X)
-            explainer = shap.TreeExplainer(self.model, model_output=3)
-            sh_beta = explainer.shap_values(self.X)
+            explainer_lam = shap.TreeExplainer(self.model, model_output=1)
+            sh_lam = explainer_lam.shap_values(self.X)
+            explainer_alpha = shap.TreeExplainer(self.model, model_output=2)
+            sh_alpha = explainer_alpha.shap_values(self.X)
+            explainer_beta = shap.TreeExplainer(self.model, model_output=3)
+            sh_beta = explainer_beta.shap_values(self.X)
 
 
             # 5) Apply chain rule (broadcast derivatives over feature axis)
@@ -351,6 +353,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
                     save_path = self.save_path + "/singleSHAPs"
                     os.makedirs(save_path, exist_ok=True)
                     plt.savefig(f'{save_path}/{self.identifier}_ngboost_predicitve_uncertainty_shap_aggregated{iter_idx}.png')
+                    #with open(f'{save_path}/{self.identifier}_ngboost_predicitve_uncertainty_shap_explanations{iter_idx}.pkl', 'wb') as fp:
+                    #    pickle.dump((explainer_lam, explainer_alpha, explainer_beta), fp)
                 elif ablation_idx is not None:
                     save_path = self.save_path + "/ablationSHAPs"
                     os.makedirs(save_path, exist_ok=True)
