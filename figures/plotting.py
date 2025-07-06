@@ -840,16 +840,29 @@ def shap_interaction_figure(
     remaining_features = [f for f in original_features if f not in removed_up_to_now]
     if feature1 not in remaining_features or feature2 not in remaining_features:
         raise ValueError(f"Features '{feature1}' or '{feature2}' were already removed in the ablation history; no SHAP values available.")
+    
     # The column indices within shap_values for feature1 and feature2:
-    feature1_index = remaining_features.index(feature1)
-    feature2_index = remaining_features.index(feature2)
+    #feature1_index = remaining_features.index(feature1)
+    #feature2_index = remaining_features.index(feature2)
     feature1_name = feature_name_mapping.get(feature1, feature1)
     feature2_name = feature_name_mapping.get(feature2, feature2)
+    all_feature_names = feature_name_mapping.get("all", remaining_features)
     fig = plt.figure(figsize=(8, 5))
-    shap.initjs()
-    shap.plots.scatter(
-        shap_values[:, feature1_index],
-        shap_values[:, feature2_index],)
+    shap.summary_plot(
+        shap_values,
+        features=df[remaining_features].values,
+        feature_names=all_feature_names,
+        show=False)
+    shap.dependence_plot(
+        shap_values,
+        features = df[remaining_features].values,
+        feature_names = [feature1_name, feature2_name],
+        interaction_index=None,
+        show=False,)
+    #shap.initjs()
+    #shap.plots.scatter(
+    #    shap_values[:, feature1_index],
+    #    shap_values[:, feature2_index],)
     plt.title(f'Dependence of {feature1_name} and {feature2_name}', fontsize=16)
     plt.grid(False)
     sns.set_context("paper")
