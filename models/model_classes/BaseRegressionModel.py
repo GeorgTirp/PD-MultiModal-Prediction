@@ -22,7 +22,7 @@ import torch
 from ngboost.distns import Normal
 from model_classes.faster_evidential_boost import NormalInverseGamma
 import pickle
-
+from model_classes.scalers import RobustTanhScaler, RobustSigmoidScaler, ZScoreScaler
     
 class BaseRegressionModel:
     """Base class for supervised regression models using scikit-learn and SHAP.
@@ -57,7 +57,7 @@ class BaseRegressionModel:
             identifier: str = None,
             top_n: int = 10,
             logging = None,
-            standardize: bool = False) -> None:
+            standardize: str = "") -> None:
         """
         Initialize the regression model framework with dataset, feature selection, and settings.
 
@@ -82,8 +82,15 @@ class BaseRegressionModel:
         self.metrics = None
         self.model_name = None
         self.target_name = target_name
-        self.standardize = standardize
         
+        if standardize == "z-score":
+            self.scaler = ZScoreScaler()
+        elif standardize == "tanh":
+            self.scaler = RobustTanhScaler()
+        elif standardize == "sigmoid":
+            self.scaler = RobustSigmoidScaler()
+        else: self.scaler = None
+
         if not os.path.exists(save_path):
             os.makedirs(save_path)
         self.logging.info("Finished initializing BaseRegressionModel class.")
@@ -364,21 +371,21 @@ class BaseRegressionModel:
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
 
-            if self.standardize:
-                self.m = y_train_kf.mean()
-                self.std = y_train_kf.std()
-                y_train_kf = (y_train_kf - self.m) / self.std
-                y_val_kf = (y_val_kf - self.m) / self.std  # Standardize the target variable
+            if self.scaler is not None:
+                self.scaler.fit(y_train_kf)
+                y_train_kf = self.scaler.transform(y_train_kf)
+                y_val_kf = self.scaler.transform(y_val_kf)
+
             if tune:
                 self.tune_hparams(X_train_kf, y_train_kf, self.param_grid, tune_folds)
             else:
                 self.model.fit(X_train_kf, y_train_kf)
 
-                
             pred = self.model.predict(X_val_kf)
-            if self.standardize:
-                pred = pred * self.std + self.m
-                y_vals_kf = y_val_kf * self.std + self.m
+            
+            if self.scaler is not None:
+                pred = self.scaler.inverse_transform(pred)
+                y_val_kf = self.scaler.inverse_transform(y_val_kf)
             preds.append(pred)
             y_vals.append(y_val_kf)
             if len(preds) != 1:

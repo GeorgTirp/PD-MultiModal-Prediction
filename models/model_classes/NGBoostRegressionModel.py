@@ -282,8 +282,10 @@ class NGBoostRegressionModel(BaseRegressionModel):
             else:
                 plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_aggregated_beeswarm.png')
             plt.close()
-        if self.standardize:
-            shap_values *= self.std
+
+        if self.scaler is not None:
+            shap_values = self.scaler.inverse_transform(shap_values)
+
         return shap_values
 
     def feature_importance_variance(
@@ -362,10 +364,11 @@ class NGBoostRegressionModel(BaseRegressionModel):
                 else:
                     plt.savefig(f'{self.save_path}/{self.identifier}_predicitve_uncertainty_shap_aggregated.png')
                 plt.close()
-            if self.standardize:
-                shap_pred *= self.std
-                shap_epi *= self.std
-                shap_alea *= self.std
+
+            if self.scaler is not None:
+                shap_pred = self.scaler.inverse_transform(shap_pred)
+                shap_epi = self.scaler.inverse_transform(shap_epi)
+                shap_alea = self.scaler.inverse_transform(shap_alea)
 
             return shap_pred, shap_epi, shap_alea
         
@@ -388,8 +391,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
                     plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_std_shap_aggregated_beeswarm.png')
                 plt.close()
 
-            if self.standardize:
-                shap_values *= self.std
+            if self.scaler is not None:
+                shap_values = self.scaler.inverse_transform(shap_values)
             
             return shap_values
     
