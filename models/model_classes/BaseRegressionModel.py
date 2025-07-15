@@ -83,7 +83,7 @@ class BaseRegressionModel:
         self.model_name = None
         self.target_name = target_name
         
-        if standardize == "z-score":
+        if standardize == "zscore":
             self.scaler = ZScoreScaler()
         elif standardize == "tanh":
             self.scaler = RobustTanhScaler()
