@@ -9,13 +9,85 @@ from sklearn.preprocessing import StandardScaler
 from utils.my_logging import Logging
 from utils.messages import Messages
 from pprint import pformat
+import statsmodels.api as sm
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import numpy as np
+from scipy.stats import zscore
 
+def signed_euclidean_distance(points: np.ndarray, sweetspot: np.ndarray) -> np.ndarray:
+    """
+    Compute signed Euclidean distance from each point to a sweet spot.
+    Distance is negative if the point is below the sweet spot in Z.
+
+    Parameters:
+        points (np.ndarray): shape (n_samples, 3), where each row is (X, Y, Z)
+        sweetspot (np.ndarray or tuple): shape (3,), (X, Y, Z) of the sweet spot
+
+    Returns:
+        np.ndarray: shape (n_samples,), signed distances
+    """
+    deltas = points - sweetspot
+    dists = np.linalg.norm(deltas, axis=1)
+    signed_dists = np.where(points[:, 2] < sweetspot[2], -dists, dists)
+    return signed_dists
+
+
+def calculate_vif(df, exclude_cols=None, verbose=True):
+    """
+    Calculates Variance Inflation Factor (VIF) for a dataframe's features.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame with only numerical features to assess.
+        exclude_cols (list): Columns to exclude from VIF analysis (e.g. IDs).
+        verbose (bool): If True, prints the results.
+
+    Returns:
+        pd.DataFrame: VIF scores for each variable.
+    """
+    if exclude_cols is not None:
+        features_df = df.drop(columns=exclude_cols)
+    else:
+        features_df = df.copy()
+
+    # Drop NaNs
+    features_df = features_df.dropna()
+
+    # Add constant term for intercept
+    features_df = sm.add_constant(features_df)
+
+    vif_data = pd.DataFrame()
+    vif_data["feature"] = features_df.columns
+    vif_data["VIF"] = [variance_inflation_factor(features_df.values, i) 
+                       for i in range(features_df.shape[1])]
+
+    # Remove constant from results
+    vif_data = vif_data[vif_data["feature"] != "const"]
+
+    if verbose:
+        print(vif_data.sort_values("VIF", ascending=False))
+
+    return vif_data.sort_values("VIF", ascending=False)
 
 #from sklearn.datasets import load_diabetes
 # --- Dynamic Tobit bound functions ---
 
+def compute_stimulation_density(mA: np.ndarray, distance: np.ndarray) -> np.ndarray:
+    """
+    Compute stimulation density as mA / (distance^2).
+    Assumes distance in mm.
 
-def main(folder_path, data_path, target, identifier, out, folds=10):
+    Parameters:
+        mA (np.ndarray): Current in mA, shape (n,)
+        distance (np.ndarray): Euclidean distance in mm, shape (n,)
+
+    Returns:
+        np.ndarray: stimulation density, shape (n,)
+    """
+    # Add small epsilon to avoid division by zero
+    epsilon = 1e-6
+    return mA / (distance**2 + epsilon)
+
+def main(folder_path, data_path, target, identifier, out, folds=10,tune_folds=5, detrend=True, tune=False, uncertainty=False):
     test_split_size = 0.2
     Feature_Selection = {}
     target_col = identifier + "_" + target
@@ -23,14 +95,38 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     ignored_targets = [t for t in possible_targets if t != target]
     ignored_target_cols = [identifier + "_" + t for t in ignored_targets]
     data_df = pd.read_csv(folder_path + data_path)
-    trend = data_df["TimeSinceSurgery"] * 1
-    data_df[identifier + "_diff"] = data_df[target_col] + trend
-    data_df[identifier +"_ratio"] = (data_df[identifier +"_diff"] / (data_df[identifier +"_sum_pre"]* 2 + data_df[identifier +"_diff"])) * 10
-    columns_to_drop = ['Pat_ID'] + [col for col in ignored_target_cols if col in data_df.columns]
+
+    if detrend:
+        trend = data_df["TimeSinceSurgery"] * 1
+        data_df[identifier + "_diff"] = data_df[identifier + "_diff"] + trend
+        data_df[identifier +"_ratio"] = (data_df[identifier +"_diff"] / (data_df[identifier +"_sum_pre"]* 2 + data_df[identifier +"_diff"]))
+        columns_to_drop = ['Pat_ID', "TimeSinceSurgery"] + [col for col in ignored_target_cols if col in data_df.columns] 
+    else:
+        columns_to_drop = ['Pat_ID'] + [col for col in ignored_target_cols if col in data_df.columns] 
+
+    # Restrict FUs between 1-3 years
+    data_df = data_df[(data_df["TimeSinceSurgery"] >= 1) & (data_df["TimeSinceSurgery"] <= 3)]
+
+    # Left locations in our dataframe is negated! otherwise sweetspot is [-12.08, -13.94,-6.74]
+    data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [12.08, -13.94,-6.74])
+    data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [11.90, -13.28, -6.74])
+    columns_to_drop += ['X_L', 'Y_L', 'Z_L', 'X_R', 'Y_R', 'Z_R']
+
     data_df = data_df.drop(columns=columns_to_drop)
-    data_df.drop("TimeSinceSurgery", axis=1, inplace=True)
+
     Feature_Selection['target'] = target_col
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
+
+    # Let's perform VUF analysis
+    vif_results = calculate_vif(data_df[Feature_Selection['features']], exclude_cols=[])
+
+    # Let's test the OLS models
+    import statsmodels.api as sm
+
+    X_const = sm.add_constant(data_df[Feature_Selection['features']])
+    model = sm.OLS(data_df[Feature_Selection['target']], X_const).fit()
+    print(model.summary())
+
     safe_path = os.path.join(folder_path, out)
 
     ### test
@@ -77,10 +173,10 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
     # XGBoost hyperparameter grid
     # XGBoost hyperparameter grid
     param_grid_xgb = {
-    'n_estimators': [100, 200, 300],
+    'n_estimators': [50, 100, 150, 200, 250, 300, 350, 400],
     'learning_rate': [0.05, 0.1],
-    'max_depth': [3, 4, 5],
-    'subsample': [0.9],
+    'max_depth': [3, 4, 5, 6, 7],
+    'subsample': [0.9, 0.95],
     'colsample_bytree': [0.8],
     'reg_alpha': [0.1, 0.5, 0.7],
     'reg_lambda': [2, 5, 8],
@@ -90,13 +186,15 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
 
     # Default XGBoost hyperparameters
     XGB_Hparams = {
-        'n_estimators': 100,
+        'n_estimators': 400,
         'learning_rate': 0.01,
-        'max_depth': 4,
-        'subsample': 0.9,
-        'colsample_bytree': 0.8,
-        'reg_alpha': 0,
-        'reg_lambda': 0,
+        'max_depth': 4,                  
+        'subsample': 0.7,
+        'colsample_bytree': 0.7,
+        'reg_alpha': 0.5,                
+        'reg_lambda': 2,
+        'min_child_weight': 5,           
+        'gamma': 0.1,                    
         'random_state': 42,
         'verbosity': 0
     }
@@ -112,19 +210,20 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         -1,
         param_grid_xgb,
         logging=logging)
+
     metrics = model.evaluate(
         folds=folds, 
-        tune=True, 
+        tune=tune, 
         nested=True, 
-        tune_folds=20, 
+        tune_folds=tune_folds, 
         get_shap=True,
-        uncertainty=False)
+        uncertainty=uncertainty)
     
     # Log the metrics
     logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
-    _,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=20)
+    _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds)
     #model.calibration_analysis()
     
     
@@ -147,9 +246,16 @@ def main(folder_path, data_path, target, identifier, out, folds=10):
         
 
 if __name__ == "__main__":
-    #folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
-    #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
+
     folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
-    #main(folder_path, "data/BDI/level2/bdi_df.csv", "diff", "BDI", "results/BDI_test/level2/XGBoost", 20)
-    main(folder_path, "data/MoCA/level2/moca_df.csv", "ratio", "MoCA", "results/MoCA_ratio/level2/XGBoost", 20)
+
+    main(
+        folder_path, 
+        "data/MoCA/level2/moca_wo_mmse_df.csv", 
+        "diff", 
+        "MoCA", 
+        "results/MoCA_XGBoost_diff/level2/XGBoost", 
+        folds=10, 
+        tune_folds=10, 
+        detrend=True,
+        tune=True)
