@@ -14,10 +14,83 @@ from xgboost import XGBRegressor
 from sklearn.datasets import load_diabetes
 from utils.my_logging import Logging
 
+import statsmodels.api as sm
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import numpy as np
+from scipy.stats import zscore
 
+def signed_euclidean_distance(points: np.ndarray, sweetspot: np.ndarray) -> np.ndarray:
+    """
+    Compute signed Euclidean distance from each point to a sweet spot.
+    Distance is negative if the point is below the sweet spot in Z.
+
+    Parameters:
+        points (np.ndarray): shape (n_samples, 3), where each row is (X, Y, Z)
+        sweetspot (np.ndarray or tuple): shape (3,), (X, Y, Z) of the sweet spot
+
+    Returns:
+        np.ndarray: shape (n_samples,), signed distances
+    """
+    deltas = points - sweetspot
+    dists = np.linalg.norm(deltas, axis=1)
+    signed_dists = np.where(points[:, 2] < sweetspot[2], -dists, dists)
+    return signed_dists
+
+
+def calculate_vif(df, exclude_cols=None, verbose=True):
+    """
+    Calculates Variance Inflation Factor (VIF) for a dataframe's features.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame with only numerical features to assess.
+        exclude_cols (list): Columns to exclude from VIF analysis (e.g. IDs).
+        verbose (bool): If True, prints the results.
+
+    Returns:
+        pd.DataFrame: VIF scores for each variable.
+    """
+    if exclude_cols is not None:
+        features_df = df.drop(columns=exclude_cols)
+    else:
+        features_df = df.copy()
+
+    # Drop NaNs
+    features_df = features_df.dropna()
+
+    # Add constant term for intercept
+    features_df = sm.add_constant(features_df)
+
+    vif_data = pd.DataFrame()
+    vif_data["feature"] = features_df.columns
+    vif_data["VIF"] = [variance_inflation_factor(features_df.values, i) 
+                       for i in range(features_df.shape[1])]
+
+    # Remove constant from results
+    vif_data = vif_data[vif_data["feature"] != "const"]
+
+    if verbose:
+        print(vif_data.sort_values("VIF", ascending=False))
+
+    return vif_data.sort_values("VIF", ascending=False)
 
 #from sklearn.datasets import load_diabetes
 # --- Dynamic Tobit bound functions ---
+
+def compute_stimulation_density(mA: np.ndarray, distance: np.ndarray) -> np.ndarray:
+    """
+    Compute stimulation density as mA / (distance^2).
+    Assumes distance in mm.
+
+    Parameters:
+        mA (np.ndarray): Current in mA, shape (n,)
+        distance (np.ndarray): Euclidean distance in mm, shape (n,)
+
+    Returns:
+        np.ndarray: stimulation density, shape (n,)
+    """
+    # Add small epsilon to avoid division by zero
+    epsilon = 1e-6
+    return mA / (distance**2 + epsilon)
 
 
 def main(folder_path, data_path, target, identifier, out, folds=10, tune_folds=5, detrend=True, tune=False, uncertainty=False):
@@ -72,7 +145,7 @@ def main(folder_path, data_path, target, identifier, out, folds=10, tune_folds=5
     #Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
     #save_path = os.path.join(folder_path, "test/test_diabetes/NGBoost")
     ### test ende
-
+    save_path = os.path.join(folder_path, out)
     os.makedirs(save_path, exist_ok=True)
     os.makedirs(os.path.join(save_path, 'log'), exist_ok=True)
     logging = Logging(f'{save_path}/log').get_logger()
@@ -113,8 +186,8 @@ def main(folder_path, data_path, target, identifier, out, folds=10, tune_folds=5
     NGB_Hparams = {
         'Dist': NormalInverseGamma,
         'Score' : NIGLogScore,
-        'n_estimators': 350,
-        'learning_rate': 0.01,
+        'n_estimators': 300,
+        'learning_rate': 0.05,
         'natural_gradient': True,
         #'Score_kwargs': {'evid_strength': 0.1, 'kl_strength': 0.01},
         'verbose': False,
@@ -136,9 +209,9 @@ def main(folder_path, data_path, target, identifier, out, folds=10, tune_folds=5
     
     metrics = model.evaluate(
         folds=folds, 
-        tune=True, 
+        tune=tune, 
         nested=True, 
-        tune_folds=25, 
+        tune_folds=tune_folds, 
         get_shap=True,
         uncertainty=False)
     
@@ -149,12 +222,12 @@ def main(folder_path, data_path, target, identifier, out, folds=10, tune_folds=5
     #logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     #logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
-    _,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=25)
+    _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds)
     model.calibration_analysis()
         
 
 if __name__ == "__main__":
-     folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
+    folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
 
     main(
         folder_path, 
@@ -165,4 +238,4 @@ if __name__ == "__main__":
         folds=10, 
         tune_folds=10, 
         detrend=False,
-        tune=True)
+        tune=False)
