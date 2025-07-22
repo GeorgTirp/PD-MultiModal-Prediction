@@ -53,7 +53,7 @@ def plot_stim_positions(positions: pd.DataFrame, safe_path: str = "") -> None:
 
 
 
-def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, safe_path: str = "") -> None:
+def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, safe_path: str = "", show: bool = False) -> None:
     """Create a refined raincloud plot using seaborn for better aesthetics."""
     sns.set_theme(style="white", context="paper")
     fig, ax = plt.subplots(figsize=(7, 7))
@@ -232,27 +232,34 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
     plt.tight_layout()    
     plt.savefig(safe_path + modality_name + "_raincloud_plot.png")
     plt.savefig(safe_path + modality_name + "_raincloud_plot.svg")
-    #plt.show()
+    if show:
+        plt.show()
     plt.close()
     
 
 
 
-def demographics_pre_post(modality_path: str, model_data_path: str, modality_name:str,  save_path:str) -> None:
+def demographics_pre_post(
+        modality_path: str, 
+        model_data_path = None, 
+        modality_name = None,
+        save_path = None,
+        show = False) -> None:
     """ Plot the demographic data before and after the treatment as raincloud plot"""
-    model_df = pd.read_csv(model_data_path)
-    # Load the data
+
     data = pd.read_csv(modality_path)
-    # Create a figure with two subplots
+    if model_data_path is not None:
+        model_df = pd.read_csv(model_data_path)
+        data = data[data['OP_DATUM'].isin(model_df['OP_DATUM'])]
     
-    # Filter data based on OP_DATUM in model_df
-    data = data[data['OP_DATUM'].isin(model_df['OP_DATUM'])]
 
     if modality_name == "BDI":
-        data = data.drop(columns=['BDI_diff'])
+        data["BDI_sum_post"] = data["BDI_sum_pre"] + data["BDI_diff"]
+        data = data[['BDI_sum_pre', 'BDI_sum_post']]
 
     if modality_name == "MoCA":
-        data = data.drop(columns=['MoCA_diff'])  
+        data["MoCA_sum_post"] = data["MoCA_sum_pre"] + data["MoCA_diff"]
+        data = data[['MoCA_sum_pre', 'MoCA_sum_post']]
 
     if modality_name == "MDS-UPDRS III":
         data = data.rename(columns={'MDS_UPDRS_III_sum_pre': 'Pre', 'MDS_UPDRS_III_sum_post': 'Post'})
@@ -269,12 +276,12 @@ def demographics_pre_post(modality_path: str, model_data_path: str, modality_nam
 
     # Plotting demographic data before and after treatment
     if modality_name == "MDS-UPDRS III":
-        raincloud_plot(data, modality_name , ['Pre OFF', 'Pre ON', 'Post ON/Stim On'], save_path)
+        raincloud_plot(data, modality_name , ['Pre OFF', 'Pre ON', 'Post ON/Stim On'], save_path, show=show)
     else:
-        raincloud_plot(data, modality_name , ['Pre', 'Post'], save_path)
-    
-    
-def histoplot(input_path: str, feature: str,  save_path: str) -> None:
+        raincloud_plot(data, modality_name , ['Pre', 'Post'], save_path, show=show)
+
+
+def histoplot(input_path: str, feature: str,  save_path: str, show: bool = False) -> None:
     """ Plot the demographic data before and after the treatment as raincloud plot"""
     # Load the data
     data = pd.read_csv(input_path)
@@ -309,7 +316,8 @@ def histoplot(input_path: str, feature: str,  save_path: str) -> None:
     plt.tight_layout()
     plt.savefig(save_path + ".png")
     plt.savefig(save_path + ".svg")
-    #plt.show()
+    if show:
+        plt.show()
     plt.close()
     
 
