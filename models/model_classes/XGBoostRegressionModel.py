@@ -76,9 +76,9 @@ class XGBoostRegressionModel(BaseRegressionModel):
         Returns:
             dict: Best hyperparameters found.
         """
-        def pearson_corr(y_true, y_pred):
-            return pearsonr(y_true, y_pred)[0]
-        pearson_scorer = make_scorer(pearson_corr, greater_is_better=True)
+        # def pearson_corr(y_true, y_pred):
+        #     return pearsonr(y_true, y_pred)[0]
+        # pearson_scorer = make_scorer(pearson_corr, greater_is_better=True)
         if folds == -1:
             folds = len(X)
 
@@ -87,7 +87,8 @@ class XGBoostRegressionModel(BaseRegressionModel):
             estimator=self.model,
             param_grid=param_grid,
             cv=folds,
-            scoring=pearson_scorer,  
+            #scoring=pearson_scorer,  
+            scoring='neg_root_mean_squared_error',
             n_jobs=-1,
             verbose=0,
         )

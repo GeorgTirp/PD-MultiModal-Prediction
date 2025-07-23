@@ -98,13 +98,13 @@ class NGBoostRegressionModel(BaseRegressionModel):
         #ss = ShuffleSplit(n_splits=50, test_size= 0.01, random_state=7)
         def pearson_corr(y_true, y_pred):
             return pearsonr(y_true, y_pred)[0]
-        pearson_scorer = make_scorer(pearson_corr, greater_is_better=True)
+        #pearson_scorer = make_scorer(pearson_corr, greater_is_better=True)
 
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
             cv=folds,
-            scoring=pearson_scorer,
+            scoring='neg_root_mean_squared_error',
             n_jobs=-1
         )
         grid_search.fit(X, y)

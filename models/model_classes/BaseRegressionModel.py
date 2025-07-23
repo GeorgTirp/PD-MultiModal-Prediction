@@ -9,7 +9,7 @@ import torch
 torch.set_num_threads(1)
 import pandas as pd
 from sklearn.model_selection import train_test_split, KFold, LeaveOneOut
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error
 from scipy.stats import pearsonr
 from typing import Tuple, Dict
 import matplotlib.pyplot as plt
@@ -23,7 +23,7 @@ from ngboost.distns import Normal
 from model_classes.faster_evidential_boost import NormalInverseGamma
 import pickle
 from model_classes.scalers import RobustTanhScaler, RobustSigmoidScaler, ZScoreScaler
-    
+
 class BaseRegressionModel:
     """Base class for supervised regression models using scikit-learn and SHAP.
 
@@ -180,7 +180,7 @@ class BaseRegressionModel:
         tune: bool = False, 
         tune_folds: int = 10,
         uncertainty: bool = False,
-        ablation_idx: int = None
+        ablation_idx: int = None,
         ) -> Dict:
         """
         Perform sequential cross-validation evaluation with optional tuning, SHAP, uncertainty estimation, and ablation.
@@ -252,7 +252,8 @@ class BaseRegressionModel:
 
         preds = np.concatenate(preds)
         y_vals = np.concatenate(y_vals)
-        r2, p = pearsonr(y_vals, preds)
+        r, p = pearsonr(y_vals, preds)
+        f_squared = (r**2) / (1 - r**2)
         mse = mean_squared_error(y_vals, preds)
 
         if uncertainty:
@@ -306,7 +307,8 @@ class BaseRegressionModel:
 
         metrics = {
             'mse': mse,
-            'r2': r2,
+            'r': r,
+            'f_squared':f_squared,
             'p_value': p,
             'y_pred': preds,
             'y_test': y_vals,
@@ -367,6 +369,9 @@ class BaseRegressionModel:
         all_shap_mean = []
         all_shap_variance = []
         iter_idx = 0
+        # Farzin was here
+        #cv_r_values = []
+        
         for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation", leave=False):
             X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
             y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
@@ -386,6 +391,10 @@ class BaseRegressionModel:
             if self.scaler is not None:
                 pred = self.scaler.inverse_transform(pred)
                 y_val_kf = self.scaler.inverse_transform(y_val_kf)
+            
+            #r, _ = pearsonr(y_val_kf, pred)
+            #cv_r_values.append(r)
+
             preds.append(pred)
             y_vals.append(y_val_kf)
             if len(preds) != 1:
@@ -434,12 +443,18 @@ class BaseRegressionModel:
                             iter_idx=iter_idx)
                         all_shap_values.append(shap_values) 
             iter_idx += 1
+
+        # Farzin was here :D
+        #print(f"Mean CV R: {np.mean(cv_r_values):.3f}")
+        #print(f"Std CV R: {np.std(cv_r_values):.3f}")
+        
         if self.model_name == "NGBoost":
             pred_dists = np.vstack(pred_dists)
         preds = np.concatenate(preds)
         y_vals = np.concatenate(y_vals)
-        r2, p = pearsonr(y_vals, preds)
-        
+        r, p = pearsonr(y_vals, preds)
+        f_squared = (r**2) / (1 - r**2)
+
         if uncertainty == True:
             epistemic_uncertainty = np.concatenate(epistemics)
             aleatoric_uncertainty = np.concatenate(aleatorics)
@@ -504,7 +519,8 @@ class BaseRegressionModel:
 
         metrics = {
         'mse': mse,
-        'r2': r2,
+        'r': r,
+        'f_squared':f_squared,
         'p_value': p,
         'y_pred': preds,
         'y_test': y_vals,
@@ -533,7 +549,7 @@ class BaseRegressionModel:
         Returns:
             Tuple[list, list, list]: Lists of R² scores, p-values, and removed feature names after each ablation step.
         """
-        r2s = []
+        rs = []
         p_values = []
         removals = []
         number_of_features = len(self.feature_selection['features'])
@@ -552,7 +568,15 @@ class BaseRegressionModel:
             metrics = self.nested_eval(folds=folds, get_shap=get_shap, tune=tune, tune_folds=tune_folds, ablation_idx=i)
             metrics_df = pd.DataFrame([metrics])
             metrics_df.to_csv(f'{save_path}/ablation_step[{i}]/{self.identifier}_{self.target_name}_metrics.csv', index=False)
-            r2s.append(metrics['r2'])
+
+            # let's save the preditcions for inspection
+            self.plot(
+                f"Actual vs. Prediction {self.model_name}- {self.identifier} No. features: {number_of_features}", 
+                modality='',
+                plot_df= pd.DataFrame({'Actual': metrics_df['y_test'].values[0],'Predicted': metrics_df['y_pred'].values[0]}),
+                save_path_file =f'{save_path}/ablation_step[{i}]/{self.identifier}_{self.target_name}_actual_vs_predicted.png' )
+
+            rs.append(metrics['r'])
             p_values.append(metrics['p_value'])
             importance = metrics['feature_importance']
             importance_indices = np.argsort(importance)
@@ -582,7 +606,7 @@ class BaseRegressionModel:
             if number_of_features <= threshold_to_one_fps:
                 features_per_step = 1  # From here on, remove only one feature at a time
 
-            self.logging.info(f"Feature ablation finished. Final R2: {r2s[-1] if r2s else 'N/A'}, min R2: {np.min(r2s) if r2s else 'N/A'}, max R2: {np.max(r2s) if r2s else 'N/A'}")
+            self.logging.info(f"Feature ablation finished. Final r: {rs[-1] if rs else 'N/A'}, min r: {np.min(rs) if rs else 'N/A'}, max r: {np.max(rs) if rs else 'N/A'}")
         
         # Define the custom color palette from your image
         custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
@@ -599,9 +623,9 @@ class BaseRegressionModel:
         plt.figure(figsize=(6, 4))
         x = range(i - 1)
                 # Plot each model's R² scores in a loop, using sample_sizes on the x-axis
-        #for model_name, r2_scores in results.items():
-        plot_df = pd.DataFrame({'x': x, 'r2s': r2s})
-        sns.lineplot(data=plot_df, x='x', y='r2s', label="R Score", marker='o')
+        #for model_name, r_scores in results.items():
+        plot_df = pd.DataFrame({'x': x, 'rs': rs})
+        sns.lineplot(data=plot_df, x='x', y='rs', label="R Score", marker='o')
         # Label the axes and set the title
         plt.xlabel("Number of removed features")
         plt.ylabel("Pearson-R Score")
@@ -610,7 +634,7 @@ class BaseRegressionModel:
         plt.tight_layout()
         plt.savefig(path, dpi=300, bbox_inches='tight')
         plt.close()
-        return r2s, p_values, removals
+        return rs, p_values, removals
             
 
     
@@ -649,7 +673,7 @@ class BaseRegressionModel:
     
         
 
-    def plot(self, title, modality='') -> None:
+    def plot(self, title, modality='', plot_df=None, save_path_file=None) -> None:
         """
         Generate a scatter plot of predicted vs. actual target values with regression line and confidence intervals.
 
@@ -670,11 +694,12 @@ class BaseRegressionModel:
         # Create a wider (landscape) figure
         plt.figure(figsize=(10, 6))
 
-        # Create a DataFrame for Seaborn
-        plot_df = pd.DataFrame({
-            'Actual': self.metrics['y_test'],
-            'Predicted': self.metrics['y_pred']
-        })
+        if plot_df is None:
+            # Create a DataFrame for Seaborn
+            plot_df = pd.DataFrame({
+                'Actual': self.metrics['y_test'],
+                'Predicted': self.metrics['y_pred']
+            })
 
         # Scatter plot only (no regression line)
         sns.scatterplot(
@@ -714,7 +739,7 @@ class BaseRegressionModel:
         # using axis coordinates (0–1 range) so it doesn't get cut off
         plt.text(
             0.05, 0.95, 
-            f'R: {self.metrics["r2"]:.2f}\nP-value: {self.metrics["p_value"]:.6f}', 
+            f'R: {self.metrics["r"]:.2f}\nP-value: {self.metrics["p_value"]:.6f}\nf²: {self.metrics["f_squared"]:.3f}', 
             fontsize=12, 
             transform=plt.gca().transAxes,  # use axis coordinates
             verticalalignment='top',
@@ -744,8 +769,14 @@ class BaseRegressionModel:
         # Optionally choose a style you like
         sns.despine()
         plt.tight_layout()
-        # Save and close
-        plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_actual_vs_predicted.png')
+
+        if save_path_file:
+            plt.savefig(save_path_file)
+
+        else:
+            # Save and close
+            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_actual_vs_predicted.png')
+
         plt.close()
 
         # Log info (optional)
