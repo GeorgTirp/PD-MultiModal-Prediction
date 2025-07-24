@@ -13,6 +13,10 @@ import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import numpy as np
 from scipy.stats import zscore
+import statsmodels.api as sm
+import seaborn as sns
+import matplotlib.pyplot as plt
+import pandas as pd
 
 def signed_euclidean_distance(points: np.ndarray, sweetspot: np.ndarray) -> np.ndarray:
     """
@@ -87,7 +91,54 @@ def compute_stimulation_density(mA: np.ndarray, distance: np.ndarray) -> np.ndar
     epsilon = 1e-6
     return mA / (distance**2 + epsilon)
 
-def main(folder_path, data_path, target, identifier, out, folds=10,tune_folds=5, detrend=True, tune=False, uncertainty=False):
+def select_top_shap_features(shap_values: np.ndarray, feature_names: list, threshold: float = 0.95):
+    """
+    Select top features contributing to `threshold` proportion of total SHAP importance.
+    
+    Parameters:
+        shap_values (np.ndarray): SHAP values (n_samples, n_features)
+        feature_names (list): Names of features in correct order
+        threshold (float): Proportion of total importance to retain (default: 0.95)
+
+    Returns:
+        selected_features (list): List of selected feature names
+        explained_ratio (float): Actual ratio of total importance captured
+    """
+    # Mean absolute SHAP value per feature
+    mean_abs_shap = np.abs(shap_values).mean(axis=0)
+    shap_df = pd.DataFrame({
+        'feature': feature_names,
+        'mean_abs_shap': mean_abs_shap
+    })
+
+    # Sort features by importance
+    shap_df = shap_df.sort_values(by='mean_abs_shap', ascending=False).reset_index(drop=True)
+    shap_df['cumulative_importance'] = shap_df['mean_abs_shap'].cumsum()
+    shap_df['cumulative_ratio'] = shap_df['cumulative_importance'] / shap_df['mean_abs_shap'].sum()
+
+    # Find how many features are needed to reach threshold
+    idx_cutoff = (shap_df['cumulative_ratio'] < threshold).sum() + 1
+    selected_features = shap_df['feature'].iloc[:idx_cutoff].tolist()
+    explained_ratio = shap_df['cumulative_ratio'].iloc[idx_cutoff - 1]
+
+    print(f"Selected {len(selected_features)} features out of {len(feature_names)}")
+    print(f"These features explain {explained_ratio:.2%} of total SHAP importance")
+
+    return selected_features, explained_ratio
+
+def main(
+    folder_path, 
+    data_path, 
+    target, 
+    identifier, 
+    out, 
+    folds=10, 
+    tune_folds=5, 
+    detrend=True, 
+    tune=False, 
+    uncertainty=False, 
+    filtered_data_path=""):
+    
     test_split_size = 0.2
     Feature_Selection = {}
     target_col = identifier + "_" + target
@@ -105,25 +156,74 @@ def main(folder_path, data_path, target, identifier, out, folds=10,tune_folds=5,
         columns_to_drop = ['Pat_ID'] + [col for col in ignored_target_cols if col in data_df.columns] 
 
     # Restrict FUs between 1-3 years
-    data_df = data_df[(data_df["TimeSinceSurgery"] >= 1) & (data_df["TimeSinceSurgery"] <= 3)]
+    #data_df = data_df[(data_df["TimeSinceSurgery"] >= 1) & (data_df["TimeSinceSurgery"] <= 3)]
+    data_df = data_df[(data_df["TimeSinceSurgery"] >= 0.3)]
 
     # Left locations in our dataframe is negated! otherwise sweetspot is [-12.08, -13.94,-6.74]
-    data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [12.08, -13.94,-6.74])
-    data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [11.90, -13.28, -6.74])
-    columns_to_drop += ['X_L', 'Y_L', 'Z_L', 'X_R', 'Y_R', 'Z_R']
+    # data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [12.08, -13.94,-6.74])
+    # data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [11.90, -13.28, -6.74])
+    # columns_to_drop += ['X_L', 'Y_L', 'Z_L', 'X_R', 'Y_R', 'Z_R']
 
     data_df = data_df.drop(columns=columns_to_drop)
 
+    # Define target and features
     Feature_Selection['target'] = target_col
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
+
+    # Compute IQR for features
+    Q1 = data_df[Feature_Selection['features']].quantile(0.25)
+    Q3 = data_df[Feature_Selection['features']].quantile(0.75)
+    IQR = Q3 - Q1
+
+    # Define outlier mask
+    is_outlier = (data_df[Feature_Selection['features']] < (Q1 - 1.5 * IQR)) | \
+                (data_df[Feature_Selection['features']] > (Q3 + 1.5 * IQR))
+
+    # Count and print number of outliers per feature
+    outlier_counts_iqr = is_outlier.sum()
+    print("IQR Outliers per feature:\n", outlier_counts_iqr)
+
+    # Print outlier rows grouped by feature
+    print("\nDetailed outlier rows by feature:")
+    for col in Feature_Selection['features']:
+        outlier_rows = data_df[is_outlier[col]]
+        if not outlier_rows.empty:
+            print(f"\n--- Outliers in feature: {col} (n={len(outlier_rows)}) ---")
+            print(outlier_rows[[col]])
+
+    # Optionally print full rows for all outlier-containing samples
+    rows_with_any_outlier = data_df[is_outlier.any(axis=1)]
+    print(f"\nTotal rows with at least one outlier: {len(rows_with_any_outlier)}")
+
+    # Drop all rows containing any outlier
+    data_df = data_df[~is_outlier.any(axis=1)].reset_index(drop=True)
+    print(f"Remaining rows after outlier removal: {len(data_df)}")
+
+
+    # Plot corr matrix of features + target
+    # Combine features and target
+    # cols_to_plot = Feature_Selection['features'] + [Feature_Selection['target']] + ['FU_MOCA'] + ['AGE_AT_FU']
+    # data_df['AGE_AT_FU'] = data_df['AGE_AT_OP'] + data_df['TimeSinceSurgery']
+    # data_df['FU_MOCA'] = data_df['MoCA_sum_pre'] + data_df['MoCA_diff']
+
+    # corr_matrix = data_df[cols_to_plot].corr()
+
+    # # Plot
+    # plt.figure(figsize=(10, 8))
+    # sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', center=0, fmt=".2f", square=True, linewidths=0.5)
+    # plt.title(f'Correlation Matrix: Features and Target N={len(data_df)}', fontsize=14)
+    # plt.xticks(rotation=45, ha='right')
+    # plt.tight_layout()
+    # plt.savefig("features_corr.png", dpi=300, bbox_inches='tight')
+
 
     # Let's perform VUF analysis
     vif_results = calculate_vif(data_df[Feature_Selection['features']], exclude_cols=[])
 
     # Let's test the OLS models
-    import statsmodels.api as sm
-
-    X_const = sm.add_constant(data_df[Feature_Selection['features']])
+    X = data_df[Feature_Selection['features']]
+    X_scaled = pd.DataFrame(StandardScaler().fit_transform(X), columns=X.columns, index=X.index)
+    X_const = sm.add_constant(X_scaled)
     model = sm.OLS(data_df[Feature_Selection['target']], X_const).fit()
     print(model.summary())
 
@@ -158,46 +258,41 @@ def main(folder_path, data_path, target, identifier, out, folds=10,tune_folds=5,
     
     if not os.path.exists(safe_path):
         os.makedirs(safe_path)
-    # Random Forest Model
-     #XGBoost hyperparameters grid    
-    # Define the parameter grid for NGBoost
-    #define bounds
-    #if target == "sum_post":
-        #if identifier == "BDI":
-        #    NIGLogScore.set_bounds(0, 63)
-        #elif identifier == "MoCA":
-        #    NIGLogScore.set_bounds(0, 30)
     
-    
+    if filtered_data_path != "":
+        data_dir = os.path.dirname(data_path)
+        data_df.to_csv(data_dir + '/' + filtered_data_path)
 
-    # XGBoost hyperparameter grid
-    # XGBoost hyperparameter grid
+
     param_grid_xgb = {
-    'n_estimators': [50, 100, 150, 200, 250, 300, 350, 400],
-    'learning_rate': [0.05, 0.1],
-    'max_depth': [3, 4, 5, 6, 7],
-    'subsample': [0.9, 0.95],
-    'colsample_bytree': [0.8],
-    'reg_alpha': [0.1, 0.5, 0.7],
-    'reg_lambda': [2, 5, 8],
-    'random_state': [42],
-    'verbosity': [0]
-}
-
-    # Default XGBoost hyperparameters
-    XGB_Hparams = {
-        'n_estimators': 400,
-        'learning_rate': 0.01,
-        'max_depth': 4,                  
-        'subsample': 0.7,
-        'colsample_bytree': 0.7,
-        'reg_alpha': 0.5,                
-        'reg_lambda': 2,
-        'min_child_weight': 5,           
-        'gamma': 0.1,                    
-        'random_state': 42,
-        'verbosity': 0
+        #'objective': 'reg:squarederror',   # or 'reg:absoluteerror', etc., depending on your loss preferences
+        'learning_rate': [0.1, 0.2, 0.3],              # aka eta
+        'max_depth': [3, 4, 5, 6, 7],
+        # 'min_child_weight': 1,
+        # 'gamma': 0,
+        # 'subsample': 1,
+        # 'colsample_bytree': 1,
+        # 'reg_alpha': 0,                    # L1 regularization
+        # 'reg_lambda': 1,                   # L2 regularization
+        'n_estimators': [30, 50, 100, 200, 300, 350, 400],                # set during model init, can be tuned
+        'random_state': [2025],
     }
+
+    
+    XGB_Hparams = {
+        'objective': 'reg:squarederror',   # or 'reg:absoluteerror', etc., depending on your loss preferences
+        'learning_rate': 0.3,              # aka eta
+        'max_depth': 6,
+        'min_child_weight': 1,
+        'gamma': 0,
+        'subsample': 1,
+        'colsample_bytree': 1,
+        'reg_alpha': 0,                    # L1 regularization
+        'reg_lambda': 1,                   # L2 regularization
+        'n_estimators': 100,                # set during model init, can be tuned
+        'random_state': 2025,
+    }
+ 
 
     model = XGBoostRegressionModel(
         data_df, 
@@ -223,6 +318,13 @@ def main(folder_path, data_path, target, identifier, out, folds=10,tune_folds=5,
     logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
     logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
     model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
+
+    #### Farzin was here too, sorry :D
+    
+    shap_vals = np.load(f'{model.save_path}/{identifier}_{target}_mean_shap_values.npy')
+
+    top_feats, explained = select_top_shap_features(shap_vals, Feature_Selection['features'], threshold=0.95)
+    ######
     _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds)
     #model.calibration_analysis()
     
@@ -254,8 +356,9 @@ if __name__ == "__main__":
         "data/MoCA/level2/moca_wo_mmse_df.csv", 
         "diff", 
         "MoCA", 
-        "results/MoCA_XGBoost_diff/level2/XGBoost", 
-        folds=10, 
-        tune_folds=10, 
+        "results/MoCA_XGBoost_tune_bigger_3month_XYZ_detrend/level2/XGBoost", 
+        folds=20, 
+        tune_folds=20, 
         detrend=True,
-        tune=True)
+        tune=True,
+        filtered_data_path="filtered_moca_wo_mmse_df.csv")

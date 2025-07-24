@@ -262,10 +262,11 @@ class NGBoostRegressionModel(BaseRegressionModel):
 
     def feature_importance_mean(self, top_n: int = None, batch_size: int = 10, save_results: bool = True, iter_idx=None, ablation_idx=None) -> Dict:
         """ Compute feature importance for the predicted mean using SHAP KernelExplainer. """
-        shap.initjs()
 
+        shap.initjs()
         explainer = shap.TreeExplainer(self.model, model_output=0)
         shap_values = explainer.shap_values(self.X, check_additivity=True)
+
         shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
         plt.title(f'{self.identifier} NGBoost Mean SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
@@ -284,7 +285,13 @@ class NGBoostRegressionModel(BaseRegressionModel):
             plt.close()
 
         if self.scaler is not None:
-            shap_values = self.scaler.inverse_transform(shap_values)
+            if hasattr(self.scaler, 'std_'):
+                scale = self.scaler.std_
+            elif hasattr(self.scaler, 'mad_'):
+                scale = self.scaler.mad_
+            else:
+                raise AttributeError("Scaler has neither 'std_' nor 'mad_' attribute.")
+            shap_values *= scale 
 
         return shap_values
 
@@ -365,10 +372,17 @@ class NGBoostRegressionModel(BaseRegressionModel):
                     plt.savefig(f'{self.save_path}/{self.identifier}_predicitve_uncertainty_shap_aggregated.png')
                 plt.close()
 
+           
             if self.scaler is not None:
-                shap_pred = self.scaler.inverse_transform(shap_pred)
-                shap_epi = self.scaler.inverse_transform(shap_epi)
-                shap_alea = self.scaler.inverse_transform(shap_alea)
+                if hasattr(self.scaler, 'std_'):
+                    scale = self.scaler.std_
+                elif hasattr(self.scaler, 'mad_'):
+                    scale = self.scaler.mad_
+                else:
+                    raise AttributeError("Scaler has neither 'std_' nor 'mad_' attribute.")
+                shap_pred *= scale
+                shap_epi *= scale
+                shap_alea *= scale
 
             return shap_pred, shap_epi, shap_alea
         

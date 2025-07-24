@@ -93,7 +93,18 @@ def compute_stimulation_density(mA: np.ndarray, distance: np.ndarray) -> np.ndar
     return mA / (distance**2 + epsilon)
 
 
-def main(folder_path, data_path, target, identifier, out, folds=10, tune_folds=5, detrend=True, tune=False, uncertainty=False):
+def main(
+    folder_path, 
+    data_path, 
+    target, 
+    identifier, 
+    out, 
+    folds=10, 
+    tune_folds=5, 
+    detrend=True, 
+    tune=False, 
+    uncertainty=False,
+    filtered_data_path=""):
    
     test_split_size = 0.2
     Feature_Selection = {}
@@ -169,7 +180,9 @@ def main(folder_path, data_path, target, identifier, out, folds=10, tune_folds=5
         #elif identifier == "MoCA":
         #    NIGLogScore.set_bounds(0, 30)
     
-    
+    if filtered_data_path != "":
+        data_dir = os.path.dirname(data_path)
+        data_df.to_csv(data_dir + '/' + filtered_data_path)
 
     param_grid_ngb = {
     #'Dist': [NormalInverseGamma],
@@ -238,4 +251,5 @@ if __name__ == "__main__":
         folds=10, 
         tune_folds=10, 
         detrend=False,
-        tune=False)
+        tune=False,
+        filtered_data_path="filtered_moca_wo_mmse_df.csv")
