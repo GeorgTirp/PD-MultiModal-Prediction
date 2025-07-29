@@ -40,7 +40,8 @@ class XGBoostRegressionModel(BaseRegressionModel):
             param_grid: dict = None,
             logging = None,
             Pat_IDs= None,
-            split_shaps=None
+            split_shaps=None,
+            sample_weights=None
             ):
         
         super().__init__(
@@ -61,6 +62,7 @@ class XGBoostRegressionModel(BaseRegressionModel):
         self.param_grid = param_grid
         if top_n == -1:
             self.top_n = len(self.feature_selection['features'])
+        self.weights = sample_weights
 
     def feature_importance(
         self, 
@@ -107,29 +109,32 @@ class XGBoostRegressionModel(BaseRegressionModel):
                  y,
                  param_grid: dict,
                  folds: int = 5,
-                 groups: np.ndarray = None
+                 groups: np.ndarray = None,
+                 weights: np.ndarray = None
                 ) -> Dict:
         """
         Tune hyperparameters using GridSearchCV.
         If `groups` is provided, uses GroupKFold; otherwise standard KFold.
-
+        If `weights` is provided, passes them in as sample_weight to .fit().
+    
         Args:
             X:           Training features.
             y:           Training targets.
             param_grid:  Dict of parameters to search.
             folds:       Number of CV folds (or -1 → leave‑one‑out).
             groups:      Optional array of group labels for group‑aware CV.
+            weights:     Optional array of sample‐weights aligned with X, y.
         """
         # allow -1 → leave‑one‑out
         if folds == -1:
             folds = len(X)
-
+    
         # pick our CV splitter
         if groups is None:
             cv = KFold(n_splits=folds, shuffle=True, random_state=42)
         else:
             cv = GroupKFold(n_splits=folds)
-
+    
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
@@ -138,20 +143,24 @@ class XGBoostRegressionModel(BaseRegressionModel):
             n_jobs=-1,
             verbose=0,
         )
-
-        # fit, passing `groups` only if needed
-        if groups is None:
-            grid_search.fit(X, y)
-        else:
-            grid_search.fit(X, y, groups=groups)
-
+    
+        # assemble fit kwargs
+        fit_kwargs = {}
+        if groups is not None:
+            fit_kwargs['groups'] = groups
+        if weights is not None:
+            fit_kwargs['sample_weight'] = weights
+    
+        # run the search
+        grid_search.fit(X, y, **fit_kwargs)
+    
         best_params = grid_search.best_params_
         self.model = grid_search.best_estimator_
         self.xgb_hparams.update(best_params)
         self.model.set_params(**best_params)
-
+    
         if hasattr(self, 'logging') and self.logging:
             self.logging.info(f"Best parameters found: {best_params}")
             self.logging.info(f"Best CV score: {grid_search.best_score_:.4f}")
-
+    
         return best_params

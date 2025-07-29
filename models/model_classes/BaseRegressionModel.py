@@ -396,7 +396,7 @@ class BaseRegressionModel:
         iter_idx = 0
         # Farzin was here
         #cv_r_values = []
-
+        
         # 2) Outer CV loop
         for train_idx, val_idx in tqdm(
             outer_cv.split(*split_args, **split_kwargs),
@@ -406,6 +406,8 @@ class BaseRegressionModel:
         ):
             X_train_kf, X_val_kf = self.X.iloc[train_idx], self.X.iloc[val_idx]
             y_train_kf, y_val_kf = self.y.iloc[train_idx], self.y.iloc[val_idx]
+            if hasattr(self, 'weights'):
+                w_train, w_test = self.weights[train_idx], self.weights[val_idx]
 
             if self.scaler is not None:
                 self.scaler.fit(y_train_kf)
@@ -417,9 +419,18 @@ class BaseRegressionModel:
                 groups_tr = self.Pat_IDs.iloc[train_idx].to_numpy()
 
             if tune:
-                self.tune_hparams(X_train_kf, y_train_kf, self.param_grid, tune_folds)
+                self.tune_hparams(
+                    X_train_kf, 
+                    y_train_kf, 
+                    self.param_grid, 
+                    tune_folds, 
+                    groups_tr, 
+                    w_train)
             else:
-                self.model.fit(X_train_kf, y_train_kf)
+                if hasattr(self, 'weights'):
+                    self.model.fit(X_train_kf, y_train_kf, sample_weight=w_train)
+                else:
+                    self.model.fit(X_train_kf, y_train_kf)
 
             pred = self.model.predict(X_val_kf)
             pred_train = self.model.predict(X_train_kf)
@@ -434,9 +445,13 @@ class BaseRegressionModel:
             preds_train.append(pred_train)
             y_vals.append(y_val_kf)
             y_trains.append(y_train_kf)
-            
-            mse = mean_squared_error(y_val_kf, pred)
-            train_mse = mean_squared_error(y_train_kf, pred_train)
+
+            if hasattr(self, 'weights'):
+                mse = mean_squared_error(y_val_kf, pred, sample_weight=w_test)
+                train_mse = mean_squared_error(y_train_kf, pred_train, sample_weight=w_train)
+            else:
+                mse = mean_squared_error(y_val_kf, pred)
+                train_mse = mean_squared_error(y_train_kf, pred_train)
             if len(preds) != 1:
                 tqdm.write(f'Current Pearson-r: {pearsonr(np.concatenate(y_vals), np.concatenate(preds))[0]}, Train MSE = {train_mse}, Test MSE {mse}')
 
