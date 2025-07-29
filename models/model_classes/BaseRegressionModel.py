@@ -23,6 +23,10 @@ from ngboost.distns import Normal
 from model_classes.faster_evidential_boost import NormalInverseGamma
 import pickle
 from model_classes.scalers import RobustTanhScaler, RobustSigmoidScaler, ZScoreScaler
+from sklearn.model_selection import (
+    KFold, LeaveOneOut,
+    GroupKFold, LeaveOneGroupOut
+)
 
 class BaseRegressionModel:
     """Base class for supervised regression models using scikit-learn and SHAP.
@@ -57,7 +61,9 @@ class BaseRegressionModel:
             identifier: str = None,
             top_n: int = 10,
             logging = None,
-            standardize: str = "") -> None:
+            standardize: str = "",
+            Pat_IDs = None,
+            split_shaps=False) -> None:
         """
         Initialize the regression model framework with dataset, feature selection, and settings.
 
@@ -82,7 +88,8 @@ class BaseRegressionModel:
         self.metrics = None
         self.model_name = None
         self.target_name = target_name
-        
+        self.Pat_IDs = Pat_IDs
+        self.split_shaps = split_shaps
         if standardize == "zscore":
             self.scaler = ZScoreScaler()
         elif standardize == "tanh":
@@ -353,33 +360,61 @@ class BaseRegressionModel:
             dict: Dictionary of performance metrics, uncertainties, SHAP values, and predictions.
         """
         self.logging.info("Starting model evaluation...")
-        if folds == -1:
-            kf = LeaveOneOut()
+
+        #1) Choose outer CV depending on whether we have pat_ids
+        if self.Pat_IDs is None:
+            # fallback to standard CV
+            if folds == -1:
+                outer_cv = LeaveOneOut()
+            else:
+                outer_cv = KFold(n_splits=folds, shuffle=True, random_state=42)
+            split_args = (self.X,)
+            split_kwargs = {}      # no groups
         else:
-            kf = KFold(n_splits=folds, shuffle=True, random_state=42)
+            # group‐aware CV
+            if folds == -1:
+                outer_cv = LeaveOneGroupOut()
+            else:
+                outer_cv = GroupKFold(n_splits=folds)
+            split_args = (self.X, self.y)
+            split_kwargs = {'groups': self.Pat_IDs}
 
         if tune and self.param_grid is None:
                 raise ValueError("When calling tune=True, a param_grid has to be passed when initializing the model.")
         preds = []
+        preds_train = []
         epistemics = []
         aleatorics = []
         pred_dists = []
         y_vals = []
+        y_trains = []
         all_shap_values = []
         all_shap_mean = []
         all_shap_variance = []
+        all_shap_train = []
+        all_shap_test = []
         iter_idx = 0
         # Farzin was here
         #cv_r_values = []
-        
-        for train_index, val_index in tqdm(kf.split(self.X), total=kf.get_n_splits(self.X), desc="Cross-validation", leave=False):
-            X_train_kf, X_val_kf = self.X.iloc[train_index], self.X.iloc[val_index]
-            y_train_kf, y_val_kf = self.y.iloc[train_index], self.y.iloc[val_index]
+
+        # 2) Outer CV loop
+        for train_idx, val_idx in tqdm(
+            outer_cv.split(*split_args, **split_kwargs),
+            total=outer_cv.get_n_splits(*split_args, **split_kwargs),
+            desc="Cross-validation",
+            leave=False
+        ):
+            X_train_kf, X_val_kf = self.X.iloc[train_idx], self.X.iloc[val_idx]
+            y_train_kf, y_val_kf = self.y.iloc[train_idx], self.y.iloc[val_idx]
 
             if self.scaler is not None:
                 self.scaler.fit(y_train_kf)
                 y_train_kf = self.scaler.transform(y_train_kf)
                 y_val_kf = self.scaler.transform(y_val_kf)
+
+            groups_tr = None
+            if self.Pat_IDs is not None:
+                groups_tr = self.Pat_IDs.iloc[train_idx].to_numpy()
 
             if tune:
                 self.tune_hparams(X_train_kf, y_train_kf, self.param_grid, tune_folds)
@@ -387,18 +422,23 @@ class BaseRegressionModel:
                 self.model.fit(X_train_kf, y_train_kf)
 
             pred = self.model.predict(X_val_kf)
-            
+            pred_train = self.model.predict(X_train_kf)
+
             if self.scaler is not None:
                 pred = self.scaler.inverse_transform(pred)
                 y_val_kf = self.scaler.inverse_transform(y_val_kf)
             
             #r, _ = pearsonr(y_val_kf, pred)
             #cv_r_values.append(r)
-
             preds.append(pred)
+            preds_train.append(pred_train)
             y_vals.append(y_val_kf)
+            y_trains.append(y_train_kf)
+            
+            mse = mean_squared_error(y_val_kf, pred)
+            train_mse = mean_squared_error(y_train_kf, pred_train)
             if len(preds) != 1:
-                tqdm.write(f'Current Pearson-r: {pearsonr(np.concatenate(y_vals), np.concatenate(preds))[0]}')
+                tqdm.write(f'Current Pearson-r: {pearsonr(np.concatenate(y_vals), np.concatenate(preds))[0]}, Train MSE = {train_mse}, Test MSE {mse}')
 
             # Get uncertainties
             if uncertainty == True:
@@ -420,6 +460,7 @@ class BaseRegressionModel:
                         val_index = None
                     if self.model_name == "NGBoost":
                         shap_values_mean = self.feature_importance_mean(
+                            X_train_kf,
                             top_n=-1, save_results=True,  
                             iter_idx=iter_idx)
                         if self.prob_func == NormalInverseGamma:
@@ -437,11 +478,30 @@ class BaseRegressionModel:
                         all_shap_mean.append(shap_values_mean)
                         all_shap_variance.append(shap_values_variance)
                     else:
-                        shap_values = self.feature_importance(
-                            top_n=-1, 
-                            save_results=True, 
-                            iter_idx=iter_idx)
-                        all_shap_values.append(shap_values) 
+                        if self.split_shaps:
+                            shap_values_train = self.feature_importance(
+                                X_train_kf,
+                                top_n=-1, 
+                                save_results=True, 
+                                iter_idx=iter_idx,
+                                )
+                            shap_values_test = self.feature_importance(
+                                X_val_kf,
+                                top_n=-1, 
+                                save_results=True, 
+                                iter_idx=iter_idx,
+                                validation=True
+                                )
+                            all_shap_train.append(shap_values_train)
+                            all_shap_test.append(shap_values_test)
+                        else:
+                            shap_values = self.feature_importance(
+                                self.X,
+                                top_n=-1, 
+                                save_results=True, 
+                                iter_idx=iter_idx,
+                                )
+                            all_shap_values.append(shap_values) 
             iter_idx += 1
 
         # Farzin was here :D
@@ -451,14 +511,17 @@ class BaseRegressionModel:
         if self.model_name == "NGBoost":
             pred_dists = np.vstack(pred_dists)
         preds = np.concatenate(preds)
+        preds_train = np.concatenate(preds_train)
         y_vals = np.concatenate(y_vals)
+        y_trains = np.concatenate(y_trains)
         r, p = pearsonr(y_vals, preds)
         f_squared = (r**2) / (1 - r**2)
+        mse = mean_squared_error(y_vals, preds)
+        train_mse = mean_squared_error(y_trains, preds_train)
 
         if uncertainty == True:
             epistemic_uncertainty = np.concatenate(epistemics)
             aleatoric_uncertainty = np.concatenate(aleatorics)
-        mse = mean_squared_error(y_vals, preds)
 
         if ablation_idx is not None:
             save_path = f'{self.save_path}/ablation/ablation_step[{ablation_idx}]/'
@@ -497,17 +560,38 @@ class BaseRegressionModel:
                     plt.savefig(f'{save_path}_std_shap_aggregated.png')
                 plt.close()
             else:
-                all_shap_mean_array = np.stack(all_shap_values, axis=0)
-                # Average over the folds to get an aggregated array of shape (n_samples, n_features)
-                mean_shap_values = np.mean(all_shap_mean_array, axis=0)
-                np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values.npy', mean_shap_values)
-                shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-                plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
-                plt.subplots_adjust(top=0.90)
-                plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png')
-                with open(f'{save_path}_mean_shap_explanations.pkl', 'wb') as fp:
-                    pickle.dump(mean_shap_values, fp)
-                plt.close()
+                if self.split_shaps:
+                    all_shap_mean_train_array = np.stack(all_shap_train, axis=0)
+                    # Average over the folds to get an aggregated array of shape (n_samples, n_features)
+                    train_shap_values = np.mean(all_shap_mean_train_array, axis=0)
+                    np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values_train.npy', train_shap_values)
+                    shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                    plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
+                    plt.subplots_adjust(top=0.90)
+                    plt.savefig(f'{save_path}_shap_aggregated_beeswarm_train.png')
+                    plt.close()
+
+                    all_shap_mean_test_array = np.stack(all_shap_test, axis=0)
+                    # Average over the folds to get an aggregated array of shape (n_samples, n_features)
+                    test_shap_values = np.mean(all_shap_mean_test_array, axis=0)
+                    np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values_test.npy', test_shap_values)
+                    shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                    plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
+                    plt.subplots_adjust(top=0.90)
+                    plt.savefig(f'{save_path}_shap_aggregated_beeswarm_test.png')
+                    plt.close()
+                else:
+                    all_shap_mean_array = np.stack(all_shap_values, axis=0)
+                    # Average over the folds to get an aggregated array of shape (n_samples, n_features)
+                    mean_shap_values = np.mean(all_shap_mean_array, axis=0)
+                    np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values.npy', mean_shap_values)
+                    shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                    plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
+                    plt.subplots_adjust(top=0.90)
+                    plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png')
+                    #with open(f'{save_path}_mean_shap_explanations.pkl', 'wb') as fp:
+                    #    pickle.dump(mean_shap_values, fp)
+                    plt.close()
             np.save(f'{save_path}_all_shap_values(mu).npy', all_shap_mean_array)
             
             
@@ -519,6 +603,7 @@ class BaseRegressionModel:
 
         metrics = {
         'mse': mse,
+        'train_mse': train_mse,
         'r': r,
         'f_squared':f_squared,
         'p_value': p,
