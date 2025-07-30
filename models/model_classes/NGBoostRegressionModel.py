@@ -135,14 +135,14 @@ class NGBoostRegressionModel(BaseRegressionModel):
         # Pearson‐r scorer
         def pearson_corr(y_true, y_pred):
             return pearsonr(y_true, y_pred)[0]
-        pearson_scorer = make_scorer(pearson_corr, greater_is_better=True)
+        #pearson_scorer = make_scorer(pearson_corr, greater_is_better=True)
     
         # set up grid search
         grid_search = GridSearchCV(
             estimator=self.model,
             param_grid=param_grid,
             cv=cv,
-            scoring=pearson_scorer,
+            scoring='neg_mean_squared_error',
             n_jobs=-1,
             verbose=0
         )
