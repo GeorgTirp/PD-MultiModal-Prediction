@@ -118,17 +118,17 @@ def main(
         trend = data_df["TimeSinceSurgery"] * 1
         data_df[identifier + "_diff"] = data_df[identifier + "_diff"] + trend
         data_df[identifier +"_ratio"] = (data_df[identifier +"_diff"] / (data_df[identifier +"_sum_pre"]* 2 + data_df[identifier +"_diff"]))
-        columns_to_drop = ['Pat_ID', "TimeSinceSurgery"] + [col for col in ignored_target_cols if col in data_df.columns] 
+        columns_to_drop = ["TimeSinceSurgery"] + [col for col in ignored_target_cols if col in data_df.columns] 
     else:
-        columns_to_drop = ['Pat_ID'] + [col for col in ignored_target_cols if col in data_df.columns] 
+        columns_to_drop = [col for col in ignored_target_cols if col in data_df.columns] 
 
     # Restrict FUs between 1-3 years
     data_df = data_df[(data_df["TimeSinceSurgery"] >= 1) & (data_df["TimeSinceSurgery"] <= 3)]
 
     # Left locations in our dataframe is negated! otherwise sweetspot is [-12.08, -13.94,-6.74]
-    data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [12.08, -13.94,-6.74])
-    data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [11.90, -13.28, -6.74])
-    columns_to_drop += ['X_L', 'Y_L', 'Z_L', 'X_R', 'Y_R', 'Z_R']
+    #data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [12.08, -13.94,-6.74])
+    #data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [11.90, -13.28, -6.74])
+    #columns_to_drop += ['X_L', 'Y_L', 'Z_L', 'X_R', 'Y_R', 'Z_R']
 
     data_df = data_df.drop(columns=columns_to_drop)
 
@@ -136,14 +136,14 @@ def main(
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
 
     # Let's perform VUF analysis
-    vif_results = calculate_vif(data_df[Feature_Selection['features']], exclude_cols=[])
-
-    # Let's test the OLS models
-    import statsmodels.api as sm
-
-    X_const = sm.add_constant(data_df[Feature_Selection['features']])
-    model = sm.OLS(data_df[Feature_Selection['target']], X_const).fit()
-    print(model.summary())
+    #vif_results = calculate_vif(data_df[Feature_Selection['features']], exclude_cols=[])
+#
+    ## Let's test the OLS models
+    #import statsmodels.api as sm
+#
+    #X_const = sm.add_constant(data_df[Feature_Selection['features']])
+    #model = sm.OLS(data_df[Feature_Selection['target']], X_const).fit()
+    #print(model.summary())
     
     ### test
     #X, y = load_diabetes(return_X_y=True, as_frame=True)
@@ -240,14 +240,14 @@ def main(
         
 
 if __name__ == "__main__":
-    folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
-
+    #folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
+    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     main(
         folder_path, 
-        "data/MoCA/level2/moca_wo_mmse_df.csv", 
+        "data/BDI/level2/bdi_updrs_demo.csv", 
         "diff", 
-        "MoCA", 
-        "results/MoCA_NGBoost_diff/level2/NGBoost", 
+        "BDI", 
+        "results/BDI_NGBoost_diff/level2/NGBoost", 
         folds=10, 
         tune_folds=10, 
         detrend=False,

@@ -447,11 +447,13 @@ class BaseRegressionModel:
                         val_index = None
                     if self.model_name == "NGBoost":
                         shap_values_mean = self.feature_importance_mean(
-                            X_train_kf,
-                            top_n=-1, save_results=True,  
+                            self.X,
+                            top_n=-1, 
+                            save_results=True,  
                             iter_idx=iter_idx)
                         if self.prob_func == NormalInverseGamma:
                             shap_values_variance, _, _ = self.feature_importance_variance(
+                                self.X,
                                 mode="nig",
                                 top_n=-1, 
                                 save_results=True, 

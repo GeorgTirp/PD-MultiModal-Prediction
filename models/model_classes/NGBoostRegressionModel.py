@@ -383,14 +383,21 @@ class NGBoostRegressionModel(BaseRegressionModel):
         print(f"Best parameters found: {best_params}")
         return best_params
 
-    def feature_importance_mean(self, top_n: int = None, batch_size: int = 10, save_results: bool = True, iter_idx=None, ablation_idx=None) -> Dict:
+    def feature_importance_mean(
+            self, 
+            X,
+            top_n: int = None, 
+            batch_size: int = 10, 
+            save_results: bool = True, 
+            iter_idx=None, 
+            ablation_idx=None) -> Dict:
         """ Compute feature importance for the predicted mean using SHAP KernelExplainer. """
 
         shap.initjs()
         explainer = shap.TreeExplainer(self.model, model_output=0)
-        shap_values = explainer.shap_values(self.X, check_additivity=True)
+        shap_values = explainer.shap_values(X, check_additivity=True)
 
-        shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+        shap.summary_plot(shap_values, features=X, feature_names=self.X.columns, show=False, max_display=self.top_n)
         plt.title(f'{self.identifier} NGBoost Mean SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
@@ -420,6 +427,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
 
     def feature_importance_variance(
             self, 
+            X,
             mode = "nig",
             top_n: int = None, 
             batch_size: int = 10, 
@@ -429,7 +437,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
         """ Compute feature importance for the predicted variance using SHAP KernelExplainer. """
         
         if mode == "nig":
-            pred_dist = self.model.pred_dist(self.X).params
+            pred_dist = self.model.pred_dist(X).params
             pred_dist = np.column_stack([pred_dist[key] for key in pred_dist.keys()]).T  # shape = (n_samples, 4)
             lam_vals   =  pred_dist[1]                # λ: precision
             alpha_vals =  pred_dist[2]            # α: shape
@@ -458,11 +466,11 @@ class NGBoostRegressionModel(BaseRegressionModel):
 
             # 4) Get SHAP values per param
             explainer_lam = shap.TreeExplainer(self.model, model_output=1)
-            sh_lam = explainer_lam.shap_values(self.X)
+            sh_lam = explainer_lam.shap_values(X)
             explainer_alpha = shap.TreeExplainer(self.model, model_output=2)
-            sh_alpha = explainer_alpha.shap_values(self.X)
+            sh_alpha = explainer_alpha.shap_values(X)
             explainer_beta = shap.TreeExplainer(self.model, model_output=3)
-            sh_beta = explainer_beta.shap_values(self.X)
+            sh_beta = explainer_beta.shap_values(X)
 
 
             # 5) Apply chain rule (broadcast derivatives over feature axis)
@@ -477,7 +485,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
             shap_alea = (dalea_dbeta[:, None]  * sh_beta
                + dalea_dalpha[:, None] * sh_alpha)
 
-            shap.summary_plot(shap_pred, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+            shap.summary_plot(shap_pred, features=X, feature_names=self.X.columns, show=False, max_display=self.top_n)
             plt.title(f'{self.identifier} NGBoost Variance SHAP Summary Plot (Aggregated)', fontsize=16)
             if save_results:
                 plt.subplots_adjust(top=0.90)
@@ -512,8 +520,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
         elif mode == "normal":
             shap.initjs()
             explainer = shap.TreeExplainer(self.model, model_output=1)
-            shap_values = explainer.shap_values(self.X, check_additivity=True)
-            shap.summary_plot(shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+            shap_values = explainer.shap_values(X, check_additivity=True)
+            shap.summary_plot(shap_values, features=X, feature_names=self.X.columns, show=False, max_display=self.top_n)
             plt.title(f'{self.identifier} NGBoost Variance SHAP Summary Plot (Aggregated)', fontsize=16)
             if save_results:
                 plt.subplots_adjust(top=0.90)
