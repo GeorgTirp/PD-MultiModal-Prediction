@@ -88,6 +88,67 @@ class NGBoostRegressionModel(BaseRegressionModel):
         if top_n == -1:
             self.top_n = len(self.feature_selection['features'])
 
+    def model_specific_preprocess(self, data_df: pd.DataFrame, ceiling: list = ["BDI", "MoCA"]) -> Tuple:
+        """
+        Preprocess data specific to model requirements, including feature extraction,
+        optional ceiling adjustments, and one-hot encoding of categorical features.
+
+        Args:
+            data_df (pd.DataFrame): Original input data.
+            ceiling (list, optional): List of ceiling transformations to apply (e.g., ['BDI', 'MoCA']).
+                Defaults to ["BDI", "MoCA"].
+
+        Returns:
+            Tuple[pd.DataFrame, pd.Series, pd.Series, float, float]:
+                - X: Preprocessed feature DataFrame (with dummies for categorical cols).
+                - y: Original target Series.
+                - z: Standardized target Series.
+                - m: Mean of original target.
+                - std: Standard deviation of original target.
+        """
+        self.logging.info("Starting model-specific preprocessing...")
+
+        # Drop rows with missing values for features and target
+        data_df = data_df.dropna(subset=self.feature_selection['features'] + [self.feature_selection['target']])
+
+        # Select features
+        X = data_df[self.feature_selection['features']].copy()
+
+        # Apply ceiling adjustment if requested
+        if ceiling == "BDI":
+            if "BDI_sum_pre" in X.columns:
+                X["Distance_ceiling"] = 63 - X["BDI_sum_pre"]
+                self.feature_selection["features"].append("Distance_ceiling")
+            elif "MoCA_sum_pre" in X.columns:
+                X["Distance_ceiling"] = 30 - X["MoCA_sum_pre"]
+                self.feature_selection["features"].append("Distance_ceiling")
+            else:
+                raise ValueError("Neither BDI_sum_pre nor MoCA_sum_pre found in the DataFrame.")
+
+        # Extract target
+        y = data_df[self.feature_selection['target']]
+
+        # One-hot encode any columns containing strings or categorical dtype
+        cat_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
+        if cat_cols:
+            self.logging.info(f"One-hot encoding categorical columns: {cat_cols}")
+            X = pd.get_dummies(X, columns=cat_cols, drop_first=True)
+            # Update features list to new dummy columns
+            self.feature_selection['features'] = X.columns.tolist()
+
+        # Fill numeric NaNs with column means
+        X = X.fillna(X.mean())
+        # Convert all to numeric (will coerce non-numeric if any slipped through)
+        X = X.apply(pd.to_numeric, errors='coerce')
+
+        # Standardize the target variable
+        m = y.mean()
+        std = y.std()
+        z = (y - m) / std
+        self.logging.info("Finished model-specific preprocessing.")
+        return X, y, z, m, std
+
+
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         """ Predict using the trained NGBoost model.
             By default, return the mean predictions.
@@ -142,7 +203,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
             estimator=self.model,
             param_grid=param_grid,
             cv=cv,
-            scoring='neg_mean_squared_error',
+            scoring="neg_root_mean_squared_error",
             n_jobs=-1,
             verbose=0
         )

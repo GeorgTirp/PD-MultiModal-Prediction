@@ -150,7 +150,7 @@ class XGBoostRegressionModel(BaseRegressionModel):
             fit_kwargs['groups'] = groups
         if weights is not None:
             fit_kwargs['sample_weight'] = weights
-    
+        
         # run the search
         grid_search.fit(X, y, **fit_kwargs)
     

@@ -105,36 +105,8 @@ class BaseRegressionModel:
     def model_specific_preprocess(self, data_df: pd.DataFrame, ceiling: list =["BDI", "MoCA"]) -> Tuple:
         """
         Preprocess data specific to model requirements, including feature extraction and optional ceiling adjustments.
-
-        Args:
-            data_df (pd.DataFrame): Original input data.
-            ceiling (list, optional): List of ceiling transformations to apply (e.g., ['BDI', 'MoCA']). Defaults to ["BDI", "MoCA"].
-
-        Returns:
-            Tuple[pd.DataFrame, pd.Series]: Tuple containing preprocessed features (X) and target variable (y).
         """
-
-        self.logging.info("Starting model-specific preprocessing...")
-        # Drop rows with missing values for features and target
-        data_df = data_df.dropna(subset=self.feature_selection['features'] + [self.feature_selection['target']])
-        X = data_df[self.feature_selection['features']]
-        if ceiling == "BDI":
-            if "BDI_sum_pre" in X.columns:
-                X["Distance_ceiling"] = 63 - X["BDI_sum_pre"]  
-                self.feature_selection["features"].append("Distance_ceiling")  
-            elif "MoCA_sum_pre" in X.columns:
-                X["Distance_ceiling"] = 30 - X["BDI_sum"]
-            else:
-                raise ValueError("Neither BDI_sum_pre nor MoCA_sum_pre found in the DataFrame.")
-        y = data_df[self.feature_selection['target']]
-        X = X.fillna(X.mean())
-        X = X.apply(pd.to_numeric, errors='coerce')
-        
-        m = y.mean()
-        std = y.std()
-        z = (y - m) / std  # Standardize the target variable
-        self.logging.info("Finished model-specific preprocessing.")
-        return X, y, z, m, std
+        raise NotImplementedError("Subclasses must implement model_specific_preprocess method")
 
     def fit(self) -> None:
         """
