@@ -12,7 +12,7 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import RepeatedKFold
 from sklearn.metrics import make_scorer
 from scipy.stats import pearsonr
-
+from typing import Union, List, Tuple
 # Visualization and Explainability
 import matplotlib.pyplot as plt
 import shap
@@ -63,6 +63,59 @@ class XGBoostRegressionModel(BaseRegressionModel):
         if top_n == -1:
             self.top_n = len(self.feature_selection['features'])
         self.weights = sample_weights
+
+    def model_specific_preprocess(self, data_df: pd.DataFrame) -> Tuple:
+        """
+        Preprocess data specific to model requirements, including feature extraction,
+        optional ceiling adjustments, and automatic categorical encoding of string columns.
+
+        Args:
+            data_df (pd.DataFrame): Original input data.
+            ceiling (list or str, optional): Ceiling transformations to apply. Defaults to ["BDI", "MoCA"].
+
+        Returns:
+            Tuple[pd.DataFrame, pd.Series, pd.Series, float, float]:
+                - Preprocessed features (X)
+                - Original target (y)
+                - Standardized target (z)
+                - Target mean (m)
+                - Target std (std)
+        """
+        self.logging.info("Starting model-specific preprocessing...")
+
+        # Drop rows with missing values for features and target
+        data_df = data_df.dropna(subset=self.feature_selection['features'] + [self.feature_selection['target']])
+        X = data_df[self.feature_selection['features']].copy()
+
+        # Apply ceiling transformations
+        # Allow ceiling to be a single string or a list
+        # Extract target
+        y = data_df[self.feature_selection['target']]
+
+        # Identify and encode string columns as categorical
+        from pandas.api.types import is_string_dtype
+        string_cols = [col for col in X.columns if is_string_dtype(X[col])]
+        for col in string_cols:
+            # Convert to pandas 'category' dtype, then use integer codes
+            self.logging.info(f"Encoding column '{col}' as categorical codes.")
+            X[col] = X[col].astype('category').cat.codes
+
+        # Fill numeric missing values
+        numeric_cols = X.select_dtypes(include=['number']).columns
+        if len(numeric_cols) > 0:
+            X[numeric_cols] = X[numeric_cols].fillna(X[numeric_cols].mean())
+
+        # Ensure all values are numeric
+        X = X.apply(pd.to_numeric, errors='raise')
+        y = y.apply(pd.to_numeric, errors='raise')
+        # Standardize target variable
+        m = y.mean()
+        std = y.std()
+        z = (y - m) / std
+
+        self.logging.info("Finished model-specific preprocessing.")
+
+        return X, y, z, m, std
 
     def feature_importance(
         self, 
@@ -139,7 +192,7 @@ class XGBoostRegressionModel(BaseRegressionModel):
             estimator=self.model,
             param_grid=param_grid,
             cv=cv,
-            scoring='neg_root_mean_squared_error',
+            scoring='neg_mean_squared_error',
             n_jobs=-1,
             verbose=0,
         )

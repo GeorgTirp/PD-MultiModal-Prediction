@@ -13,6 +13,7 @@ from sklearn.linear_model import LinearRegression
 import matplotlib.pyplot as plt
 import shap
 
+from typing import Union, List, Tuple
 # Custom Base Model
 from model_classes.BaseRegressionModel import BaseRegressionModel
 
@@ -47,6 +48,33 @@ class LinearRegressionModel(BaseRegressionModel):
         if top_n == -1:
             self.top_n = len(self.feature_selection['features'])
 
+    def model_specific_preprocess(self, data_df: pd.DataFrame):
+        """
+        Preprocess data specific to model requirements, including feature extraction and optional ceiling adjustments.
+
+        Args:
+            data_df (pd.DataFrame): Original input data.
+            ceiling (list, optional): List of ceiling transformations to apply (e.g., ['BDI', 'MoCA']). Defaults to ["BDI", "MoCA"].
+
+        Returns:
+            Tuple[pd.DataFrame, pd.Series]: Tuple containing preprocessed features (X) and target variable (y).
+        """
+
+        self.logging.info("Starting model-specific preprocessing...")
+        # Drop rows with missing values for features and target
+        data_df = data_df.dropna(subset=self.feature_selection['features'] + [self.feature_selection['target']])
+        X = data_df[self.feature_selection['features']]
+        
+        y = data_df[self.feature_selection['target']]
+        X = X.fillna(X.mean())
+        X = X.apply(pd.to_numeric, errors='coerce')
+        
+        m = y.mean()
+        std = y.std()
+        z = (y - m) / std  # Standardize the target variable
+        self.logging.info("Finished model-specific preprocessing.")
+        return X, y, z, m, std
+    
     def feature_importance(self, top_n: int = None, save_results=True, iter_idx=None, ablation_idx=None) -> Dict:
         """
         Computes feature importance using model coefficients and SHAP values.

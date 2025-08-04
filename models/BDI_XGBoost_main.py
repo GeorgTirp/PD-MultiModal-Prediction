@@ -137,12 +137,13 @@ def main(
     detrend=True, 
     tune=False, 
     uncertainty=False, 
-    filtered_data_path=""):
+    filtered_data_path="",
+    ):
     
     test_split_size = 0.2
     Feature_Selection = {}
     target_col = identifier + "_" + target
-    possible_targets = ["ratio", "diff"] 
+    possible_targets = ["ratio", "diff", "avg_slope"] 
     ignored_targets = [t for t in possible_targets if t != target]
     ignored_target_cols = [identifier + "_" + t for t in ignored_targets]
     data_df = pd.read_csv(folder_path + data_path)
@@ -151,14 +152,24 @@ def main(
         trend = data_df["TimeSinceSurgery"] * 1
         data_df[identifier + "_diff"] = data_df[identifier + "_diff"] + trend
         data_df[identifier +"_ratio"] = (data_df[identifier +"_diff"] / (data_df[identifier +"_sum_pre"]* 2 + data_df[identifier +"_diff"]))
-        columns_to_drop = ['Pat_ID', "TimeSinceSurgery"] + [col for col in ignored_target_cols if col in data_df.columns] 
+        columns_to_drop = ["TimeSinceSurgery"] + [col for col in ignored_target_cols if col in data_df.columns] 
     else:
-        columns_to_drop = ['Pat_ID'] + [col for col in ignored_target_cols if col in data_df.columns] 
+        columns_to_drop = [col for col in ignored_target_cols if col in data_df.columns] 
 
+    if "Pat_ID" in data_df.columns:
+        columns_to_drop.append("Pat_ID")
     # Restrict FUs between 1-3 years
     #data_df = data_df[(data_df["TimeSinceSurgery"] >= 1) & (data_df["TimeSinceSurgery"] <= 3)]
-    data_df = data_df[(data_df["TimeSinceSurgery"] >= 0.3)]
+    data_df = data_df[(data_df["TimeSinceSurgery"] >= 0.6)]
 
+    # If MDS_UPDRS_III_sum_OFF is present, compute UPDRS_ratio and drop the source columns
+    if "MDS_UPDRS_III_sum_OFF" in data_df.columns and "MDS_UPDRS_III_sum_ON" in data_df.columns:
+        data_df["UPDRS_ratio"] = data_df["MDS_UPDRS_III_sum_ON"] / data_df["MDS_UPDRS_III_sum_OFF"]
+        columns_to_drop += ["MDS_UPDRS_III_sum_ON", "MDS_UPDRS_III_sum_OFF"]
+
+    if target_col == "BDI_avg_slope":
+        # Compute avg_slope as the slope of the linear regression between pre and post values
+        columns_to_drop += ["TimeSinceSurgery"]
     # Left locations in our dataframe is negated! otherwise sweetspot is [-12.08, -13.94,-6.74]
     # data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [12.08, -13.94,-6.74])
     # data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [11.90, -13.28, -6.74])
@@ -168,24 +179,39 @@ def main(
 
     # Define target and features
     Feature_Selection['target'] = target_col
-    Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
+    Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target'] and col != 'SEX' and col != 'OP_DATUM']
 
-    # Compute IQR for features
-    Q1 = data_df[Feature_Selection['features']].quantile(0.25)
-    Q3 = data_df[Feature_Selection['features']].quantile(0.75)
+    if target_col == "BDI_avg_slope":
+        iterator = data_df.columns.tolist()
+    else:
+        iterator = Feature_Selection['features']
+
+    num_feats = data_df[iterator] \
+                .select_dtypes(include='number') \
+                .columns.tolist()
+
+    # 2) Compute IQR on just the numeric columns
+    Q1  = data_df[num_feats].quantile(0.25)
+    Q3  = data_df[num_feats].quantile(0.75)
     IQR = Q3 - Q1
 
-    # Define outlier mask
-    is_outlier = (data_df[Feature_Selection['features']] < (Q1 - 1.5 * IQR)) | \
-                (data_df[Feature_Selection['features']] > (Q3 + 1.5 * IQR))
-
-    # Count and print number of outliers per feature
+    # 3) Define outlier mask
+    if target_col == "BDI_avg_slope":
+        # here we're checking *all* numeric cols for slope outliers
+        is_outlier = (data_df[num_feats] < (Q1 - 1.5 * IQR)) | \
+                     (data_df[num_feats] > (Q3 + 1.5 * IQR))
+    else:
+        # same logic, but you could customize which subset to use
+        is_outlier = (data_df[num_feats] < (Q1 - 1.5 * IQR)) | \
+                     (data_df[num_feats] > (Q3 + 1.5 * IQR))
+        # Count and print number of outliers per feature
     outlier_counts_iqr = is_outlier.sum()
     print("IQR Outliers per feature:\n", outlier_counts_iqr)
 
     # Print outlier rows grouped by feature
     print("\nDetailed outlier rows by feature:")
-    for col in Feature_Selection['features']:
+    
+    for col in num_feats:
         outlier_rows = data_df[is_outlier[col]]
         if not outlier_rows.empty:
             print(f"\n--- Outliers in feature: {col} (n={len(outlier_rows)}) ---")
@@ -197,9 +223,10 @@ def main(
 
     # Drop all rows containing any outlier
     data_df = data_df[~is_outlier.any(axis=1)].reset_index(drop=True)
+
     print(f"Remaining rows after outlier removal: {len(data_df)}")
 
-
+    
     # Plot corr matrix of features + target
     # Combine features and target
     # cols_to_plot = Feature_Selection['features'] + [Feature_Selection['target']] + ['FU_MOCA'] + ['AGE_AT_FU']
@@ -221,11 +248,11 @@ def main(
     vif_results = calculate_vif(data_df[Feature_Selection['features']], exclude_cols=[])
 
     # Let's test the OLS models
-    X = data_df[Feature_Selection['features']]
-    X_scaled = pd.DataFrame(StandardScaler().fit_transform(X), columns=X.columns, index=X.index)
-    X_const = sm.add_constant(X_scaled)
-    model = sm.OLS(data_df[Feature_Selection['target']], X_const).fit()
-    print(model.summary())
+    #X = data_df[Feature_Selection['features']]
+    #X_scaled = pd.DataFrame(StandardScaler().fit_transform(X), columns=X.columns, index=X.index)
+    #X_const = sm.add_constant(X_scaled)
+    #model = sm.OLS(data_df[Feature_Selection['target']], X_const).fit()
+    #print(model.summary())
 
     safe_path = os.path.join(folder_path, out)
 
@@ -240,6 +267,8 @@ def main(
     #Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
     #safe_path = os.path.join(folder_path, "test/test_diabetes/NGBoost")
     ### test ende
+    Feature_Selection['features'] += ['SEX']
+
     # --- SETUP LOGGING ---
     os.makedirs(safe_path, exist_ok=True)
     os.makedirs(os.path.join(safe_path, 'log'), exist_ok=True)
@@ -263,22 +292,35 @@ def main(
         data_dir = os.path.dirname(data_path)
         data_df.to_csv(data_dir + '/' + filtered_data_path)
 
+        #op_dates.to_csv(op_dates_path, index=False)
+    data_df = data_df.drop(columns=['OP_DATUM'])
+    # param_grid_xgb = {
+    #     'learning_rate': [0.1, 0.3,],              # aka eta
+    #     'max_depth': [3, 4, 5, 6],
+    #     # 'min_child_weight': 1,
+    #     # 'gamma': 0,
+    #     # 'subsample': 1,
+    #     # 'colsample_bytree': 1,
+    #     #'reg_alpha': [0, 0.1, 0.2],                    # L1 regularization
+    #     #'reg_lambda': [1, 2, 5],                   # L2 regularization
+    #     'n_estimators': [30, 50, 100, 200, 300],                # set during model init, can be tuned
+    #     'random_state': [2025],
+    # }
 
     param_grid_xgb = {
-        #'objective': 'reg:squarederror',   # or 'reg:absoluteerror', etc., depending on your loss preferences
-        'learning_rate': [0.1, 0.2, 0.3],              # aka eta
-        'max_depth': [3, 4, 5, 6, 7],
-        # 'min_child_weight': 1,
+        'learning_rate': [0.3],              # aka eta
+        'max_depth': [4, 5, 6, 7],
+        'min_child_weight': [1, 2, 3],
         # 'gamma': 0,
         # 'subsample': 1,
         # 'colsample_bytree': 1,
-        # 'reg_alpha': 0,                    # L1 regularization
-        # 'reg_lambda': 1,                   # L2 regularization
-        'n_estimators': [30, 50, 100, 200, 300, 350, 400],                # set during model init, can be tuned
+        #'reg_alpha': [0, 0.1, 0.2],                    # L1 regularization
+        #'reg_lambda': [1, 2, 5],                   # L2 regularization
+        'n_estimators': [50, 100, 200, 300, 400],                # set during model init, can be tuned
         'random_state': [2025],
     }
 
-    
+
     XGB_Hparams = {
         'objective': 'reg:squarederror',   # or 'reg:absoluteerror', etc., depending on your loss preferences
         'learning_rate': 0.3,              # aka eta
@@ -291,6 +333,7 @@ def main(
         'reg_lambda': 1,                   # L2 regularization
         'n_estimators': 100,                # set during model init, can be tuned
         'random_state': 2025,
+        'enable_categorical': True
     }
  
 
@@ -304,7 +347,8 @@ def main(
         identifier,
         -1,
         param_grid_xgb,
-        logging=logging)
+        logging=logging,
+        split_shaps=False)
 
     metrics = model.evaluate(
         folds=folds, 
@@ -328,37 +372,22 @@ def main(
     _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds)
     #model.calibration_analysis()
     
-    
-    #summands = [0, 0, 1, 0]
-    #param_names  = ["mu", "lambda", "alpha", "beta"]
-    #for i in range(len(param_names)):
-    #    if i == 0:
-    #        param = metrics["pred_dist"][i] + summands[i]
-    #    param = np.exp(metrics["pred_dist"][i]) + summands[i]
-    #    print(metrics["pred_dist"][i].shape)
-    #    plt.figure()
-    #    plt.hist(param, bins=20, alpha=0.7, color='blue', edgecolor='black')
-    #    plt.title(f"Histogram of {param_names[i]} - Sample {i+1}")
-    #    plt.xlabel(f"{param_names[i]} values")
-    #    plt.ylabel("Frequency")
-    #    plt.grid(True)
-    #    plt.savefig(os.path.join(safe_path, f"histogram_{param_names[i]}_sample.png"))
-    #    plt.close()
-        
         
 
 if __name__ == "__main__":
 
-    folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
+    #folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
+    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
 
     main(
         folder_path, 
-        "data/MoCA/level2/moca_wo_mmse_df.csv", 
+        "data/BDI/level2/bdi_updrs.csv",   
         "diff", 
-        "MoCA", 
-        "results/MoCA_XGBoost_tune_bigger_3month_XYZ_detrend/level2/XGBoost", 
-        folds=20, 
-        tune_folds=20, 
-        detrend=True,
+        "BDI", 
+        "results/BDI_tune_bigger_6month_updrs/level2/XGBoost", 
+        folds=10, 
+        tune_folds=10, 
+        detrend=False,
         tune=True,
-        filtered_data_path="filtered_moca_wo_mmse_df.csv")
+        filtered_data_path="filtered_bdi_updrs.csv",
+        )

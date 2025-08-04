@@ -53,7 +53,7 @@ def plot_stim_positions(positions: pd.DataFrame, safe_path: str = "") -> None:
 
 
 
-def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, safe_path: str = "", show: bool = False) -> None:
+def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, safe_path: str = "", show: bool = False, N=None) -> None:
     """Create a refined raincloud plot using seaborn for better aesthetics."""
     sns.set_theme(style="white", context="paper")
     fig, ax = plt.subplots(figsize=(7, 7))
@@ -64,8 +64,8 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
     
     # Define colors based on modality
     colors = {
-            "deterioration": "#04E762",
-            "improvement": "#FF5714",
+            "deterioration": "#FF5714",
+            "improvement": "#04E762",
             "det_edge": "#007C34",
             "imp_edge": "#8A3210",
             "line": "grey",
@@ -169,11 +169,11 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
                     x_start, y_start = x_jitter[i], y_jitter[i]
                     x_end, y_end = x_positions[idx + 1] + x_noise[i]  , next_values[i] + y_noise[i]
                     slope = y_end - y_start
-                    if np.isclose(y_start, y_end, atol=0.9):
+                    if np.isclose(y_start, y_end, atol=1e-2):
                             line_color = "grey"
-                    elif slope > 0:
-                        line_color = colors["improvement"]
                     elif slope < 0:
+                        line_color = colors["improvement"]
+                    elif slope > 0:
                         line_color = colors["deterioration"]
                     else:
                         line_color = "black" 
@@ -203,7 +203,7 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
     ax.set_xticklabels(features_list, fontsize=11)
     ax.set_yticklabels([f'{int(tick)}' for tick in ax.get_yticks()], fontsize=10)
     ax.set_ylabel(modality_name, fontsize=11)
-    ax.set_title(f"{modality_name} Raincloud Plot", fontsize=14)
+    ax.set_title(f"{modality_name} Raincloud Plot, N = {N}", fontsize=14)
     ax.set_xlim(0.5, x_positions[-1] + 0.5)
 
     # Add legend for BDI
@@ -254,11 +254,9 @@ def demographics_pre_post(
     
 
     if modality_name == "BDI":
-        data["BDI_sum_post"] = data["BDI_sum_pre"] + data["BDI_diff"]
         data = data[['BDI_sum_pre', 'BDI_sum_post']]
 
     if modality_name == "MoCA":
-        data["MoCA_sum_post"] = data["MoCA_sum_pre"] + data["MoCA_diff"]
         data = data[['MoCA_sum_pre', 'MoCA_sum_post']]
 
     if modality_name == "MDS-UPDRS III":
@@ -274,48 +272,100 @@ def demographics_pre_post(
     if 'OP_DATUM' in data.columns:
         data = data.drop(columns=['OP_DATUM'])
 
+    N = len(data)
     # Plotting demographic data before and after treatment
     if modality_name == "MDS-UPDRS III":
-        raincloud_plot(data, modality_name , ['Pre OFF', 'Pre ON', 'Post ON/Stim On'], save_path, show=show)
+        raincloud_plot(data, modality_name , ['Pre OFF', 'Pre ON', 'Post ON/Stim On'], save_path, show=show, N=N)
     else:
-        raincloud_plot(data, modality_name , ['Pre', 'Post'], save_path, show=show)
+        raincloud_plot(data, modality_name , ['Pre', 'Post'], save_path, show=show, N=N)
 
 
-def histoplot(input_path: str, feature: str,  save_path: str, show: bool = False) -> None:
-    """ Plot the demographic data before and after the treatment as raincloud plot"""
+def histoplot(input_path: str, feature: str, save_path: str, show: bool = False) -> None:
+    """Plot demographic features with histograms (or barplot for SEX) and annotate with stats."""
     # Load the data
     data = pd.read_csv(input_path)
+    N = len(data)
+
+    # Set theme and palette
     sns.set_theme(style="white", context="paper")
     sns.set_palette("deep")
-    # Create a figure with two subplots
+
+    # Determine plot settings
     if feature == 'TimeSinceSurgery':
-        title = 'Distribution of Time Since Surgery'
+        title = f'Distribution of Time Since Surgery, N = {N}'
         xlabel = 'Time Since Surgery (years)'
         save_path = save_path + "time_since_surgery_histoplot"
         color = 'blue'
-
     elif feature == 'TimeSinceDiag':
-        title = 'Distribution of Time Since Diagnosis'
+        title = f'Distribution of Time Since Diagnosis, N = {N}'
         xlabel = 'Time Since Diagnosis (years)'
         save_path = save_path + "time_since_diag_histoplot"
         color = 'green'
+    elif feature == 'AGE_AT_OP':
+        title = f'Distribution of Age at Operation, N = {N}'
+        xlabel = 'Age at Operation (years)'
+        save_path = save_path + "age_at_operation_histoplot"
+        color = 'orange'
+    elif feature == 'SEX':
+        title = f'Distribution of Sex, N = {N}'
+        xlabel = 'Sex'
+        save_path = save_path + "sex_barplot"
+        color = 'purple'
+    else:
+        title = f'Distribution of {feature}, N = {N}'
+        xlabel = feature
+        save_path = save_path + f"{feature.lower()}_histoplot"
+        color = 'gray'
 
+    # Create figure and axis
     fig, ax = plt.subplots(figsize=(10, 6))
-    print(data[feature].mean())
-    print(data[feature].std())
-    sns.histplot(data[feature], kde=True, bins=30, color=color)
+
+    # Plot differently for SEX (categorical) vs numeric features
+    if feature == 'SEX':
+        # Barplot for categorical sex values
+        order = sorted(data['SEX'].dropna().unique())
+        sns.countplot(x='SEX', data=data, order=order, ax=ax, color=color)
+        ax.set_ylabel('Count', fontsize=14)
+        # Annotate counts on bars
+        for p in ax.patches:
+            height = p.get_height()
+            ax.text(
+                p.get_x() + p.get_width() / 2,
+                height + 0.02 * N,
+                f'{int(height)}',
+                ha='center', va='bottom', fontsize=12
+            )
+    else:
+        # Numeric feature: histogram with KDE
+        mean_val = data[feature].mean()
+        std_val = data[feature].std()
+        sns.histplot(data[feature], kde=True, bins=30, color=color, ax=ax)
+        # Annotate mean and std
+        textstr = f'μ = {mean_val:.2f}\nσ = {std_val:.2f}'
+        props = dict(boxstyle='round', facecolor='white', alpha=0.7)
+        ax.text(
+            0.95, 0.95, textstr,
+            transform=ax.transAxes,
+            fontsize=12,
+            verticalalignment='top',
+            horizontalalignment='right',
+            bbox=props
+        )
+        ax.set_ylabel('Frequency', fontsize=14)
+
+    # Common axis formatting
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax.set_title(title, fontsize=16)
     ax.set_xlabel(xlabel, fontsize=14)
-    ax.set_ylabel('Frequency', fontsize=14)
     ax.tick_params(axis='both', labelsize=11)
     ax.grid(False)
-    sns.set_context("paper")
-    # Optionally choose a style you like
+
+    # Final cleanup and save
     sns.despine()
     plt.tight_layout()
     plt.savefig(save_path + ".png")
     plt.savefig(save_path + ".svg")
+
     if show:
         plt.show()
     plt.close()
@@ -323,31 +373,32 @@ def histoplot(input_path: str, feature: str,  save_path: str, show: bool = False
 
 
 def visualize_demographics(
-        data_path, 
+        quest,
+        data_folder_path, 
         questionnaire, 
-        save_path) -> None:
+        save_path,
+    ) -> None:
     # Example usage
-    
-    
-    stim_path = data_path + "/stim_positions.csv"
-    mds_prepost_path = data_path+ "/mupdrs3_pre_vs_post.csv"
-    ledd_prepost_path = data_path + "/ledd_pre_vs_post.csv"
-    if questionnaire == "MoCA":  
-        quest_prepost_path = data_path + "/moca_pre_vs_post.csv"
-        quest = data_path + "/moca_df.csv"
-    elif questionnaire == "BDI":
-        quest_prepost_path = data_path + "/bdi_pre_vs_post.csv"
-        quest = data_path + "/bdi_df.csv"
 
-    op_dates_path = data_path + "/op_dates.csv"
+
+    stim_path = data_folder_path + "/stim_positions.csv"
+    mds_prepost_path = data_folder_path + "/mupdrs3_pre_vs_post.csv"
+    ledd_prepost_path = data_folder_path + "/ledd_pre_vs_post.csv"
+    if questionnaire == "MoCA": 
+        quest_prepost_path = data_folder_path + "/moca_pre_vs_post.csv"
+        
+    elif questionnaire == "BDI":
+        quest_prepost_path = data_folder_path + "/bdi_pre_vs_post.csv"
 
     # Ensure save path exists
     os.makedirs(save_path, exist_ok=True)
-    demographics_pre_post(mds_prepost_path, op_dates_path, "MDS-UPDRS III", save_path)
-    demographics_pre_post(ledd_prepost_path, op_dates_path, "LEDD", save_path)
-    demographics_pre_post(quest_prepost_path, op_dates_path, questionnaire, save_path)
+    #demographics_pre_post(mds_prepost_path, quest, "MDS-UPDRS III", save_path)
+    #demographics_pre_post(ledd_prepost_path, quest, "LEDD", save_path)
+    demographics_pre_post(quest_prepost_path, quest, questionnaire, save_path)
     histoplot(quest, "TimeSinceSurgery", save_path)
     histoplot(quest, "TimeSinceDiag", save_path)
+    histoplot(quest, "AGE_AT_OP", save_path)
+    histoplot(quest, "SEX", save_path)
 
 
 
@@ -922,51 +973,63 @@ def ablation_plot(
 if __name__ == "__main__":
     #root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
     #root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    root_dir = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
+    #root_dir = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
+    root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
     #/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/level2/level2/NGBoost/BDI_ablation_history.csv
-    #visualize_demographics("BDI", root_dir)
-    metrics_path_best = root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_metrics.csv"
-    metrics_path_full = root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/MoCA_ratio_metrics.csv"
-    moca_data_path = root_dir + "/data/MoCA/level2/moca_df.csv"
-    
-    moca_data_folder_path = root_dir + "/data/MoCA/level2"
-    original_features = ['MoCA_sum_pre', 'AGE_AT_OP', 'TimeSinceDiag', 'X_L', 'Y_L', 'Z_L', 'X_R',
-       'Y_R', 'Z_R', 'Left_1_mA', 'Right_1_mA', 'LEDD_ratio']
-    
-    feature_names_for_plotting = ['MoCA Sum Pre', 'Age at Operation', 'Time passed Since Diagnosis', 'X Left', 'Y Left', 'Z Left', 'X Right',
-       'Y Right', 'Z Right', 'Left mA', 'Right mA', 'LEDD Reduction Ratio']
-    
+
+    data_path = root_dir + "/data/BDI/level2/filtered_bdi_updrs.csv"
+    bdi_data_folder_path = root_dir + "/data/BDI/level2"
+    original_features = [
+        'TimeSinceSurgery', 
+        'BDI_sum_pre', 
+        'AGE_AT_OP', 
+        'TimeSinceDiag', 
+        'SEX',
+        "MDS_UPDRS_III_sum_ON", 
+        "MDS_UPDRS_III_sum_OFF"]
+
+    feature_names_for_plotting = [
+        'Time Since Surgery', 
+        'BDI Sum Pre', 
+        'Age at Operation', 
+        'Time passed Since Diagnosis', 
+        'Sex', 
+        'MDS UPDRS III Sum ON', 
+        'MDS UPDRS III Sum OFF']
+
     feature_name_mapping = dict(zip(original_features, feature_names_for_plotting))
 
     #visualize_demographics("MoCA", root_dir)
     visualize_demographics(
-        moca_data_folder_path, 
-        "MoCA", 
-        save_path = root_dir + "/figures/MoCA/")
-    
-    regression_figures(
-        metrics_path_best,
-        metrics_path_full,
-        moca_data_path,
-        save_path = root_dir + "/figures/MoCA/",
-        quest="MoCA")
-    
-    threshold_figure(
-        feature_name_mapping,
-        data_path=moca_data_path,
-        shap_data_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_mean_shap_values.npy",
-        removal_list_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/MoCA_ablation_history.csv",
-        save_path=root_dir + "/figures/MoCA/moca_threshold_figure"
+        data_path,
+        bdi_data_folder_path, 
+        "BDI", 
+        save_path = root_dir + "/figures/BDI/updrs/",
     )
 
-    shap_importance_histo_figure(
-        feature_name_mapping,
-        data_path=moca_data_path,
-        shap_data_path=root_dir +  "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_all_shap_values(mu).npy",
-        removal_list_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/MoCA_ablation_history.csv",
-        save_path=root_dir + "/figures/MoCA/moca_abs_importance_figure"
-    )
-
+    #regression_figures(
+    #    metrics_path_best,
+    #    metrics_path_full,
+    #    moca_data_path,
+    #    save_path = root_dir + "/figures/MoCA/",
+    #    quest="MoCA")
+    #
+    #threshold_figure(
+    #    feature_name_mapping,
+    #    data_path=moca_data_path,
+    #    shap_data_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_mean_shap_values.npy",
+    #    removal_list_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/MoCA_ablation_history.csv",
+    #    save_path=root_dir + "/figures/MoCA/moca_threshold_figure"
+    #)
+#
+    #shap_importance_histo_figure(
+    #    feature_name_mapping,
+    #    data_path=moca_data_path,
+    #    shap_data_path=root_dir +  "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_all_shap_values(mu).npy",
+    #    removal_list_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/MoCA_ablation_history.csv",
+    #    save_path=root_dir + "/figures/MoCA/moca_abs_importance_figure"
+    #)
+#
     #shap_interaction_figure(
     #    feature_name_mapping,
     #    data_path=moca_data_path,
@@ -976,15 +1039,15 @@ if __name__ == "__main__":
     #    feature2="Right_1_mA",
     #    save_path=root_dir + "/figures/MoCA/moca_dependence")
 
-    ablation_plot(
-        questionnaire="MoCA",
-        ablation_folder_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation",
-        save_path=root_dir + "/figures/MoCA/moca_ablation_plot"
-        
-    )
-    ablation_plot(
-        questionnaire="MoCA",
-        ablation_folder_path=root_dir + "/results/Paper_runs/MoCA_shuffeled/level2/NGBoost/ablation",
-        save_path=root_dir + "/figures/MoCA/moca_ablation_shuffeled_plot",
-        title="Feature Ablation with shuffeled targets"
-    )
+    #ablation_plot(
+    #    questionnaire="MoCA",
+    #    ablation_folder_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation",
+    #    save_path=root_dir + "/figures/MoCA/moca_ablation_plot"
+    #    
+    #)
+    #ablation_plot(
+    #    questionnaire="MoCA",
+    #    ablation_folder_path=root_dir + "/results/Paper_runs/MoCA_shuffeled/level2/NGBoost/ablation",
+    #    save_path=root_dir + "/figures/MoCA/moca_ablation_shuffeled_plot",
+    #    title="Feature Ablation with shuffeled targets"
+    #)

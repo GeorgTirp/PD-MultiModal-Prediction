@@ -378,8 +378,10 @@ class BaseRegressionModel:
         ):
             X_train_kf, X_val_kf = self.X.iloc[train_idx], self.X.iloc[val_idx]
             y_train_kf, y_val_kf = self.y.iloc[train_idx], self.y.iloc[val_idx]
-            if hasattr(self, 'weights'):
+            if hasattr(self, 'weights') and self.weights is not None:
                 w_train, w_test = self.weights[train_idx], self.weights[val_idx]
+            else:
+                w_train, w_test = None, None
 
             if self.scaler is not None:
                 self.scaler.fit(y_train_kf)
@@ -399,7 +401,7 @@ class BaseRegressionModel:
                     groups_tr, 
                     w_train)
             else:
-                if hasattr(self, 'weights'):
+                if hasattr(self, 'weights') and self.weights is not None:
                     self.model.fit(X_train_kf, y_train_kf, sample_weight=w_train)
                 else:
                     self.model.fit(X_train_kf, y_train_kf)
