@@ -470,12 +470,7 @@ class BaseRegressionModel:
                         all_shap_variance.append(shap_values_variance)
                     else:
                         if self.split_shaps:
-                            shap_values_train = self.feature_importance(
-                                X_train_kf,
-                                top_n=-1, 
-                                save_results=True, 
-                                iter_idx=iter_idx,
-                                )
+                            
                             shap_values_test = self.feature_importance(
                                 X_val_kf,
                                 top_n=-1, 
@@ -483,16 +478,16 @@ class BaseRegressionModel:
                                 iter_idx=iter_idx,
                                 validation=True
                                 )
-                            all_shap_train.append(shap_values_train)
+                            
                             all_shap_test.append(shap_values_test)
-                        else:
-                            shap_values = self.feature_importance(
-                                self.X,
-                                top_n=-1, 
-                                save_results=True, 
-                                iter_idx=iter_idx,
-                                )
-                            all_shap_values.append(shap_values) 
+                    
+                        shap_values = self.feature_importance(
+                            self.X,
+                            top_n=-1, 
+                            save_results=True, 
+                            iter_idx=iter_idx,
+                            )
+                        all_shap_values.append(shap_values) 
             iter_idx += 1
 
         # Farzin was here :D
@@ -552,37 +547,35 @@ class BaseRegressionModel:
                 plt.close()
             else:
                 if self.split_shaps:
-                    all_shap_mean_train_array = np.stack(all_shap_train, axis=0)
-                    # Average over the folds to get an aggregated array of shape (n_samples, n_features)
-                    train_shap_values = np.mean(all_shap_mean_train_array, axis=0)
-                    np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values_train.npy', train_shap_values)
-                    shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-                    plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
-                    plt.subplots_adjust(top=0.90)
-                    plt.savefig(f'{save_path}_shap_aggregated_beeswarm_train.png')
-                    plt.close()
+                    #all_shap_mean_train_array = np.stack(all_shap_train, axis=0)
+                    ## Average over the folds to get an aggregated array of shape (n_samples, n_features)
+                    #train_shap_values = np.mean(all_shap_mean_train_array, axis=0)
+                    #np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values_train.npy', train_shap_values)
+                    #shap.summary_plot(train_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                    #plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
+                    #plt.subplots_adjust(top=0.90)
+                    #plt.savefig(f'{save_path}_shap_aggregated_beeswarm_train.png')
+                    #plt.close()
 
-                    all_shap_mean_test_array = np.stack(all_shap_test, axis=0)
-                    # Average over the folds to get an aggregated array of shape (n_samples, n_features)
-                    test_shap_values = np.mean(all_shap_mean_test_array, axis=0)
+                    test_shap_values = np.concatenate(all_shap_test, axis=0)
                     np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values_test.npy', test_shap_values)
-                    shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                    shap.summary_plot(test_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
                     plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
                     plt.subplots_adjust(top=0.90)
                     plt.savefig(f'{save_path}_shap_aggregated_beeswarm_test.png')
                     plt.close()
-                else:
-                    all_shap_mean_array = np.stack(all_shap_values, axis=0)
-                    # Average over the folds to get an aggregated array of shape (n_samples, n_features)
-                    mean_shap_values = np.mean(all_shap_mean_array, axis=0)
-                    np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values.npy', mean_shap_values)
-                    shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-                    plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
-                    plt.subplots_adjust(top=0.90)
-                    plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png')
-                    #with open(f'{save_path}_mean_shap_explanations.pkl', 'wb') as fp:
-                    #    pickle.dump(mean_shap_values, fp)
-                    plt.close()
+                
+                all_shap_mean_array = np.stack(all_shap_values, axis=0)
+                # Average over the folds to get an aggregated array of shape (n_samples, n_features)
+                mean_shap_values = np.mean(all_shap_mean_array, axis=0)
+                np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values.npy', mean_shap_values)
+                shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
+                plt.subplots_adjust(top=0.90)
+                plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png')
+                #with open(f'{save_path}_mean_shap_explanations.pkl', 'wb') as fp:
+                #    pickle.dump(mean_shap_values, fp)
+                plt.close()
             np.save(f'{save_path}_all_shap_values(mu).npy', all_shap_mean_array)
             
             

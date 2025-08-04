@@ -58,6 +58,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
             param_grid: dict = None,
             logging = None,
             standardize=False,
+            split_shaps=False,
             Pat_IDs=None):
         
         super().__init__(
@@ -70,6 +71,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
             top_n, 
             logging=logging, 
             standardize=standardize,
+            split_shaps=split_shaps,
             Pat_IDs=Pat_IDs)
 
         # Set default hyperparameters if not provided
@@ -170,7 +172,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
                  y,
                  param_grid: dict,
                  folds: int = 5,
-                 groups: np.ndarray = None
+                 groups: np.ndarray = None,
+                 weights: np.ndarray = None
                 ) -> Dict:
         """
         Tune hyperparameters using GridSearchCV.
@@ -183,7 +186,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
             folds:       Number of CV folds (or -1 → leave‑one‑out).
             groups:      Optional array of group labels for group‑aware CV.
         """
-        # allow -1 → leave‐one‐out
+        # allow -1 → leave‐one‐out#
+        del weights  # TODO: implement weights
         if folds == -1:
             folds = len(X)
     
@@ -203,7 +207,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
             estimator=self.model,
             param_grid=param_grid,
             cv=cv,
-            scoring="neg_root_mean_squared_error",
+            scoring="neg_mean_squared_error",
             n_jobs=-1,
             verbose=0
         )
