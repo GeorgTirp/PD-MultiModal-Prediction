@@ -158,3 +158,37 @@ def compute_diag_fim(grads):
         for j in range(d):
             fim_diag[i, j] = grads[i, j] ** 2 + 1e-5  # add ridge to diagonal
     return fim_diag
+
+
+@njit(parallel=True, fastmath=True)
+def rbf_kernel_and_grad_numba(X, gamma):
+    """
+    Compute the RBF kernel matrix and its gradient wrt the first argument using Numba.
+
+    Parameters:
+        X (np.ndarray): Input array of shape (n, d).
+        gamma (float): RBF kernel parameter.
+
+    Returns:
+        K (np.ndarray): Kernel matrix of shape (n, n).
+        dK (np.ndarray): Gradient tensor of shape (n, n, d), where
+                         dK[i, j, k] = ∂/∂X[i, k] [exp(-gamma * ||X[i] - X[j]||^2)].
+    """
+    n, d = X.shape
+    K = np.empty((n, n), dtype=np.float64)
+    dK = np.empty((n, n, d), dtype=np.float64)
+    for i in prange(n):
+        for j in range(n):
+            # Compute squared distance
+            sq_dist = 0.0
+            for k in range(d):
+                diff = X[i, k] - X[j, k]
+                sq_dist += diff * diff
+            # Kernel value
+            k_val = math.exp(-gamma * sq_dist)
+            K[i, j] = k_val
+            # Gradient wrt X[i]
+            for k in range(d):
+                diff = X[i, k] - X[j, k]
+                dK[i, j, k] = -2.0 * gamma * diff * k_val
+    return K, dK

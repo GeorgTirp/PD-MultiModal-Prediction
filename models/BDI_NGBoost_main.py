@@ -16,7 +16,11 @@ from scipy.stats import zscore
 import statsmodels.api as sm
 import seaborn as sns
 import matplotlib.pyplot as plt
-import pandas as pd
+
+from model_classes.NGBoostRegressionModel import NGBoostRegressionModel
+from model_classes.faster_evidential_boost import NormalInverseGamma, NIGLogScore, NIGLogScoreSVGD
+from ngboost.distns.normal import Normal, NormalCRPScore, NormalLogScore
+from sklearn.tree import DecisionTreeRegressor
 
 def signed_euclidean_distance(points: np.ndarray, sweetspot: np.ndarray) -> np.ndarray:
     """
@@ -168,7 +172,12 @@ def main(
         columns_to_drop += ["MDS_UPDRS_III_sum_ON", "MDS_UPDRS_III_sum_OFF"]
 
     data_df['AGE_AT_DIAG'] = data_df["AGE_AT_OP"] - data_df['TimeSinceDiag']
+    
+
+    data_df = data_df[data_df['SEX'] == 'M'] 
+
     columns_to_drop += ['TimeSinceDiag']
+
     if target_col == "BDI_avg_slope":
         # Compute avg_slope as the slope of the linear regression between pre and post values
         columns_to_drop += ["TimeSinceSurgery"]
@@ -269,7 +278,7 @@ def main(
     #Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
     #safe_path = os.path.join(folder_path, "test/test_diabetes/NGBoost")
     ### test ende
-    Feature_Selection['features'] += ['SEX']
+    Feature_Selection['features']# += ['SEX']
 
     # --- SETUP LOGGING ---
     os.makedirs(safe_path, exist_ok=True)
@@ -296,59 +305,41 @@ def main(
 
         #op_dates.to_csv(op_dates_path, index=False)
     data_df = data_df.drop(columns=['OP_DATUM'])
-    # param_grid_xgb = {
-    #     'learning_rate': [0.1, 0.3,],              # aka eta
-    #     'max_depth': [3, 4, 5, 6],
-    #     # 'min_child_weight': 1,
-    #     # 'gamma': 0,
-    #     # 'subsample': 1,
-    #     # 'colsample_bytree': 1,
-    #     #'reg_alpha': [0, 0.1, 0.2],                    # L1 regularization
-    #     #'reg_lambda': [1, 2, 5],                   # L2 regularization
-    #     'n_estimators': [30, 50, 100, 200, 300],                # set during model init, can be tuned
-    #     'random_state': [2025],
-    # }
-
-    param_grid_xgb = {
-        'learning_rate': [0.3],              # aka eta
-        'max_depth': [4, 5, 6, 7],
-        'min_child_weight': [1, 2, 3],
-        # 'gamma': 0,
-        # 'subsample': 1,
-        # 'colsample_bytree': 1,
-        #'reg_alpha': [0, 0.1, 0.2],                    # L1 regularization
-        #'reg_lambda': [1, 2, 5],                   # L2 regularization
-        'n_estimators': [50, 100, 200, 300, 400],                # set during model init, can be tuned
-        'random_state': [2025],
+    param_grid_ngb = {
+    #'Dist': [NormalInverseGamma],
+    #'Score' : [NIGLogScore],
+    'n_estimators': [200, 300, 400, 500],
+    'learning_rate': [0.01, 0.1,  0.05],
+    'Base__max_depth': [ 5, 6, 7, 8],
+    'Score__evid_strength': [0.1, 0.05, 0.15],
+    'Score__kl_strength': [0.01, 0.05],
     }
 
-
-    XGB_Hparams = {
-        'objective': 'reg:squarederror',   # or 'reg:absoluteerror', etc., depending on your loss preferences
-        'learning_rate': 0.3,              # aka eta
-        'max_depth': 6,
-        'min_child_weight': 1,
-        'gamma': 0,
-        'subsample': 1,
-        'colsample_bytree': 1,
-        'reg_alpha': 0,                    # L1 regularization
-        'reg_lambda': 1,                   # L2 regularization
-        'n_estimators': 100,                # set during model init, can be tuned
-        'random_state': 2025,
-        'enable_categorical': True
+    
+    
+    # BEST ONES: 600, 0.1 and for regs 0.1 and 0.001
+    NGB_Hparams = {
+        'Dist': NormalInverseGamma,
+        'Score' : NIGLogScore,
+        'n_estimators': 600,
+        'learning_rate': 0.05,
+        'natural_gradient': True,
+        #'Score_kwargs': {'evid_strength': 0.1, 'kl_strength': 0.01},
+        'verbose': False,
+        'Base': DecisionTreeRegressor(max_depth=3)  # specify the depth here
     }
- 
 
-    model = XGBoostRegressionModel(
-        data_df, 
-        Feature_Selection, 
-        target,
-        XGB_Hparams, 
-        test_split_size, 
-        safe_path, 
-        identifier,
-        -1,
-        param_grid_xgb,
+    model = NGBoostRegressionModel(
+        data_df=data_df, 
+        feature_selection=Feature_Selection, 
+        target_name=target,
+        ngb_hparams=NGB_Hparams,
+        test_split_size=test_split_size,
+        save_path=safe_path,
+        identifier=identifier,
+        top_n=-1,
+        param_grid=param_grid_ngb,
+        standardize="zscore",
         logging=logging,
         split_shaps=True)
 
@@ -367,12 +358,12 @@ def main(
 
     #### Farzin was here too, sorry :D
     
-    shap_vals = np.load(f'{model.save_path}/{identifier}_{target}_mean_shap_values.npy')
+    #shap_vals = np.load(f'{model.save_path}/{identifier}_{target}_mean_shap_values.npy')
 
-    top_feats, explained = select_top_shap_features(shap_vals, Feature_Selection['features'], threshold=0.95)
+    #top_feats, explained = select_top_shap_features(shap_vals, Feature_Selection['features'], threshold=0.95)
     ######
-    _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds)
-    #model.calibration_analysis()
+    #_,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds)
+    model.calibration_analysis()
     
         
 
@@ -386,7 +377,7 @@ if __name__ == "__main__":
         "data/BDI/level2/bdi_demo.csv",   
         "diff", 
         "BDI", 
-        "results/BDI_tune_bigger_6month_demo/level2/XGBoost", 
+        "results/BDI_tune_bigger_6month_demo_MALE/level2/NGBoost", 
         folds=10, 
         tune_folds=10, 
         detrend=False,
