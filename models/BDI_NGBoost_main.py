@@ -142,6 +142,7 @@ def main(
     tune=False, 
     uncertainty=False, 
     filtered_data_path="",
+    random_key=420
     ):
     
     test_split_size = 0.2
@@ -168,13 +169,15 @@ def main(
 
     # If MDS_UPDRS_III_sum_OFF is present, compute UPDRS_ratio and drop the source columns
     if "MDS_UPDRS_III_sum_OFF" in data_df.columns and "MDS_UPDRS_III_sum_ON" in data_df.columns:
-        data_df["UPDRS_ratio"] = data_df["MDS_UPDRS_III_sum_ON"] / data_df["MDS_UPDRS_III_sum_OFF"]
+        data_df["UPDRS_reduc"] = (data_df["MDS_UPDRS_III_sum_OFF"] - data_df["MDS_UPDRS_III_sum_ON"]) / data_df["MDS_UPDRS_III_sum_OFF"]
         columns_to_drop += ["MDS_UPDRS_III_sum_ON", "MDS_UPDRS_III_sum_OFF"]
+        data_df = data_df[data_df["UPDRS_reduc"] >= 0]
+
 
     data_df['AGE_AT_DIAG'] = data_df["AGE_AT_OP"] - data_df['TimeSinceDiag']
     
 
-    data_df = data_df[data_df['SEX'] == 'M'] 
+    #data_df = data_df[data_df['SEX'] == 'M'] 
 
     columns_to_drop += ['TimeSinceDiag']
 
@@ -278,7 +281,7 @@ def main(
     #Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
     #safe_path = os.path.join(folder_path, "test/test_diabetes/NGBoost")
     ### test ende
-    Feature_Selection['features']# += ['SEX']
+    Feature_Selection['features'] += ['SEX']
 
     # --- SETUP LOGGING ---
     os.makedirs(safe_path, exist_ok=True)
@@ -308,11 +311,11 @@ def main(
     param_grid_ngb = {
     #'Dist': [NormalInverseGamma],
     #'Score' : [NIGLogScore],
-    'n_estimators': [200, 300, 400, 500],
-    'learning_rate': [0.01, 0.1,  0.05],
+    'n_estimators': [200, 300, 400, 500, 600],
+    'learning_rate': [0.01, 0.1,  0.05,],
     'Base__max_depth': [ 5, 6, 7, 8],
-    'Score__evid_strength': [0.1, 0.05, 0.15],
-    'Score__kl_strength': [0.01, 0.05],
+    'Score__evid_strength': [0.1, 0.05,],
+    'Score__kl_strength': [0.01, 0.05, 0.001],
     }
 
     
@@ -326,7 +329,7 @@ def main(
         'natural_gradient': True,
         #'Score_kwargs': {'evid_strength': 0.1, 'kl_strength': 0.01},
         'verbose': False,
-        'Base': DecisionTreeRegressor(max_depth=3)  # specify the depth here
+        'Base': DecisionTreeRegressor(max_depth=3), 
     }
 
     model = NGBoostRegressionModel(
@@ -341,20 +344,21 @@ def main(
         param_grid=param_grid_ngb,
         standardize="zscore",
         logging=logging,
-        split_shaps=True)
+        split_shaps=True,
+        random_key=random_key)
 
-    metrics = model.evaluate(
-        folds=folds, 
-        tune=tune, 
-        nested=True, 
-        tune_folds=tune_folds, 
-        get_shap=True,
-        uncertainty=uncertainty)
+    #metrics = model.evaluate(
+    #    folds=folds, 
+    #    tune=tune, 
+    #    nested=True, 
+    #    tune_folds=tune_folds, 
+    #    get_shap=True,
+    #    uncertainty=uncertainty)
     
     # Log the metrics
-    logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
-    logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
-    model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
+    #logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
+    #logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
+    #model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
 
     #### Farzin was here too, sorry :D
     
@@ -362,25 +366,39 @@ def main(
 
     #top_feats, explained = select_top_shap_features(shap_vals, Feature_Selection['features'], threshold=0.95)
     ######
-    #_,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds)
+    _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds)
     model.calibration_analysis()
     
         
 
 if __name__ == "__main__":
 
-    #folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
+    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
 
     main(
         folder_path, 
-        "data/BDI/level2/bdi_demo.csv",   
+        "data/BDI/level2/bdi_stim.csv",   
         "diff", 
         "BDI", 
-        "results/BDI_tune_bigger_6month_demo_MALE/level2/NGBoost", 
+        "results/BDI_tune_bigger_6month_stim/level2/NGBoost", 
         folds=10, 
-        tune_folds=10, 
+        tune_folds=20, 
         detrend=False,
         tune=False,
-        filtered_data_path="filtered_bdi_demo.csv",
+        filtered_data_path="filtered_bdi_stim.csv",
         )
+    #for m in members:
+    #    main(
+    #    folder_path, 
+    #    f"data/BDI/level2/bdi_demo/run.csv",   
+    #    "diff", 
+    #    "BDI", 
+    #    f"results/BDI_tune_bigger_6month_demo/level2/NGBoost/run_{m}", 
+    #    folds=10, 
+    #    tune_folds=20, 
+    #    detrend=False,
+    #    tune=True,
+    #    filtered_data_path="filtered_bdi_demo.csv",
+    #    random_key=2025+m
+    #    )

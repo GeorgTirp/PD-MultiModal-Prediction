@@ -41,7 +41,8 @@ class XGBoostRegressionModel(BaseRegressionModel):
             logging = None,
             Pat_IDs= None,
             split_shaps=None,
-            sample_weights=None
+            sample_weights=None,
+            random_key=420
             ):
         
         super().__init__(
@@ -54,12 +55,14 @@ class XGBoostRegressionModel(BaseRegressionModel):
             top_n, 
             logging=logging, 
             Pat_IDs=Pat_IDs,
-            split_shaps=split_shaps)
+            split_shaps=split_shaps,
+            random_key=random_key)
 
         self.xgb_hparams = xgb_hparams
         self.model = XGBRegressor(**self.xgb_hparams)
         self.model_name = "XGBoost Regression"
         self.param_grid = param_grid
+        self.random_key = random_key
         if top_n == -1:
             self.top_n = len(self.feature_selection['features'])
         self.weights = sample_weights
@@ -184,9 +187,9 @@ class XGBoostRegressionModel(BaseRegressionModel):
     
         # pick our CV splitter
         if groups is None:
-            cv = KFold(n_splits=folds, shuffle=True, random_state=42)
+            cv = KFold(n_splits=folds, shuffle=True, random_state=self.random_key)
         else:
-            cv = GroupKFold(n_splits=folds)
+            cv = GroupKFold(n_splits=folds, random_state=self.random_key)
     
         grid_search = GridSearchCV(
             estimator=self.model,

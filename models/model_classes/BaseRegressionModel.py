@@ -63,7 +63,8 @@ class BaseRegressionModel:
             logging = None,
             standardize: str = "",
             Pat_IDs = None,
-            split_shaps=False) -> None:
+            split_shaps=False,
+            random_key=420) -> None:
         """
         Initialize the regression model framework with dataset, feature selection, and settings.
 
@@ -81,8 +82,9 @@ class BaseRegressionModel:
         self.logging.info("Initializing BaseRegressionModel class...")
         self.feature_selection = feature_selection
         self.top_n = top_n
+        self.random_key = random_key
         self.X, self.y, self.z, self.m, self.std = self.model_specific_preprocess(data_df)
-        self.train_split = train_test_split(self.X, self.y, test_size=test_split_size, random_state=42)
+        self.train_split = train_test_split(self.X, self.y, test_size=test_split_size, random_state=self.random_key)
         self.save_path = save_path
         self.identifier = identifier
         self.metrics = None
@@ -90,6 +92,7 @@ class BaseRegressionModel:
         self.target_name = target_name
         self.Pat_IDs = Pat_IDs
         self.split_shaps = split_shaps
+        
         if standardize == "zscore":
             self.scaler = ZScoreScaler()
         elif standardize == "tanh":
@@ -186,7 +189,7 @@ class BaseRegressionModel:
         if folds == -1:
             kf = LeaveOneOut()
         else:
-            kf = KFold(n_splits=folds, shuffle=True, random_state=42)
+            kf = KFold(n_splits=folds, shuffle=True, random_state=self.random_key)
 
         preds = []
         epistemics = []

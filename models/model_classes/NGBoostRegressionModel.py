@@ -59,7 +59,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
             logging = None,
             standardize=False,
             split_shaps=False,
-            Pat_IDs=None):
+            Pat_IDs=None,
+            random_key=420):
         
         super().__init__(
             data_df, 
@@ -72,7 +73,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
             logging=logging, 
             standardize=standardize,
             split_shaps=split_shaps,
-            Pat_IDs=Pat_IDs)
+            Pat_IDs=Pat_IDs,
+            random_key=random_key)
 
         # Set default hyperparameters if not provided
         if ngb_hparams is None:
@@ -87,6 +89,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
         self.model_name = "NGBoost"
         self.prob_func = ngb_hparams["Dist"]
         self.param_grid = param_grid
+        self.random_key = random_key
         if top_n == -1:
             self.top_n = len(self.feature_selection['features'])
 
@@ -193,7 +196,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
     
         # choose splitter
         if groups is None:
-            cv = KFold(n_splits=folds, shuffle=True, random_state=42)
+            cv = KFold(n_splits=folds, shuffle=True, random_state=self.random_key)
         else:
             cv = GroupKFold(n_splits=folds)
     

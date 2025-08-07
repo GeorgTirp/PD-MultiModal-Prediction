@@ -164,10 +164,16 @@ def main(
 
     # If MDS_UPDRS_III_sum_OFF is present, compute UPDRS_ratio and drop the source columns
     if "MDS_UPDRS_III_sum_OFF" in data_df.columns and "MDS_UPDRS_III_sum_ON" in data_df.columns:
-        data_df["UPDRS_ratio"] = data_df["MDS_UPDRS_III_sum_ON"] / data_df["MDS_UPDRS_III_sum_OFF"]
+        data_df["UPDRS_reduc"] = (data_df["MDS_UPDRS_III_sum_OFF"] - data_df["MDS_UPDRS_III_sum_ON"]) / data_df["MDS_UPDRS_III_sum_OFF"]
         columns_to_drop += ["MDS_UPDRS_III_sum_ON", "MDS_UPDRS_III_sum_OFF"]
+        data_df = data_df[data_df["UPDRS_reduc"] >= 0]
+
 
     data_df['AGE_AT_DIAG'] = data_df["AGE_AT_OP"] - data_df['TimeSinceDiag']
+    
+
+    #data_df = data_df[data_df['SEX'] == 'M'] 
+
     columns_to_drop += ['TimeSinceDiag']
     if target_col == "BDI_avg_slope":
         # Compute avg_slope as the slope of the linear regression between pre and post values
