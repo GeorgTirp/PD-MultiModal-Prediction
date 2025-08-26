@@ -127,61 +127,72 @@ def select_top_shap_features(shap_values: np.ndarray, feature_names: list, thres
     return selected_features, explained_ratio
 
 def main(
-    folder_path, 
-    data_path, 
-    target, 
-    identifier, 
-    out, 
+    folder_path=None, 
+    data_path=None, 
+    ignore_cols=None, 
+    target_col=None, 
+    out=None, 
     folds=10, 
     tune_folds=5, 
-    detrend=True, 
     tune=False, 
+    drop_iqr_outliers=False,
     uncertainty=False, 
     filtered_data_path="",
     ):
     
+    safe_path = os.path.join(folder_path, out)
+
+    # --- SETUP LOGGING ---
+    os.makedirs(safe_path, exist_ok=True)
+    os.makedirs(os.path.join(safe_path, 'log'), exist_ok=True)
+    log_obj = Logging(f'{safe_path}/log')  # keep the object
+    logging = log_obj.get_logger()          # get the logger
+
+    # --- Print all selected parameters ---
+    logging.info('-------------------------------------------')
+    logging.info(f"Folder Path: {folder_path}")
+    logging.info(f"Data Path: {data_path}")
+    logging.info(f"Target: {target_col}")
+    logging.info(f"Output Path: {out}")
+    logging.info(f"Folds: {folds}")
+    logging.info(f"tune_folds: {tune_folds}")
+    logging.info(f"drop_iqr_outliers: {drop_iqr_outliers}")
+    logging.info(f"uncertainty: {uncertainty}")
+    logging.info(f"filtered_data_path: {filtered_data_path}")
+    logging.info(f"ignore_cols: {ignore_cols}")
+    logging.info('-------------------------------------------\n')
+
     test_split_size = 0.2
     Feature_Selection = {}
-    target_col = identifier + "_" + target
-    possible_targets = ["ratio", "diff", "avg_slope"] 
-    ignored_targets = [t for t in possible_targets if t != target]
-    ignored_target_cols = [identifier + "_" + t for t in ignored_targets]
-    data_df = pd.read_csv(folder_path + data_path)
 
-    if detrend:
-        trend = data_df["TimeSinceSurgery"] * 1
-        data_df[identifier + "_diff"] = data_df[identifier + "_diff"] + trend
-        data_df[identifier +"_ratio"] = (data_df[identifier +"_diff"] / (data_df[identifier +"_sum_pre"]* 2 + data_df[identifier +"_diff"]))
-        columns_to_drop = ["TimeSinceSurgery"] + [col for col in ignored_target_cols if col in data_df.columns] 
-    else:
-        columns_to_drop = [col for col in ignored_target_cols if col in data_df.columns] 
+    data_df = pd.read_csv(os.path.join(folder_path,data_path))
+
+    columns_to_drop = [] 
 
     if "Pat_ID" in data_df.columns:
         columns_to_drop.append("Pat_ID")
     # Restrict FUs between 1-3 years
-    #data_df = data_df[(data_df["TimeSinceSurgery"] >= 1) & (data_df["TimeSinceSurgery"] <= 3)]
+    logging.info(f"Dropping {(data_df["TimeSinceSurgery"] < 0.6).sum()} patients with TimeSinceSurgery less than 6 months")
     data_df = data_df[(data_df["TimeSinceSurgery"] >= 0.6)]
 
     # If MDS_UPDRS_III_sum_OFF is present, compute UPDRS_ratio and drop the source columns
     if "MDS_UPDRS_III_sum_OFF" in data_df.columns and "MDS_UPDRS_III_sum_ON" in data_df.columns:
-        data_df["UPDRS_reduc"] = (data_df["MDS_UPDRS_III_sum_OFF"] - data_df["MDS_UPDRS_III_sum_ON"]) / data_df["MDS_UPDRS_III_sum_OFF"]
-        columns_to_drop += ["MDS_UPDRS_III_sum_ON", "MDS_UPDRS_III_sum_OFF"]
-        data_df = data_df[data_df["UPDRS_reduc"] >= 0]
+        data_df["UPDRS_reduc_pre"] = (data_df["MDS_UPDRS_III_sum_OFF"] - data_df["MDS_UPDRS_III_sum_ON"]) / data_df["MDS_UPDRS_III_sum_OFF"]
+        #columns_to_drop += ["MDS_UPDRS_III_sum_ON", "MDS_UPDRS_III_sum_OFF"]
+        columns_to_drop += ["MDS_UPDRS_III_sum_ON"]
+        logging.info(f"Patients with negative UPDRS_reduc_pre: {(data_df["UPDRS_reduc_pre"] < 0).sum()}")
+        data_df = data_df[data_df["UPDRS_reduc_pre"] >= 0]
 
-
-    data_df['AGE_AT_DIAG'] = data_df["AGE_AT_OP"] - data_df['TimeSinceDiag']
+    #data_df['AGE_AT_DIAG'] = data_df["AGE_AT_OP"] - data_df['TimeSinceDiag']
+    #columns_to_drop += ['TimeSinceDiag']
     
+    if 'X_L' in data_df.columns:
+        # Left locations in our dataframe is negated! otherwise sweetspot is [-12.08, -13.94,-6.74]
+        data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [12.08, -13.94,-6.74])
+        data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [11.90, -13.28, -6.74])
+        columns_to_drop += ['X_L', 'Y_L', 'Z_L', 'X_R', 'Y_R', 'Z_R']
 
-    #data_df = data_df[data_df['SEX'] == 'M'] 
-
-    columns_to_drop += ['TimeSinceDiag']
-    if target_col == "BDI_avg_slope":
-        # Compute avg_slope as the slope of the linear regression between pre and post values
-        columns_to_drop += ["TimeSinceSurgery"]
-    # Left locations in our dataframe is negated! otherwise sweetspot is [-12.08, -13.94,-6.74]
-    # data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [12.08, -13.94,-6.74])
-    # data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [11.90, -13.28, -6.74])
-    # columns_to_drop += ['X_L', 'Y_L', 'Z_L', 'X_R', 'Y_R', 'Z_R']
+    columns_to_drop += [col for col in ignore_cols if col in data_df.columns]
 
     data_df = data_df.drop(columns=columns_to_drop)
 
@@ -189,68 +200,48 @@ def main(
     Feature_Selection['target'] = target_col
     Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target'] and col != 'SEX' and col != 'OP_DATUM']
 
-    if target_col == "BDI_avg_slope":
-        iterator = data_df.columns.tolist()
-    else:
-        iterator = Feature_Selection['features']
+    if drop_iqr_outliers:
+        num_feats = data_df[Feature_Selection['features']].select_dtypes(include='number').columns.tolist()
 
-    num_feats = data_df[iterator] \
-                .select_dtypes(include='number') \
-                .columns.tolist()
+        # 2) Compute IQR on just the numeric columns
+        Q1  = data_df[num_feats].quantile(0.25)
+        Q3  = data_df[num_feats].quantile(0.75)
+        IQR = Q3 - Q1
 
-    # 2) Compute IQR on just the numeric columns
-    Q1  = data_df[num_feats].quantile(0.25)
-    Q3  = data_df[num_feats].quantile(0.75)
-    IQR = Q3 - Q1
-
-    # 3) Define outlier mask
-    if target_col == "BDI_avg_slope":
-        # here we're checking *all* numeric cols for slope outliers
-        is_outlier = (data_df[num_feats] < (Q1 - 3 * IQR)) | \
-                     (data_df[num_feats] > (Q3 + 3 * IQR))
-    else:
         # same logic, but you could customize which subset to use
         is_outlier = (data_df[num_feats] < (Q1 - 3 * IQR)) | \
-                     (data_df[num_feats] > (Q3 + 3 * IQR))
+                        (data_df[num_feats] > (Q3 + 3 * IQR))
         # Count and print number of outliers per feature
-    outlier_counts_iqr = is_outlier.sum()
-    print("IQR Outliers per feature:\n", outlier_counts_iqr)
+        outlier_counts_iqr = is_outlier.sum()
+        logging.info("IQR Outliers per feature:\n", outlier_counts_iqr)
 
-    # Print outlier rows grouped by feature
-    print("\nDetailed outlier rows by feature:")
-    
-    for col in num_feats:
-        outlier_rows = data_df[is_outlier[col]]
-        if not outlier_rows.empty:
-            print(f"\n--- Outliers in feature: {col} (n={len(outlier_rows)}) ---")
-            print(outlier_rows[[col]])
+        # Print outlier rows grouped by feature
+        logging.info("\nDetailed outlier rows by feature:")
+        
+        for col in num_feats:
+            outlier_rows = data_df[is_outlier[col]]
+            if not outlier_rows.empty:
+                logging.info(f"\n--- Outliers in feature: {col} (n={len(outlier_rows)}) ---")
+                logging.info(outlier_rows[[col]])
 
-    # Optionally print full rows for all outlier-containing samples
-    rows_with_any_outlier = data_df[is_outlier.any(axis=1)]
-    print(f"\nTotal rows with at least one outlier: {len(rows_with_any_outlier)}")
+        # Optionally print full rows for all outlier-containing samples
+        rows_with_any_outlier = data_df[is_outlier.any(axis=1)]
+        logging.info(f"\nTotal rows with at least one outlier: {len(rows_with_any_outlier)}")
 
-    # Drop all rows containing any outlier
-    data_df = data_df[~is_outlier.any(axis=1)].reset_index(drop=True)
+        # Drop all rows containing any outlier
+        data_df = data_df[~is_outlier.any(axis=1)].reset_index(drop=True)
 
-    print(f"Remaining rows after outlier removal: {len(data_df)}")
+        logging.info(f"Remaining rows after outlier removal: {len(data_df)}")
 
-    
     # Plot corr matrix of features + target
-    # Combine features and target
-    # cols_to_plot = Feature_Selection['features'] + [Feature_Selection['target']] + ['FU_MOCA'] + ['AGE_AT_FU']
-    # data_df['AGE_AT_FU'] = data_df['AGE_AT_OP'] + data_df['TimeSinceSurgery']
-    # data_df['FU_MOCA'] = data_df['MoCA_sum_pre'] + data_df['MoCA_diff']
-
-    # corr_matrix = data_df[cols_to_plot].corr()
-
-    # # Plot
-    # plt.figure(figsize=(10, 8))
-    # sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', center=0, fmt=".2f", square=True, linewidths=0.5)
-    # plt.title(f'Correlation Matrix: Features and Target N={len(data_df)}', fontsize=14)
-    # plt.xticks(rotation=45, ha='right')
-    # plt.tight_layout()
-    # plt.savefig("features_corr.png", dpi=300, bbox_inches='tight')
-
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(data_df[Feature_Selection['features']+[Feature_Selection['target']]].corr(), 
+                annot=True, cmap='coolwarm', center=0, fmt=".2f", square=True, linewidths=0.5)
+    plt.title(f'Correlation Matrix: Features and Target N={len(data_df)}', fontsize=14)
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.savefig(os.path.join(out,"all_features_corr.png"), dpi=300, bbox_inches='tight')
+    plt.close('all')
 
     # Let's perform VUF analysis
     vif_results = calculate_vif(data_df[Feature_Selection['features']], exclude_cols=[])
@@ -262,7 +253,6 @@ def main(
     #model = sm.OLS(data_df[Feature_Selection['target']], X_const).fit()
     #print(model.summary())
 
-    safe_path = os.path.join(folder_path, out)
 
     ### test
     #X, y = load_diabetes(return_X_y=True, as_frame=True)
@@ -277,54 +267,27 @@ def main(
     ### test ende
     Feature_Selection['features'] += ['SEX']
 
-    # --- SETUP LOGGING ---
-    os.makedirs(safe_path, exist_ok=True)
-    os.makedirs(os.path.join(safe_path, 'log'), exist_ok=True)
-    logging = Logging(f'{safe_path}/log').get_logger()
+    # Shuffle target values
+    #data_df[Feature_Selection['target']] = data_df[Feature_Selection['target']].sample(frac=1).values
 
-    # --- Print all selected parameters ---
-    logging.info('-------------------------------------------')
-    logging.info(f"Folder Path: {folder_path}")
-    logging.info(f"Data Path: {data_path}")
-    logging.info(f"Target: {target}")
-    logging.info(f"Identifier: {identifier}")
-    logging.info(f"Output Path: {out}")
-    logging.info(f"Folds: {folds}")
-    logging.info('-------------------------------------------\n')
-
-    
-    if not os.path.exists(safe_path):
-        os.makedirs(safe_path)
     
     if filtered_data_path != "":
         data_dir = os.path.dirname(data_path)
         data_df.to_csv(data_dir + '/' + filtered_data_path)
 
         #op_dates.to_csv(op_dates_path, index=False)
+
+    data_df.to_csv("bdi_data_df.csv")
     data_df = data_df.drop(columns=['OP_DATUM'])
-    # param_grid_xgb = {
-    #     'learning_rate': [0.1, 0.3,],              # aka eta
-    #     'max_depth': [3, 4, 5, 6],
-    #     # 'min_child_weight': 1,
-    #     # 'gamma': 0,
-    #     # 'subsample': 1,
-    #     # 'colsample_bytree': 1,
-    #     #'reg_alpha': [0, 0.1, 0.2],                    # L1 regularization
-    #     #'reg_lambda': [1, 2, 5],                   # L2 regularization
-    #     'n_estimators': [30, 50, 100, 200, 300],                # set during model init, can be tuned
-    #     'random_state': [2025],
-    # }
 
     param_grid_xgb = {
         'learning_rate': [0.3],              # aka eta
-        'max_depth': [4, 5, 6, 7],
-        'min_child_weight': [1, 2, 3],
-        # 'gamma': 0,
-        # 'subsample': 1,
-        # 'colsample_bytree': 1,
-        #'reg_alpha': [0, 0.1, 0.2],                    # L1 regularization
-        #'reg_lambda': [1, 2, 5],                   # L2 regularization
-        'n_estimators': [50, 100, 200, 300, 400],                # set during model init, can be tuned
+        'max_depth': [3, 4, 5, 6],
+        'subsample': [1, 0.9, 0.7],
+        'colsample_bytree': [1, 0.9, 0.7],
+        'reg_alpha': [0, 0.1, 0.2, 0.5],                # L1 regularization
+        'reg_lambda': [1, 2, 5, 10, 20],                   # L2 regularization
+        'n_estimators': [50, 100, 150],                # set during model init, can be tuned
         'random_state': [2025],
     }
 
@@ -332,31 +295,30 @@ def main(
     XGB_Hparams = {
         'objective': 'reg:squarederror',   # or 'reg:absoluteerror', etc., depending on your loss preferences
         'learning_rate': 0.3,              # aka eta
-        'max_depth': 6,
+        'max_depth': 4,
         'min_child_weight': 1,
         'gamma': 0,
         'subsample': 1,
         'colsample_bytree': 1,
         'reg_alpha': 0,                    # L1 regularization
-        'reg_lambda': 1,                   # L2 regularization
+        'reg_lambda': 5,                   # L2 regularization
         'n_estimators': 100,                # set during model init, can be tuned
         'random_state': 2025,
         'enable_categorical': True
     }
  
-
     model = XGBoostRegressionModel(
         data_df, 
         Feature_Selection, 
-        target,
+        target_col,
         XGB_Hparams, 
         test_split_size, 
         safe_path, 
-        identifier,
         -1,
         param_grid_xgb,
         logging=logging,
-        split_shaps=True)
+        split_shaps=True, 
+        random_state=2025)
 
     metrics = model.evaluate(
         folds=folds, 
@@ -365,37 +327,196 @@ def main(
         tune_folds=tune_folds, 
         get_shap=True,
         uncertainty=uncertainty)
-    
-    # Log the metrics
-    logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
-    logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
-    model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
 
-    #### Farzin was here too, sorry :D
-    
-    shap_vals = np.load(f'{model.save_path}/{identifier}_{target}_mean_shap_values.npy')
-
-    top_feats, explained = select_top_shap_features(shap_vals, Feature_Selection['features'], threshold=0.95)
     ######
     _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds)
     #model.calibration_analysis()
     
+    log_obj.close()
         
 
 if __name__ == "__main__":
 
-    #folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
+    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
 
-    main(
-        folder_path, 
-        "data/BDI/level2/bdi_demo.csv",   
-        "diff", 
-        "BDI", 
-        "results/BDI_tune_bigger_6month_demo/level2/XGBoost", 
-        folds=10, 
-        tune_folds=10, 
-        detrend=False,
-        tune=False,
-        filtered_data_path="filtered_bdi_demo.csv",
-        )
+    exp_infos = [
+
+                # {
+                # 'exp_number' : 1,
+                # 'target_col' :"BDI_sum_post", 
+                # 'ignore_cols':[ 
+                #             "BDI_Harmonized_pre", "BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre",
+                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Somatic_post", "BDI_Harmonized_post",
+                #             "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta", 
+                #             "BDI_sum_delta",
+                #             #"BDI_sum_pre",
+                #             #"BDI_sum_post"
+                #             ] ,
+                # },
+                # {
+                # 'exp_number' : 2,
+                # 'target_col' :"BDI_sum_delta", 
+                # 'ignore_cols':[ 
+                #             "BDI_Harmonized_pre", "BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
+                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Somatic_post", "BDI_Harmonized_post",
+                #             "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
+                #             #"BDI_sum_delta",
+                #             "BDI_sum_pre",
+                #             "BDI_sum_post"
+                #             ] ,
+                # },
+                # {
+                # 'exp_number' : 3,
+                # 'target_col' :"BDI_Harmonized_post", 
+                # 'ignore_cols':[ 
+                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
+                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Somatic_post", #"BDI_Harmonized_post",
+                #             "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
+                #             "BDI_sum_delta",
+                #             "BDI_sum_pre",
+                #             "BDI_sum_post"
+                #             ] ,
+                # },
+                # {
+                # 'exp_number' : 4,
+                # 'target_col' :"BDI_Cognitive_post", 
+                # 'ignore_cols':[ 
+                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
+                #             #"BDI_Cognitive_post", 
+                #             "BDI_Affective_post", "BDI_Somatic_post", "BDI_Harmonized_post",
+                #             "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
+                #             "BDI_sum_delta",
+                #             "BDI_sum_pre",
+                #             "BDI_sum_post"
+                #             ] ,
+                # },
+                # {
+                # 'exp_number' : 5,
+                # 'target_col' :"BDI_Affective_post", 
+                # 'ignore_cols':[ 
+                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
+                #             "BDI_Cognitive_post", #"BDI_Affective_post", 
+                #             "BDI_Somatic_post", "BDI_Harmonized_post",
+                #             "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
+                #             "BDI_sum_delta",
+                #             "BDI_sum_pre",
+                #             "BDI_sum_post"
+                #             ] ,
+                # },
+                # {
+                # 'exp_number' : 6,
+                # 'target_col' :"BDI_Somatic_post", 
+                # 'ignore_cols':[ 
+                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
+                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Harmonized_post", #"BDI_Somatic_post", 
+                #             "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
+                #             "BDI_sum_delta",
+                #             "BDI_sum_pre",
+                #             "BDI_sum_post"
+                #             ] ,
+                # },
+                # {
+                # 'exp_number' : 7,
+                # 'target_col' :"BDI_Somatic_delta", 
+                # 'ignore_cols':[ 
+                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
+                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Harmonized_post", "BDI_Somatic_post", 
+                #             "BDI_Cognitive_delta", "BDI_Affective_delta", #"BDI_Somatic_delta",
+                #             "BDI_Harmonized_delta",
+                #             "BDI_sum_delta",
+                #             "BDI_sum_pre",
+                #             "BDI_sum_post"
+                #             ] ,
+                # },
+                # {
+                # 'exp_number' : 8,
+                # 'target_col' :"BDI_Affective_delta", 
+                # 'ignore_cols':[ 
+                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
+                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Harmonized_post", "BDI_Somatic_post", 
+                #             "BDI_Cognitive_delta", #"BDI_Affective_delta", 
+                #             "BDI_Somatic_delta",
+                #             "BDI_Harmonized_delta",
+                #             "BDI_sum_delta",
+                #             "BDI_sum_pre",
+                #             "BDI_sum_post"
+                #             ] ,
+                # },
+                # {
+                # 'exp_number' : 9,
+                # 'target_col' :"BDI_Cognitive_delta", 
+                # 'ignore_cols':[ 
+                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
+                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Harmonized_post", "BDI_Somatic_post", 
+                #             #"BDI_Cognitive_delta", 
+                #             "BDI_Affective_delta", "BDI_Somatic_delta",
+                #             "BDI_Harmonized_delta",
+                #             "BDI_sum_delta",
+                #             "BDI_sum_pre",
+                #             "BDI_sum_post"
+                #             ] ,
+                # },
+                {
+                'exp_number' : 10,
+                'target_col' :"BDI_Cognitive_post", 
+                'ignore_cols':[ 
+                            "BDI_Harmonized_pre",#"BDI_Cognitive_pre", 
+                            "BDI_Affective_pre", "BDI_Somatic_pre", 
+                            #"BDI_Cognitive_post", 
+                            "BDI_Affective_post", "BDI_Somatic_post", "BDI_Harmonized_post",
+                            "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
+                            "BDI_sum_delta",
+                            "BDI_sum_pre",
+                            "BDI_sum_post"
+                            ] ,
+                },
+
+                {
+                'exp_number' : 11,
+                'target_col' :"BDI_Affective_post", 
+                'ignore_cols':[ 
+                            "BDI_Harmonized_pre",#
+                            "BDI_Cognitive_pre", "BDI_Somatic_pre",
+                            #"BDI_Affective_pre",  
+                            "BDI_Cognitive_post", #"BDI_Affective_post", 
+                            "BDI_Somatic_post", "BDI_Harmonized_post",
+                            "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
+                            "BDI_sum_delta",
+                            "BDI_sum_pre",
+                            "BDI_sum_post"
+                            ] ,
+                },
+                {
+                'exp_number' : 12,
+                'target_col' :"BDI_Somatic_post", 
+                'ignore_cols':[ 
+                            "BDI_Harmonized_pre", "BDI_Cognitive_pre", "BDI_Affective_pre", 
+                            #"BDI_Somatic_pre", 
+                            "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Harmonized_post", #"BDI_Somatic_post", 
+                            "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
+                            "BDI_sum_delta",
+                            "BDI_sum_pre",
+                            "BDI_sum_post"
+                            ] ,
+                },
+
+
+    ]
+    for exp_info in exp_infos:
+
+        exp_number = exp_info['exp_number']
+        target_col= exp_info['target_col']
+        ignore_cols = exp_info['ignore_cols']
+
+        main(folder_path=folder_path, 
+            data_path="data/BDI/level2/bdi_stim.csv", 
+            ignore_cols=ignore_cols, 
+            target_col=target_col, 
+            out=f"results/{exp_number}_{target_col}_stim/level2/XGBoost", 
+            folds=10, 
+            tune_folds=5, 
+            tune=True, 
+            drop_iqr_outliers=True,
+            uncertainty=False, 
+            filtered_data_path="filtered_bdi_demo.csv")

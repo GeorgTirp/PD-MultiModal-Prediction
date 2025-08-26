@@ -35,14 +35,13 @@ class XGBoostRegressionModel(BaseRegressionModel):
             xgb_hparams: dict, 
             test_split_size: float = 0.2,
             save_path: str = None,
-            identifier: str = None,
             top_n: int = -1,
             param_grid: dict = None,
             logging = None,
             Pat_IDs= None,
             split_shaps=None,
             sample_weights=None,
-            random_key=420
+            random_state=420
             ):
         
         super().__init__(
@@ -51,18 +50,17 @@ class XGBoostRegressionModel(BaseRegressionModel):
             target_name, 
             test_split_size, 
             save_path, 
-            identifier, 
             top_n, 
             logging=logging, 
             Pat_IDs=Pat_IDs,
             split_shaps=split_shaps,
-            random_key=random_key)
+            random_state=random_state)
 
         self.xgb_hparams = xgb_hparams
         self.model = XGBRegressor(**self.xgb_hparams)
         self.model_name = "XGBoost Regression"
         self.param_grid = param_grid
-        self.random_key = random_key
+        self.random_state = random_state
         if top_n == -1:
             self.top_n = len(self.feature_selection['features'])
         self.weights = sample_weights
@@ -136,27 +134,27 @@ class XGBoostRegressionModel(BaseRegressionModel):
         explainer = shap.TreeExplainer(self.model)
         shap_values = explainer.shap_values(X, check_additivity=True)
         shap.summary_plot(shap_values, features=X, feature_names=X.columns, show=False, max_display=self.top_n)
-        plt.title(f'{self.identifier} NGBoost Mean SHAP Summary Plot (Aggregated)', fontsize=16)
+        plt.title(f'{self.target_name} {self.model_name} Mean SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
             if iter_idx is not None:
                 save_path = self.save_path + "/singleSHAPs"
                 os.makedirs(save_path, exist_ok=True)
                 if validation:
-                    plt.savefig(f'{save_path}/{self.identifier}_mean_shap_aggregated_beeswarm_{iter_idx}_test.png')
+                    plt.savefig(f'{save_path}/{self.target_name}_mean_shap_aggregated_beeswarm_test_{iter_idx}.png')
                 else:
-                    plt.savefig(f'{save_path}/{self.identifier}_mean_shap_aggregated_beeswarm_train{iter_idx}.png')
+                    plt.savefig(f'{save_path}/{self.target_name}_mean_shap_aggregated_beeswarm_train_{iter_idx}.png')
             elif ablation_idx is not None:
                 save_path = self.save_path + "/ablationSHAPs"
                 if validation:
-                    plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm{ablation_idx}_test.png')
+                    plt.savefig(f'{self.save_path}/{self.target_name}_shap_aggregated_beeswarm_test_{ablation_idx}.png')
                 else:    
-                    plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm{ablation_idx}_train.png')
+                    plt.savefig(f'{self.save_path}/{self.target_name}_shap_aggregated_beeswarm_train_{ablation_idx}.png')
             else:
                 if validation:
-                    plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_aggregated_beeswarm_test.png')
+                    plt.savefig(f'{self.save_path}/{self.target_name}_mean_shap_aggregated_beeswarm_test.png')
                 else:
-                    plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_aggregated_beeswarm_train.png')
+                    plt.savefig(f'{self.save_path}/{self.target_name}_mean_shap_aggregated_beeswarm_train.png')
             plt.close()
         return shap_values
     
@@ -187,9 +185,9 @@ class XGBoostRegressionModel(BaseRegressionModel):
     
         # pick our CV splitter
         if groups is None:
-            cv = KFold(n_splits=folds, shuffle=True, random_state=self.random_key)
+            cv = KFold(n_splits=folds, shuffle=True, random_state=self.random_state)
         else:
-            cv = GroupKFold(n_splits=folds, random_state=self.random_key)
+            cv = GroupKFold(n_splits=folds, random_state=self.random_state)
     
         grid_search = GridSearchCV(
             estimator=self.model,
