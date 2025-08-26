@@ -28,16 +28,16 @@ import scipy.stats as st
 from properscoring import crps_ensemble
 
 # Hyperparameter Tuning with Ray
-from ray import tune
-from ray.tune.search.hyperopt import HyperOptSearch
-from ray.tune.search.bayesopt import BayesOptSearch
-from ray.tune.search.optuna import OptunaSearch
-from ray.tune.search.basic_variant import BasicVariantGenerator
-from ray.tune.schedulers import ASHAScheduler
-from hyperopt import hp
+# from ray import tune
+# from ray.tune.search.hyperopt import HyperOptSearch
+# from ray.tune.search.bayesopt import BayesOptSearch
+# from ray.tune.search.optuna import OptunaSearch
+# from ray.tune.search.basic_variant import BasicVariantGenerator
+# from ray.tune.schedulers import ASHAScheduler
+# from hyperopt import hp
 
 # Custom Base Model
-from model_classes.BaseRegressionModel import BaseRegressionModel
+from model_classes.BaseRegressionModel_Farzin import BaseRegressionModel
 
 
 class NGBoostRegressionModel(BaseRegressionModel):
@@ -53,14 +53,14 @@ class NGBoostRegressionModel(BaseRegressionModel):
             ngb_hparams: dict = None, 
             test_split_size: float = 0.2,
             save_path: str = None,
-            identifier: str = None,
+            #identifier: str = None,
             top_n: int = -1,
             param_grid: dict = None,
             logging = None,
             standardize=False,
             split_shaps=False,
             Pat_IDs=None,
-            random_key=420):
+            random_state=420):
         
         super().__init__(
             data_df, 
@@ -68,13 +68,13 @@ class NGBoostRegressionModel(BaseRegressionModel):
             target_name, 
             test_split_size, 
             save_path, 
-            identifier, 
+            #identifier, 
             top_n, 
             logging=logging, 
             standardize=standardize,
             split_shaps=split_shaps,
             Pat_IDs=Pat_IDs,
-            random_key=random_key)
+            random_state=random_state)
 
         # Set default hyperparameters if not provided
         if ngb_hparams is None:
@@ -89,7 +89,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
         self.model_name = "NGBoost"
         self.prob_func = ngb_hparams["Dist"]
         self.param_grid = param_grid
-        self.random_key = random_key
+        self.random_state = random_state
         if top_n == -1:
             self.top_n = len(self.feature_selection['features'])
 
@@ -196,7 +196,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
     
         # choose splitter
         if groups is None:
-            cv = KFold(n_splits=folds, shuffle=True, random_state=self.random_key)
+            cv = KFold(n_splits=folds, shuffle=True, random_state=self.random_state)
         else:
             cv = GroupKFold(n_splits=folds)
     
@@ -405,20 +405,20 @@ class NGBoostRegressionModel(BaseRegressionModel):
         shap_values = explainer.shap_values(X, check_additivity=True)
 
         shap.summary_plot(shap_values, features=X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-        plt.title(f'{self.identifier} NGBoost Mean SHAP Summary Plot (Aggregated)', fontsize=16)
+        plt.title(f'NGBoost Mean SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
             if iter_idx is not None:
                 save_path = self.save_path + "/singleSHAPs"
                 os.makedirs(save_path, exist_ok=True)
-                plt.savefig(f'{save_path}/{self.identifier}_mean_shap_aggregated_beeswarm_{iter_idx}.png')
-                with open(f'{save_path}/{self.identifier}_mean_shap_explanations{iter_idx}.pkl', 'wb') as fp:
+                plt.savefig(f'{save_path}/_mean_shap_aggregated_beeswarm_{iter_idx}.png')
+                with open(f'{save_path}/_mean_shap_explanations{iter_idx}.pkl', 'wb') as fp:
                     pickle.dump(explainer, fp)
             elif ablation_idx is not None:
                 save_path = self.save_path + "/ablationSHAPs"
-                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm{ablation_idx}.png')
+                plt.savefig(f'{self.save_path}/{self.target_name}_shap_aggregated_beeswarm{ablation_idx}.png')
             else:
-                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_aggregated_beeswarm.png')
+                plt.savefig(f'{self.save_path}/{self.target_name}_mean_shap_aggregated_beeswarm.png')
             plt.close()
 
         if self.scaler is not None:
@@ -493,21 +493,21 @@ class NGBoostRegressionModel(BaseRegressionModel):
                + dalea_dalpha[:, None] * sh_alpha)
 
             shap.summary_plot(shap_pred, features=X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-            plt.title(f'{self.identifier} NGBoost Variance SHAP Summary Plot (Aggregated)', fontsize=16)
+            plt.title(f' NGBoost Variance SHAP Summary Plot (Aggregated)', fontsize=16)
             if save_results:
                 plt.subplots_adjust(top=0.90)
                 if iter_idx is not None:
                     save_path = self.save_path + "/singleSHAPs"
                     os.makedirs(save_path, exist_ok=True)
-                    plt.savefig(f'{save_path}/{self.identifier}_ngboost_predicitve_uncertainty_shap_aggregated{iter_idx}.png')
+                    plt.savefig(f'{save_path}/ngboost_predicitve_uncertainty_shap_aggregated{iter_idx}.png')
                     #with open(f'{save_path}/{self.identifier}_ngboost_predicitve_uncertainty_shap_explanations{iter_idx}.pkl', 'wb') as fp:
                     #    pickle.dump((explainer_lam, explainer_alpha, explainer_beta), fp)
                 elif ablation_idx is not None:
                     save_path = self.save_path + "/ablationSHAPs"
                     os.makedirs(save_path, exist_ok=True)
-                    plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_predicitve_uncertainty_shap_aggregated{ablation_idx}.png')
+                    plt.savefig(f'{save_path}/{self.target_name}_predicitve_uncertainty_shap_aggregated{ablation_idx}.png')
                 else:
-                    plt.savefig(f'{self.save_path}/{self.identifier}_predicitve_uncertainty_shap_aggregated.png')
+                    plt.savefig(f'{self.save_path}/predicitve_uncertainty_shap_aggregated.png')
                 plt.close()
 
            
@@ -529,18 +529,18 @@ class NGBoostRegressionModel(BaseRegressionModel):
             explainer = shap.TreeExplainer(self.model, model_output=1)
             shap_values = explainer.shap_values(X, check_additivity=True)
             shap.summary_plot(shap_values, features=X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-            plt.title(f'{self.identifier} NGBoost Variance SHAP Summary Plot (Aggregated)', fontsize=16)
+            plt.title(f'NGBoost Variance SHAP Summary Plot (Aggregated)', fontsize=16)
             if save_results:
                 plt.subplots_adjust(top=0.90)
                 if iter_idx is not None:
                     save_path = self.save_path + "/singleSHAPs"
                     os.makedirs(save_path, exist_ok=True)
-                    plt.savefig(f'{save_path}/{self.identifier}_std_shap_aggregated_beeswarm_{iter_idx}.png')
+                    plt.savefig(f'{save_path}/std_shap_aggregated_beeswarm_{iter_idx}.png')
                 elif ablation_idx is not None:
                     save_path = self.save_path + "/ablationSHAPs"
-                    plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_std_shap_aggregated_beeswarm{ablation_idx}.png')
+                    plt.savefig(f'{self.save_path}/{self.target_name}_std_shap_aggregated_beeswarm{ablation_idx}.png')
                 else:
-                    plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_std_shap_aggregated_beeswarm.png')
+                    plt.savefig(f'{self.save_path}/{self.target_name}_std_shap_aggregated_beeswarm.png')
                 plt.close()
 
             if self.scaler is not None:

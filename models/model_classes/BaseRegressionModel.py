@@ -5,8 +5,8 @@ os.environ["OPENBLAS_NUM_THREADS"] = "1"       # OpenBLAS (used by NumPy)
 os.environ["MKL_NUM_THREADS"] = "1"            # MKL (used by scikit-learn on Intel Macs)
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"     # Apple's Accelerate framework
 os.environ["NUMEXPR_NUM_THREADS"] = "1"  
-import torch
-torch.set_num_threads(1)
+#import torch
+#torch.set_num_threads(1)
 import pandas as pd
 from sklearn.model_selection import train_test_split, KFold, LeaveOneOut
 from sklearn.metrics import mean_squared_error
@@ -58,13 +58,13 @@ class BaseRegressionModel:
             target_name: str,
             test_split_size: float = 0.2,
             save_path: str = None,
-            identifier: str = None,
+            #identifier: str = None,
             top_n: int = 10,
             logging = None,
             standardize: str = "",
             Pat_IDs = None,
             split_shaps=False,
-            random_key=420) -> None:
+            random_state=420) -> None:
         """
         Initialize the regression model framework with dataset, feature selection, and settings.
 
@@ -82,11 +82,11 @@ class BaseRegressionModel:
         self.logging.info("Initializing BaseRegressionModel class...")
         self.feature_selection = feature_selection
         self.top_n = top_n
-        self.random_key = random_key
+        self.random_state = random_state
         self.X, self.y, self.z, self.m, self.std = self.model_specific_preprocess(data_df)
-        self.train_split = train_test_split(self.X, self.y, test_size=test_split_size, random_state=self.random_key)
+        self.train_split = train_test_split(self.X, self.y, test_size=test_split_size, random_state=self.random_state)
         self.save_path = save_path
-        self.identifier = identifier
+        #self.identifier = identifier
         self.metrics = None
         self.model_name = None
         self.target_name = target_name
@@ -189,7 +189,7 @@ class BaseRegressionModel:
         if folds == -1:
             kf = LeaveOneOut()
         else:
-            kf = KFold(n_splits=folds, shuffle=True, random_state=self.random_key)
+            kf = KFold(n_splits=folds, shuffle=True, random_state=self.random_state)
 
         preds = []
         epistemics = []
@@ -246,9 +246,9 @@ class BaseRegressionModel:
             if ablation_idx is not None:
                 save_path = f'{self.save_path}/ablation/'
                 os.makedirs(save_path, exist_ok=True)
-                save_path = f'{save_path}{self.identifier}_{self.target_name}_{ablation_idx}'
+                save_path = f'{save_path}_{self.target_name}_{ablation_idx}'
             else:
-                save_path = f'{self.save_path}/{self.identifier}_{self.target_name}'
+                save_path = f'{self.save_path}/{self.target_name}'
 
             if isinstance(self, NGBoostRegressionModel):
                 all_shap_mean_array = np.stack(all_shap_mean, axis=0)
@@ -261,22 +261,22 @@ class BaseRegressionModel:
                 np.save(f'{save_path}_all_shap_values(variance).npy', all_shap_variance_array)
 
                 shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-                plt.title(f'{self.identifier} Summary Plot (Aggregated - Mean)', fontsize=16)
+                plt.title(f'{self.target_name} Summary Plot (Aggregated - Mean)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
                 plt.savefig(f'{save_path}_mean_shap_aggregated.png')
                 plt.close()
 
                 shap.summary_plot(variance_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-                plt.title(f'{self.identifier} Summary Plot (Aggregated - Variance)', fontsize=16)
+                plt.title(f'{self.target_name} Summary Plot (Aggregated - Variance)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
                 plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated.png')
                 plt.close()
             else:
                 all_shap_mean_array = np.stack(all_shap_values, axis=0)
                 mean_shap_values = np.mean(all_shap_mean_array, axis=0)
-                np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values.npy', mean_shap_values)
+                np.save(f'{self.save_path}/{self.target_name}_mean_shap_values.npy', mean_shap_values)
                 shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-                plt.title(f'{self.identifier} Summary Plot (Aggregated)', fontsize=16)
+                plt.title(f'{self.target_name} Summary Plot (Aggregated)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
                 plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png')
                 with open(f'{save_path}_shap_explanations.pkl', 'wb') as fp:
@@ -302,9 +302,9 @@ class BaseRegressionModel:
 
         self.metrics = metrics
         metrics_df = pd.DataFrame([metrics])
-        metrics_df.to_csv(f'{self.save_path}/{self.identifier}_metrics.csv', index=False)
+        metrics_df.to_csv(f'{self.save_path}/{self.target_name}_metrics.csv', index=False)
 
-        model_save_path = f'{self.save_path}/{self.identifier}_{ablation_idx}_trained_model.pkl' if ablation_idx is not None else f'{self.save_path}/{self.identifier}_trained_model.pkl'
+        model_save_path = f'{self.save_path}/{self.target_name}_{ablation_idx}_trained_model.pkl' if ablation_idx is not None else f'{self.save_path}/{self.target_name}_trained_model.pkl'
         with open(model_save_path, 'wb') as model_file:
             pickle.dump(self.model, model_file)
         self.logging.info("Finished model evaluation.")
@@ -368,6 +368,9 @@ class BaseRegressionModel:
         all_shap_variance = []
         all_shap_train = []
         all_shap_test = []
+        all_test_shap_mean = []
+        all_test_shap_variance = []
+        X_vals = []
         iter_idx = 0
         # Farzin was here
         #cv_r_values = []
@@ -416,13 +419,14 @@ class BaseRegressionModel:
                 pred = self.scaler.inverse_transform(pred)
                 y_val_kf = self.scaler.inverse_transform(y_val_kf)
             
+            test_std = pred.std()
             #r, _ = pearsonr(y_val_kf, pred)
             #cv_r_values.append(r)
             preds.append(pred)
             preds_train.append(pred_train)
             y_vals.append(y_val_kf)
             y_trains.append(y_train_kf)
-
+            X_vals.append(X_val_kf)
             if hasattr(self, 'weights'):
                 mse = mean_squared_error(y_val_kf, pred, sample_weight=w_test)
                 train_mse = mean_squared_error(y_train_kf, pred_train, sample_weight=w_train)
@@ -451,6 +455,31 @@ class BaseRegressionModel:
                     if ablation_idx is not None:
                         val_index = None
                     if self.model_name == "NGBoost":
+                        if self.split_shaps:
+                            test_shap_mean = self.feature_importance_mean(
+                                X_val_kf,
+                                top_n=-1, 
+                                save_results=True,  
+                                iter_idx=iter_idx)
+                            #test_shap_mean /= test_std
+                            if self.prob_func == NormalInverseGamma:
+                                test_shap_variance, _, _ = self.feature_importance_variance(
+                                    X_val_kf,
+                                    mode="nig",
+                                    top_n=-1, 
+                                    save_results=True, 
+                                    iter_idx=iter_idx)
+                                #test_shap_variance /= test_std
+                            elif self.prob_func == Normal:
+                                test_shap_variance = self.feature_importance_variance(
+                                    X_val_kf,
+                                    mode="normal",
+                                    top_n=-1, 
+                                    save_results=True, 
+                                    iter_idx=iter_idx)
+                                #test_shap_variance /= test_std
+                            all_test_shap_mean.append(test_shap_mean)
+                            all_test_shap_variance.append(test_shap_variance)
                         shap_values_mean = self.feature_importance_mean(
                             self.X,
                             top_n=-1, 
@@ -481,7 +510,7 @@ class BaseRegressionModel:
                                 iter_idx=iter_idx,
                                 validation=True
                                 )
-                            
+                            #shap_values_test /= test_std
                             all_shap_test.append(shap_values_test)
                     
                         shap_values = self.feature_importance(
@@ -503,6 +532,7 @@ class BaseRegressionModel:
         preds_train = np.concatenate(preds_train)
         y_vals = np.concatenate(y_vals)
         y_trains = np.concatenate(y_trains)
+        X_vals = np.concatenate(X_vals)
         r, p = pearsonr(y_vals, preds)
         f_squared = (r**2) / (1 - r**2)
         mse = mean_squared_error(y_vals, preds)
@@ -515,13 +545,40 @@ class BaseRegressionModel:
         if ablation_idx is not None:
             save_path = f'{self.save_path}/ablation/ablation_step[{ablation_idx}]/'
             os.makedirs(save_path, exist_ok=True)
-            save_path = f'{save_path}{self.identifier}_{self.target_name}'
+            save_path = f'{save_path}_{self.target_name}'
         else:
-            save_path = f'{self.save_path}/{self.identifier}_{self.target_name}'
+            save_path = f'{self.save_path}/{self.target_name}'
 
         
         if get_shap:
             if self.model_name == "NGBoost":
+                if self.split_shaps:
+                    all_test_shap_mean_array = np.concatenate(all_test_shap_mean, axis=0)
+                    all_test_shap_variance_array = np.concatenate(all_test_shap_variance, axis=0)
+                    # Average over the folds to get an aggregated array of shape (n_samples, n_features)
+                    mean_shap_values = all_test_shap_mean_array
+                    variance_shap_values = all_test_shap_variance_array
+                    # Save SHAP values to a file
+                    np.save(f'{save_path}_mean_shap_values_test.npy', mean_shap_values)
+                    np.save(f'{save_path}_predicitve_uncertainty_shap_values_test.npy', variance_shap_values)
+                    np.save(f'{save_path}_all_shap_values(variance)_test.npy', all_test_shap_variance_array)
+
+                    # Plot for mean SHAP values
+                    shap.summary_plot(mean_shap_values, features=X_vals, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                    plt.title(f'{self.target_name} Summary Plot (Aggregated - Mean)', fontsize=16)
+                    plt.subplots_adjust(top=0.90)
+                    plt.savefig(f'{save_path}_mean_shap_aggregated_test.png')
+                    plt.close()
+
+                    shap.summary_plot(variance_shap_values, features=X_vals, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                    plt.title(f'{self.target_name} Summary Plot (Aggregated - Variance)', fontsize=16)
+                    plt.subplots_adjust(top=0.90)
+                    if self.prob_func == NormalInverseGamma:
+                        plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated_test.png')
+                    elif self.prob_func == Normal:
+                        plt.savefig(f'{save_path}_std_shap_aggregated_test.png')
+                    plt.close()
+                    
                 all_shap_mean_array = np.stack(all_shap_mean, axis=0)
                 all_shap_variance_array = np.stack(all_shap_variance, axis=0)
                 # Average over the folds to get an aggregated array of shape (n_samples, n_features)
@@ -535,13 +592,13 @@ class BaseRegressionModel:
         
                 # Plot for mean SHAP values
                 shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-                plt.title(f'{self.identifier} Summary Plot (Aggregated - Mean)', fontsize=16)
+                plt.title(f'{self.target_name} Summary Plot (Aggregated - Mean)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
                 plt.savefig(f'{save_path}_mean_shap_aggregated.png')
                 plt.close()
                 
                 shap.summary_plot(variance_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-                plt.title(f'{self.identifier} Summary Plot (Aggregated - Variance)', fontsize=16)
+                plt.title(f'{self.target_name} Summary Plot (Aggregated - Variance)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
                 if self.prob_func == NormalInverseGamma:
                     plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated.png')
@@ -560,10 +617,10 @@ class BaseRegressionModel:
                     #plt.savefig(f'{save_path}_shap_aggregated_beeswarm_train.png')
                     #plt.close()
 
-                    test_shap_values = np.concatenate(all_shap_test, axis=0)
-                    np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values_test.npy', test_shap_values)
-                    shap.summary_plot(test_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-                    plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
+                    test_shap_mean = np.concatenate(all_shap_test, axis=0)
+                    np.save(f'{self.save_path}/{self.target_name}_mean_shap_values_test.npy', test_shap_mean)
+                    shap.summary_plot(test_shap_mean , features=X_vals, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                    plt.title(f'{self.target_name}  Summary Plot (Aggregated)', fontsize=16)
                     plt.subplots_adjust(top=0.90)
                     plt.savefig(f'{save_path}_shap_aggregated_beeswarm_test.png')
                     plt.close()
@@ -571,9 +628,9 @@ class BaseRegressionModel:
                 all_shap_mean_array = np.stack(all_shap_values, axis=0)
                 # Average over the folds to get an aggregated array of shape (n_samples, n_features)
                 mean_shap_values = np.mean(all_shap_mean_array, axis=0)
-                np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_mean_shap_values.npy', mean_shap_values)
+                np.save(f'{self.save_path}/{self.target_name}_mean_shap_values.npy', mean_shap_values)
                 shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-                plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
+                plt.title(f'{self.target_name}  Summary Plot (Aggregated)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
                 plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png')
                 #with open(f'{save_path}_mean_shap_explanations.pkl', 'wb') as fp:
@@ -585,6 +642,8 @@ class BaseRegressionModel:
             # Compute the mean of the absolute SHAP values for each feature
             feature_importances = np.mean(np.abs(mean_shap_values), axis=0)
             feature_importance_dict = dict(zip(self.X.columns, feature_importances))
+            feature_importances_test = np.mean(np.abs(test_shap_mean), axis=0)
+            feature_importance_test_dict = dict(zip(self.X.columns, feature_importances))
             # Save feature importances to a file
             
 
@@ -599,7 +658,8 @@ class BaseRegressionModel:
         'pred_dist': pred_dists,
         'epistemic': epistemic_uncertainty if uncertainty else None,
         'aleatoric': aleatoric_uncertainty if uncertainty else None,
-        'feature_importance': feature_importances if get_shap else None
+        'feature_importance': feature_importances if get_shap else None,
+        'feature_importance_test': feature_importances_test if get_shap else None
         }
         self.metrics = metrics
         metrics_df = pd.DataFrame([metrics])
@@ -614,7 +674,15 @@ class BaseRegressionModel:
         self.logging.info("Finished model evaluation.")
         return metrics
     
-    def feature_ablation(self, folds: int = -1, get_shap=True, tune=False, tune_folds: int = 10, features_per_step: int = 1, threshold_to_one_fps: int = 10) -> Dict:
+    def feature_ablation(
+        self, 
+        folds: int = -1, 
+        get_shap=True, 
+        tune=False, 
+        tune_folds: int = 10, 
+        features_per_step: int = 1, 
+        threshold_to_one_fps: int = 10,
+        test_set = True) -> Dict:
         """
         Perform iterative feature ablation analysis using nested cross-validation.
 
@@ -624,6 +692,9 @@ class BaseRegressionModel:
         rs = []
         p_values = []
         removals = []
+        test_rmse_list = []
+        train_rmse_list = []
+        
         number_of_features = len(self.feature_selection['features'])
         i = 1
         while number_of_features > 0:
@@ -639,18 +710,25 @@ class BaseRegressionModel:
             save_path = f'{self.save_path}/ablation/'
             metrics = self.nested_eval(folds=folds, get_shap=get_shap, tune=tune, tune_folds=tune_folds, ablation_idx=i)
             metrics_df = pd.DataFrame([metrics])
-            metrics_df.to_csv(f'{save_path}/ablation_step[{i}]/{self.identifier}_{self.target_name}_metrics.csv', index=False)
+            metrics_df.to_csv(f'{save_path}/ablation_step[{i}]/{self.target_name}_metrics.csv', index=False)
 
             # let's save the preditcions for inspection
             self.plot(
-                f"Actual vs. Prediction {self.model_name}- {self.identifier} No. features: {number_of_features}", 
+                f"Actual vs. Prediction {self.model_name}- {self.target_name} No. features: {number_of_features}", 
                 modality='',
                 plot_df= pd.DataFrame({'Actual': metrics_df['y_test'].values[0],'Predicted': metrics_df['y_pred'].values[0]}),
-                save_path_file =f'{save_path}/ablation_step[{i}]/{self.identifier}_{self.target_name}_actual_vs_predicted.png' )
+                save_path_file =f'{save_path}/ablation_step[{i}]/{self.target_name}_actual_vs_predicted.png' )
 
             rs.append(metrics['r'])
             p_values.append(metrics['p_value'])
-            importance = metrics['feature_importance']
+
+            train_rmse_list.append(metrics['train_mse'] ** 0.5)
+            test_rmse_list.append(metrics['mse'] ** 0.5)
+
+            if test_set:
+                importance = metrics['feature_importance_test']
+            else:
+                importance = metrics['feature_importance']
             importance_indices = np.argsort(importance)
 
             # Remove the least important features
@@ -685,18 +763,17 @@ class BaseRegressionModel:
                 # Set Seaborn style, context, and custom palette
         sns.set_theme(style="whitegrid", context="paper")
         sns.set_palette(custom_palette)
-        path = f'{save_path}{self.identifier}_{self.target_name}_feature_ablation.png'
-                # Read in the CSV
-        
+
         # Save the removals list as a CSV file
         removals_df = pd.DataFrame({'Removed_Features': removals})
-        removals_df.to_csv(f'{save_path}{self.identifier}_ablation_history.csv', index=False)
+        removals_df.to_csv(f'{save_path}{self.target_name}_ablation_history.csv', index=False)
+        
         # Create a figure
         plt.figure(figsize=(6, 4))
         x = range(i - 1)
                 # Plot each model's R² scores in a loop, using sample_sizes on the x-axis
         #for model_name, r_scores in results.items():
-        plot_df = pd.DataFrame({'x': x, 'rs': rs})
+        plot_df = pd.DataFrame({'x': x, 'rs': rs, 'train_rmse': train_rmse_list, 'test_rmse': test_rmse_list})
         sns.lineplot(data=plot_df, x='x', y='rs', label="R Score", marker='o')
         # Label the axes and set the title
         plt.xlabel("Number of removed features")
@@ -704,8 +781,21 @@ class BaseRegressionModel:
         plt.title("Pearson-R Scores Over Feature Ablation")
         plt.legend()
         plt.tight_layout()
-        plt.savefig(path, dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path}_{self.target_name}_feature_ablation_R.png', dpi=300, bbox_inches='tight')
         plt.close()
+        
+        # Error plot
+        plt.figure(figsize=(6, 4))
+        sns.lineplot(data=plot_df, x='x', y='test_rmse', label="Test RMSE", marker='o')
+        sns.lineplot(data=plot_df, x='x', y='train_rmse', label="Train RMSE", marker='o')
+        plt.xlabel("Number of removed features")
+        plt.ylabel("Error")
+        plt.title("Test and Train RMSE Over Feature Ablation")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f'{save_path}_{self.target_name}_feature_ablation_errors.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        
         return rs, p_values, removals
             
 
@@ -847,10 +937,10 @@ class BaseRegressionModel:
 
         else:
             # Save and close
-            plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_actual_vs_predicted.png')
+            plt.savefig(f'{self.save_path}/{self.target_name}_actual_vs_predicted.png')
 
         plt.close()
 
         # Log info (optional)
-        self.logging.info("Plot saved to %s/%s_%s_actual_vs_predicted.png", 
-                 self.save_path, self.identifier, self.target_name)
+        self.logging.info("Plot saved to %s/%s_actual_vs_predicted.png", 
+        self.save_path, self.target_name)
