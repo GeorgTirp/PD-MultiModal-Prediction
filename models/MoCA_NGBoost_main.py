@@ -199,7 +199,6 @@ def main(
     logging.info(f"Output Path: {out}")
     logging.info(f"Folds: {folds}")
     logging.info(f"tune_folds: {tune_folds}")
-    logging.info(f"drop_iqr_outliers: {drop_iqr_outliers}")
     logging.info(f"uncertainty: {uncertainty}")
     logging.info(f"filtered_data_path: {filtered_data_path}")
     logging.info(f"feature_cols: {feature_cols}")
