@@ -37,7 +37,7 @@ from properscoring import crps_ensemble
 # from hyperopt import hp
 
 # Custom Base Model
-from model_classes.BaseRegressionModel_Farzin import BaseRegressionModel
+from model_classes.BaseRegressionModel import BaseRegressionModel
 
 
 class NGBoostRegressionModel(BaseRegressionModel):
