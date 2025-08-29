@@ -135,7 +135,6 @@ def main(
     folds=10, 
     tune_folds=5, 
     tune=False, 
-    drop_iqr_outliers=False,
     uncertainty=False, 
     filtered_data_path="",
     ):
@@ -370,6 +369,5 @@ if __name__ == "__main__":
             folds=10, 
             tune_folds=5, 
             tune=True, 
-            drop_iqr_outliers=True,
             uncertainty=False, 
             filtered_data_path="filtered_bdi_demo.csv")

@@ -178,7 +178,6 @@ def main(
     folds=10, 
     tune_folds=5, 
     tune=False, 
-    drop_iqr_outliers=False,
     uncertainty=False, 
     filtered_data_path="",
     ):
@@ -348,11 +347,10 @@ if __name__ == "__main__":
             ignore_cols=ignore_cols, 
             target_col=target_col,
             outlier_cols=outlier_cols, 
-            out=f"results/{exp_number}_{target_col}_stim/level2/XGBoost", 
+            out=f"results/{exp_number}_{target_col}_stim/level2/NGBoost", 
             folds=10, 
             tune_folds=5, 
             tune=False, 
-            drop_iqr_outliers=True,
             uncertainty=False, 
             filtered_data_path="filtered_bdi_demo.csv")
 
