@@ -26,40 +26,56 @@ from typing import List, Tuple
 
 def outlier_removal(
     data_df: pd.DataFrame, 
-    cols: List, 
+    cols: List[str], 
     Q1: float = 0.25, 
     Q3: float = 0.75, 
-    logging = None):
+    logging=None
+) -> pd.DataFrame:
     """
-    Throw outliers in the provided list of cols    
+    Remove outliers from specified columns using the IQR method.
+
+    Parameters:
+        data_df (pd.DataFrame): The full dataset.
+        cols (List[str]): List of columns to check for outliers.
+        Q1 (float): Lower quantile boundary.
+        Q3 (float): Upper quantile boundary.
+        logging: Logger instance.
+
+    Returns:
+        pd.DataFrame: DataFrame with outliers removed.
     """
+    # Compute IQR bounds
+    Q1_vals = data_df[cols].quantile(Q1)
+    Q3_vals = data_df[cols].quantile(Q3)
+    IQR = Q3_vals - Q1_vals
 
-    # 2) Compute IQR on just the numeric columns
-    Q1  = data_df[cols].quantile(Q1)
-    Q3  = data_df[cols].quantile(Q3)
-    IQR = Q3 - Q1
-    # same logic, but you could customize which subset to use
-    is_outlier = (data_df[cols] < (Q1 - 3 * IQR)) | \
-                    (data_df[cols] > (Q3 + 3 * IQR))
-    # Count and print number of outliers per feature
-    outlier_counts_iqr = is_outlier.sum()
-    logging.info("IQR Outliers per feature:\n", outlier_counts_iqr)
-    # Print outlier rows grouped by feature
-    logging.info("\nDetailed outlier rows by feature:")
-    
-    for col in cols:
-        outlier_rows = data_df[is_outlier[col]]
-        if not outlier_rows.empty:
-            logging.info(f"\n--- Outliers in feature: {col} (n={len(outlier_rows)}) ---")
-            logging.info(outlier_rows[[col]])
-    # Optionally print full rows for all outlier-containing samples
-    rows_with_any_outlier = data_df[is_outlier.any(axis=1)]
-    logging.info(f"\nTotal rows with at least one outlier: {len(rows_with_any_outlier)}")
-    # Drop all rows containing any outlier
-    data_df = data_df[~is_outlier.any(axis=1)].reset_index(drop=True)
-    logging.info(f"Remaining rows after outlier removal: {len(data_df)}")
+    # Identify outliers
+    is_outlier = (data_df[cols] < (Q1_vals - 3 * IQR)) | (data_df[cols] > (Q3_vals + 3 * IQR))
 
-    return data_df
+    # Count outliers
+    outlier_counts = is_outlier.sum()
+
+    if logging:
+        logging.info("IQR Outliers per feature:\n" + str(outlier_counts))
+
+        logging.info("\nDetailed outlier rows by feature:")
+        for col in cols:
+            outlier_rows = data_df.loc[is_outlier[col], [col]]
+            if not outlier_rows.empty:
+                logging.info(f"\n--- Outliers in feature: {col} (n={len(outlier_rows)}) ---")
+                logging.info(f"\n{outlier_rows.to_string(index=True)}")
+
+    # Rows with any outlier
+    rows_with_outlier = is_outlier.any(axis=1)
+    n_outliers_total = rows_with_outlier.sum()
+    data_df_clean = data_df.loc[~rows_with_outlier].reset_index(drop=True)
+
+    if logging:
+        logging.info(f"\nTotal rows with at least one outlier: {n_outliers_total}")
+        logging.info(f"Remaining rows after outlier removal: {len(data_df_clean)}")
+
+    return data_df_clean
+
 
 def signed_euclidean_distance(points: np.ndarray, sweetspot: np.ndarray) -> np.ndarray:
     """
@@ -178,7 +194,8 @@ def main(
     out=None, 
     folds=10, 
     tune_folds=5, 
-    tune=False, 
+    tune=False,
+    members=1, 
     uncertainty=False, 
     filtered_data_path="",
     ):
@@ -308,7 +325,7 @@ def main(
 
     ######
     model.plot(f"Actual vs. Prediction (NGBoost)")
-    _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds)
+    _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds, members=members)
     #model.calibration_analysis()
     
     log_obj.close()
@@ -337,12 +354,15 @@ if __name__ == "__main__":
                             #"MoCA_Sprache_sum_post",
                             "MoCA_Aufmerksamkeit_sum_pre",
                             #"MoCA_Aufmerksamkeit_sum_post",
-                            "MoCA_Benennen_sum_pre",
+                            #"MoCA_Benennen_sum_pre",
                             #"MoCA_Benennen_sum_post",
                             "MoCA_Abstraktion_sum_pre",
                             #"MoCA_Abstraktion_sum_post",
                             "MoCA_Orientierung_sum_pre",
                             #"MoCA_Orientierung_sum_post",
+                            "LEDD_reduc",
+                            "L_distance",
+                            "R_distance"
                             ] ,
                 'outlier_cols':[ 
                             "TimeSinceSurgery",
@@ -350,21 +370,24 @@ if __name__ == "__main__":
                             "TimeSinceDiag",
                             #"SEX",
                             "UPDRS_reduc_pre",
-                            #"MoCA_sum_pre",
-                            "MoCA_Executive_sum_pre",
+                            "MoCA_sum_pre",
+                            #"MoCA_Executive_sum_pre",
                             #"MoCA_Executive_sum_post",
-                            "MoCA_Erinnerung_sum_pre",
+                            #"MoCA_Erinnerung_sum_pre",
                             #"MoCA_Erinnerung_sum_post",
-                            "MoCA_Sprache_sum_pre",
+                            #"MoCA_Sprache_sum_pre",
                             #"MoCA_Sprache_sum_post",
-                            "MoCA_Aufmerksamkeit_sum_pre",
+                            #"MoCA_Aufmerksamkeit_sum_pre",
                             #"MoCA_Aufmerksamkeit_sum_post",
                             #"MoCA_Benennen_sum_pre",
                             #"MoCA_Benennen_sum_post",
-                            "MoCA_Abstraktion_sum_pre",
+                            #"MoCA_Abstraktion_sum_pre",
                             #"MoCA_Abstraktion_sum_post",
                             #"MoCA_Orientierung_sum_pre",
                             #"MoCA_Orientierung_sum_post",
+                            "LEDD_reduc",
+                            "L_distance",
+                            "R_distance"
                             ] ,
                 },
     ]
@@ -375,13 +398,14 @@ if __name__ == "__main__":
         feature_cols = exp_info['feature_cols']
         outlier_cols = exp_info['outlier_cols']
         main(folder_path=folder_path, 
-            data_path="data/MoCA/level2/moca_updrs.csv", 
+            data_path="data/MoCA/level2/moca_stim.csv", 
             feature_cols=feature_cols, 
             target_col=target_col, 
             outlier_cols=outlier_cols,
-            out=f"results/{exp_number}_{target_col}_updrs/level2/NGBoost", 
+            out=f"results/{exp_number}_{target_col}_stim/level2/NGBoost", 
             folds=10, 
             tune_folds=5, 
             tune=False, 
+            members=2,
             uncertainty=False, 
-            filtered_data_path="filtered_MoCA_updrs.csv")
+            filtered_data_path="filtered_MoCA_stim.csv")

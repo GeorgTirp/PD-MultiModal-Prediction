@@ -135,6 +135,7 @@ def main(
     folds=10, 
     tune_folds=5, 
     tune=False, 
+    members=1,
     uncertainty=False, 
     filtered_data_path="",
     ):
@@ -327,7 +328,7 @@ def main(
         uncertainty=uncertainty)
 
     ######
-    _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds)
+    _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds, members=members)
     #model.calibration_analysis()
     
     log_obj.close()
@@ -368,5 +369,6 @@ if __name__ == "__main__":
             folds=10, 
             tune_folds=5, 
             tune=True, 
+            members=2,
             uncertainty=False, 
             filtered_data_path="filtered_bdi_demo.csv")
