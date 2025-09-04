@@ -17,43 +17,61 @@ import statsmodels.api as sm
 import seaborn as sns
 import matplotlib.pyplot as plt
 import pandas as pd
+from typing import List, Tuple
+from scipy.stats import zscore
 
 def outlier_removal(
     data_df: pd.DataFrame, 
-    cols: List, 
+    cols: List[str], 
     Q1: float = 0.25, 
     Q3: float = 0.75, 
-    logging = None):
+    logging=None
+) -> pd.DataFrame:
     """
-    Throw outliers in the provided list of cols    
+    Remove outliers from specified columns using the IQR method.
+
+    Parameters:
+        data_df (pd.DataFrame): The full dataset.
+        cols (List[str]): List of columns to check for outliers.
+        Q1 (float): Lower quantile boundary.
+        Q3 (float): Upper quantile boundary.
+        logging: Logger instance.
+
+    Returns:
+        pd.DataFrame: DataFrame with outliers removed.
     """
+    # Compute IQR bounds
+    Q1_vals = data_df[cols].quantile(Q1)
+    Q3_vals = data_df[cols].quantile(Q3)
+    IQR = Q3_vals - Q1_vals
 
-    # 2) Compute IQR on just the numeric columns
-    Q1  = data_df[cols].quantile(Q1)
-    Q3  = data_df[cols].quantile(Q3)
-    IQR = Q3 - Q1
-    # same logic, but you could customize which subset to use
-    is_outlier = (data_df[cols] < (Q1 - 3 * IQR)) | \
-                    (data_df[cols] > (Q3 + 3 * IQR))
-    # Count and print number of outliers per feature
-    outlier_counts_iqr = is_outlier.sum()
-    logging.info("IQR Outliers per feature:\n", outlier_counts_iqr)
-    # Print outlier rows grouped by feature
-    logging.info("\nDetailed outlier rows by feature:")
-    
-    for col in cols:
-        outlier_rows = data_df[is_outlier[col]]
-        if not outlier_rows.empty:
-            logging.info(f"\n--- Outliers in feature: {col} (n={len(outlier_rows)}) ---")
-            logging.info(outlier_rows[[col]])
-    # Optionally print full rows for all outlier-containing samples
-    rows_with_any_outlier = data_df[is_outlier.any(axis=1)]
-    logging.info(f"\nTotal rows with at least one outlier: {len(rows_with_any_outlier)}")
-    # Drop all rows containing any outlier
-    data_df = data_df[~is_outlier.any(axis=1)].reset_index(drop=True)
-    logging.info(f"Remaining rows after outlier removal: {len(data_df)}")
+    # Identify outliers
+    is_outlier = (data_df[cols] < (Q1_vals - 3 * IQR)) | (data_df[cols] > (Q3_vals + 3 * IQR))
 
-    return data_df
+    # Count outliers
+    outlier_counts = is_outlier.sum()
+
+    if logging:
+        logging.info("IQR Outliers per feature:\n" + str(outlier_counts))
+
+        logging.info("\nDetailed outlier rows by feature:")
+        for col in cols:
+            outlier_rows = data_df.loc[is_outlier[col], [col]]
+            if not outlier_rows.empty:
+                logging.info(f"\n--- Outliers in feature: {col} (n={len(outlier_rows)}) ---")
+                logging.info(f"\n{outlier_rows.to_string(index=True)}")
+
+    # Rows with any outlier
+    rows_with_outlier = is_outlier.any(axis=1)
+    n_outliers_total = rows_with_outlier.sum()
+    data_df_clean = data_df.loc[~rows_with_outlier].reset_index(drop=True)
+
+    if logging:
+        logging.info(f"\nTotal rows with at least one outlier: {n_outliers_total}")
+        logging.info(f"Remaining rows after outlier removal: {len(data_df_clean)}")
+
+    return data_df_clean
+
 
 def signed_euclidean_distance(points: np.ndarray, sweetspot: np.ndarray) -> np.ndarray:
     """
@@ -172,8 +190,8 @@ def main(
     out=None, 
     folds=10, 
     tune_folds=5, 
-    tune=False, 
-    drop_iqr_outliers=False,
+    tune=False,
+    members=1, 
     uncertainty=False, 
     filtered_data_path="",
     ):
@@ -194,7 +212,6 @@ def main(
     logging.info(f"Output Path: {out}")
     logging.info(f"Folds: {folds}")
     logging.info(f"tune_folds: {tune_folds}")
-    logging.info(f"drop_iqr_outliers: {drop_iqr_outliers}")
     logging.info(f"uncertainty: {uncertainty}")
     logging.info(f"filtered_data_path: {filtered_data_path}")
     logging.info(f"feature_cols: {feature_cols}")
@@ -222,7 +239,7 @@ def main(
         # Left locations in our dataframe is negated! otherwise sweetspot is [-12.08, -13.94,-6.74]
         data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [12.08, -13.94,-6.74])
         data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [11.90, -13.28, -6.74])
-
+    data_df["MoCA_diff"] = data_df["MoCA_sum_post"] - data_df["MoCA_sum_pre"]
     # Define target and features
     Feature_Selection['target'] = target_col
     Feature_Selection['features'] = feature_cols
@@ -256,13 +273,13 @@ def main(
         #op_dates.to_csv(op_dates_path, index=False)
 
     param_grid_xgb = {
-        'learning_rate': [0.2, 0.3, 0.05],              # aka eta
-        'max_depth': [5, 6, 7, 8],
-        'n_estimators': [100, 200, 300],                # set during model init, can be tuned
-        'random_state': [random_state],
-
-        'min_child_weight': [1, 3],
-        'reg_lambda': [1, 1.5, 2],                   # L2 regularization
+        'learning_rate': [0.1, 0.3],              # aka eta
+        'max_depth': [3, 4, 5, 6, 7],
+        'subsample': [0.7, 0.9, 1],
+        'col_sample': [0.7, 0.9, 1],
+        'n_estimators': [50, 100, 200, 300],                # set during model init, can be tuned
+        'reg_lambda': [1, 2, 5, 10, 20],
+        'reg_alpha': [0, 0.1, 0.2, 0.5],                   # L2 regularization
 
     }
 
@@ -278,25 +295,22 @@ def main(
         'reg_alpha': 0,                    # L1 regularization
         'reg_lambda': 2,                   # L2 regularization
         'n_estimators': 100,                # set during model init, can be tuned
-        'random_state': random_state,
+        #'random_state': random_state,
         'enable_categorical': True
     }
 
     model = XGBoostRegressionModel(
-        data_df, 
-        Feature_Selection, 
-        target,
-        XGB_Hparams, 
-        0.2, 
-        safe_path, 
-        identifier,
-        -1,
-        param_grid_xgb,
+       data_df=data_df, 
+        feature_selection=Feature_Selection, 
+        target_name=target_col,
+        xgb_hparams=XGB_Hparams,
+        test_split_size=test_split_size,
+        save_path=safe_path,
+        top_n=-1,
+        param_grid=param_grid_xgb,
         logging=logging,
-        #Pat_IDs=Pat_IDs,
-        #split_shaps=False,
-        #sample_weights=sample_weights
-        )
+        split_shaps=True,
+        random_state=42)
 
     metrics = model.evaluate(
         folds=folds, 
@@ -308,11 +322,11 @@ def main(
 
     ######
     model.plot(f"Actual vs. Prediction (NGBoost)")
-    _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds)
+    _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds, members=members)
     #model.calibration_analysis()
     
-    log_obj.close()
-
+    #log_obj.close()
+        
 if __name__ == "__main__":
 
     folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
@@ -321,35 +335,79 @@ if __name__ == "__main__":
     exp_infos = [
                 {
                 'exp_number' : 1,
-                'target_col' :"BDI_sum_post", 
-                'ignore_cols':[ 
-                            "BDI_Harmonized_pre", "BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre",
-                            "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Somatic_post", "BDI_Harmonized_post",
-                            "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta", 
-                            "BDI_sum_delta",
-                            #"BDI_sum_pre",
-                            #"BDI_sum_post"
+                'target_col' :"MoCA_sum_post", 
+                'feature_cols':[ 
+                            "TimeSinceSurgery",
+                            "AGE_AT_OP",
+                            "TimeSinceDiag",
+                            "SEX",
+                            "UPDRS_reduc_pre",
+                            #"MoCA_sum_pre",
+                            #"MoCA_diff",
+                            "MoCA_Executive_sum_pre",
+                            #"MoCA_Executive_sum_post",
+                            "MoCA_Erinnerung_sum_pre",
+                            #"MoCA_Erinnerung_sum_post",
+                            "MoCA_Sprache_sum_pre",
+                            #"MoCA_Sprache_sum_post",
+                            "MoCA_Aufmerksamkeit_sum_pre",
+                            #"MoCA_Aufmerksamkeit_sum_post",
+                            #"MoCA_Benennen_sum_pre",
+                            #"MoCA_Benennen_sum_post",
+                            "MoCA_Abstraktion_sum_pre",
+                            #"MoCA_Abstraktion_sum_post",
+                            "MoCA_Orientierung_sum_pre",
+                            #"MoCA_Orientierung_sum_post",
+                            #"LEDD_reduc",
+                            #"L_distance",
+                            #"R_distance"
                             ] ,
-                },   
+                'outlier_cols':[ 
+                            "TimeSinceSurgery",
+                            #"AGE_AT_OP",
+                            "TimeSinceDiag",
+                            #"SEX",
+                            "UPDRS_reduc_pre",
+                            "MoCA_sum_pre",
+                            #"MoCA_Executive_sum_pre",
+                            #"MoCA_Executive_sum_post",
+                            #"MoCA_Erinnerung_sum_pre",
+                            #"MoCA_Erinnerung_sum_post",
+                            #"MoCA_Sprache_sum_pre",
+                            #"MoCA_Sprache_sum_post",
+                            #"MoCA_Aufmerksamkeit_sum_pre",
+                            #"MoCA_Aufmerksamkeit_sum_post",
+                            #"MoCA_Benennen_sum_pre",
+                            #"MoCA_Benennen_sum_post",
+                            #"MoCA_Abstraktion_sum_pre",
+                            #"MoCA_Abstraktion_sum_post",
+                            #"MoCA_Orientierung_sum_pre",
+                            #"MoCA_Orientierung_sum_post",
+                            #"LEDD_reduc",
+                            #"L_distance",
+                            #"R_distance"
+                            ] ,
+                },
     ]
     for exp_info in exp_infos:
 
         exp_number = exp_info['exp_number']
         target_col= exp_info['target_col']
-        ignore_cols = exp_info['ignore_cols']
+        feature_cols = exp_info['feature_cols']
         outlier_cols = exp_info['outlier_cols']
-
         main(folder_path=folder_path, 
-            data_path="data/BDI/level2/bdi_stim.csv", 
-            ignore_cols=ignore_cols, 
-            target_col=target_col,
-            outlier_cols=outlier_cols, 
-            out=f"results/{exp_number}_{target_col}_stim/level2/XGBoost", 
+            data_path="data/MoCA/level2/moca_updrs.csv", 
+            feature_cols=feature_cols, 
+            target_col=target_col, 
+            outlier_cols=outlier_cols,
+            out=f"results/{exp_number}_{target_col}_updrs/level2/XGBoost", 
             folds=10, 
             tune_folds=5, 
             tune=True, 
-            drop_iqr_outliers=True,
+            members=10,
             uncertainty=False, 
-            filtered_data_path="filtered_bdi_demo.csv") 
+            filtered_data_path="filtered_MoCA_updrs.csv")
+
+
 
 
