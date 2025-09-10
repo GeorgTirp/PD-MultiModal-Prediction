@@ -1,0 +1,139 @@
+import warnings
+warnings.filterwarnings("ignore")
+import os
+os.environ["PYTHONWARNINGS"] = "ignore"
+from model_classes.NGBoostRegressionModel import NGBoostRegressionModel
+import pandas as pd
+from model_classes.faster_evidential_boost import NormalInverseGamma, NIGLogScore
+from ngboost.distns.normal import Normal, NormalCRPScore, NormalLogScore
+from ngboost.distns.gamma import Gamma, GammaLogScore 
+from sklearn.tree import DecisionTreeRegressor
+from matplotlib import pyplot as plt
+import numpy as np
+import logging
+from xgboost import XGBRegressor
+from sklearn.datasets import load_diabetes
+from utils.my_logging import Logging
+
+
+
+#from sklearn.datasets import load_diabetes
+# --- Dynamic Tobit bound functions ---
+
+
+def main(folder_path, data_path, target, identifier, out, folds=10):
+   
+    test_split_size = 0.2
+    Feature_Selection = {}
+    target_col = identifier + "_" + target
+    possible_targets = ["ratio", "diff"] 
+    ignored_targets = [t for t in possible_targets if t != target]
+    ignored_target_cols = [identifier + "_" + t for t in ignored_targets]
+    data_df = pd.read_csv(folder_path + data_path)
+    columns_to_drop = ['Pat_ID'] + [col for col in ignored_target_cols if col in data_df.columns]
+    data_df = data_df.drop(columns=columns_to_drop)
+    Feature_Selection['target'] = target_col
+    Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
+    save_path = os.path.join(folder_path, out)
+    
+    ### test
+    #X, y = load_diabetes(return_X_y=True, as_frame=True)
+    #X = X.sample(n=150, random_state=42)
+    #y = y.loc[X.index]
+    #
+    #data_df = pd.concat([X, y.rename("target")], axis=1)
+    #Feature_Selection['target'] = "target"
+    #Feature_Selection['features'] = [col for col in data_df.columns if col != Feature_Selection['target']]
+    #save_path = os.path.join(folder_path, "test/test_diabetes/NGBoost")
+    ### test ende
+
+    os.makedirs(save_path, exist_ok=True)
+    os.makedirs(os.path.join(save_path, 'log'), exist_ok=True)
+    logging = Logging(f'{save_path}/log').get_logger()
+
+    # --- Print all selected parameters ---
+    logging.info('-------------------------------------------')
+    logging.info(f"Folder Path: {folder_path}")
+    logging.info(f"Data Path: {data_path}")
+    logging.info(f"Target: {target}")
+    logging.info(f"Identifier: {identifier}")
+    logging.info(f"Output Path: {out}")
+    logging.info(f"Folds: {folds}")
+    logging.info('-------------------------------------------\n')
+    # Random Forest Model
+     #XGBoost hyperparameters grid    
+    # Define the parameter grid for NGBoost
+    #define bounds
+    #if target == "sum_post":
+        #if identifier == "BDI":
+        #    NIGLogScore.set_bounds(0, 63)
+        #elif identifier == "MoCA":
+        #    NIGLogScore.set_bounds(0, 30)
+    
+    
+
+    param_grid_ngb = {
+    #'Dist': [NormalInverseGamma],
+    #'Score' : [NIGLogScore],
+    'n_estimators': [450, 500, 550, 600, 650],
+    'learning_rate': [0.01, 0.1],
+    'Base__max_depth': [3, 4, 5],
+    'Score__evid_strength': [0.1],
+    'Score__kl_strength': [0.01],
+    }
+    
+    
+    # BEST ONES: 600, 0.1 and for regs 0.1 and 0.001
+    NGB_Hparams = {
+        'Dist': Gamma, #NormalInverseGamma,
+        'Score' : GammaLogScore ,#NIGLogScore,
+        'n_estimators': 100,
+        'learning_rate': 0.01,
+        'natural_gradient': True,
+        #'Score_kwargs': {'evid_strength': 0.1, 'kl_strength': 0.01},
+        'verbose': False,
+        'Base': DecisionTreeRegressor(max_depth=3)  # specify the depth here
+    }
+
+    model = NGBoostRegressionModel(
+        data_df=data_df, 
+        feature_selection=Feature_Selection, 
+        target_name=target,
+        ngb_hparams=NGB_Hparams,
+        test_split_size=test_split_size,
+        save_path=save_path,
+        identifier=identifier,
+        top_n=-1,
+        param_grid=param_grid_ngb,
+        standardize="gamma",
+        logging=logging)
+    
+    metrics = model.evaluate(
+        folds=folds, 
+        tune=True, 
+        nested=True, 
+        tune_folds=20, 
+        get_shap=True,
+        uncertainty=False)
+    
+    # Set up logging
+    #logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    
+    # Log the metrics
+    #logging.info(f"Aleatoric Uncertainty: {metrics['aleatoric']}")
+    #logging.info(f"Epistemic Uncertainty: {metrics['epistemic']}")
+    model.plot(f"Actual vs. Prediction (NGBoost) - {identifier}")
+    #_,_, removals= model.feature_ablation(folds=folds, tune=True, tune_folds=20)
+    model.calibration_analysis()
+    
+    
+   
+        
+        
+
+if __name__ == "__main__":
+    folder_path = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
+    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    #folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
+    main(folder_path, "data/MoCA/level2/moca_df.csv", "diff", "MoCA", "results/MoCA_gamma/NGBoost", 20)
+    
