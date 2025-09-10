@@ -135,7 +135,7 @@ def main(
     folds=10, 
     tune_folds=5, 
     tune=False, 
-    drop_iqr_outliers=False,
+    members=1,
     uncertainty=False, 
     filtered_data_path="",
     ):
@@ -156,7 +156,6 @@ def main(
     logging.info(f"Output Path: {out}")
     logging.info(f"Folds: {folds}")
     logging.info(f"tune_folds: {tune_folds}")
-    logging.info(f"drop_iqr_outliers: {drop_iqr_outliers}")
     logging.info(f"uncertainty: {uncertainty}")
     logging.info(f"filtered_data_path: {filtered_data_path}")
     logging.info(f"ignore_cols: {ignore_cols}")
@@ -329,7 +328,7 @@ def main(
         uncertainty=uncertainty)
 
     ######
-    _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds)
+    _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds, members=members)
     #model.calibration_analysis()
     
     log_obj.close()
@@ -341,182 +340,35 @@ if __name__ == "__main__":
     #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
 
     exp_infos = [
-
-                # {
-                # 'exp_number' : 1,
-                # 'target_col' :"BDI_sum_post", 
-                # 'ignore_cols':[ 
-                #             "BDI_Harmonized_pre", "BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre",
-                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Somatic_post", "BDI_Harmonized_post",
-                #             "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta", 
-                #             "BDI_sum_delta",
-                #             #"BDI_sum_pre",
-                #             #"BDI_sum_post"
-                #             ] ,
-                # },
-                # {
-                # 'exp_number' : 2,
-                # 'target_col' :"BDI_sum_delta", 
-                # 'ignore_cols':[ 
-                #             "BDI_Harmonized_pre", "BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
-                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Somatic_post", "BDI_Harmonized_post",
-                #             "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
-                #             #"BDI_sum_delta",
-                #             "BDI_sum_pre",
-                #             "BDI_sum_post"
-                #             ] ,
-                # },
-                # {
-                # 'exp_number' : 3,
-                # 'target_col' :"BDI_Harmonized_post", 
-                # 'ignore_cols':[ 
-                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
-                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Somatic_post", #"BDI_Harmonized_post",
-                #             "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
-                #             "BDI_sum_delta",
-                #             "BDI_sum_pre",
-                #             "BDI_sum_post"
-                #             ] ,
-                # },
-                # {
-                # 'exp_number' : 4,
-                # 'target_col' :"BDI_Cognitive_post", 
-                # 'ignore_cols':[ 
-                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
-                #             #"BDI_Cognitive_post", 
-                #             "BDI_Affective_post", "BDI_Somatic_post", "BDI_Harmonized_post",
-                #             "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
-                #             "BDI_sum_delta",
-                #             "BDI_sum_pre",
-                #             "BDI_sum_post"
-                #             ] ,
-                # },
-                # {
-                # 'exp_number' : 5,
-                # 'target_col' :"BDI_Affective_post", 
-                # 'ignore_cols':[ 
-                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
-                #             "BDI_Cognitive_post", #"BDI_Affective_post", 
-                #             "BDI_Somatic_post", "BDI_Harmonized_post",
-                #             "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
-                #             "BDI_sum_delta",
-                #             "BDI_sum_pre",
-                #             "BDI_sum_post"
-                #             ] ,
-                # },
-                # {
-                # 'exp_number' : 6,
-                # 'target_col' :"BDI_Somatic_post", 
-                # 'ignore_cols':[ 
-                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
-                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Harmonized_post", #"BDI_Somatic_post", 
-                #             "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
-                #             "BDI_sum_delta",
-                #             "BDI_sum_pre",
-                #             "BDI_sum_post"
-                #             ] ,
-                # },
-                # {
-                # 'exp_number' : 7,
-                # 'target_col' :"BDI_Somatic_delta", 
-                # 'ignore_cols':[ 
-                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
-                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Harmonized_post", "BDI_Somatic_post", 
-                #             "BDI_Cognitive_delta", "BDI_Affective_delta", #"BDI_Somatic_delta",
-                #             "BDI_Harmonized_delta",
-                #             "BDI_sum_delta",
-                #             "BDI_sum_pre",
-                #             "BDI_sum_post"
-                #             ] ,
-                # },
-                # {
-                # 'exp_number' : 8,
-                # 'target_col' :"BDI_Affective_delta", 
-                # 'ignore_cols':[ 
-                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
-                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Harmonized_post", "BDI_Somatic_post", 
-                #             "BDI_Cognitive_delta", #"BDI_Affective_delta", 
-                #             "BDI_Somatic_delta",
-                #             "BDI_Harmonized_delta",
-                #             "BDI_sum_delta",
-                #             "BDI_sum_pre",
-                #             "BDI_sum_post"
-                #             ] ,
-                # },
-                # {
-                # 'exp_number' : 9,
-                # 'target_col' :"BDI_Cognitive_delta", 
-                # 'ignore_cols':[ 
-                #             "BDI_Harmonized_pre",#"BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre", 
-                #             "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Harmonized_post", "BDI_Somatic_post", 
-                #             #"BDI_Cognitive_delta", 
-                #             "BDI_Affective_delta", "BDI_Somatic_delta",
-                #             "BDI_Harmonized_delta",
-                #             "BDI_sum_delta",
-                #             "BDI_sum_pre",
-                #             "BDI_sum_post"
-                #             ] ,
-                # },
                 {
-                'exp_number' : 10,
-                'target_col' :"BDI_Cognitive_post", 
+                'exp_number' : 1,
+                'target_col' :"BDI_sum_post", 
                 'ignore_cols':[ 
-                            "BDI_Harmonized_pre",#"BDI_Cognitive_pre", 
-                            "BDI_Affective_pre", "BDI_Somatic_pre", 
-                            #"BDI_Cognitive_post", 
-                            "BDI_Affective_post", "BDI_Somatic_post", "BDI_Harmonized_post",
-                            "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
+                            "BDI_Harmonized_pre", "BDI_Cognitive_pre", "BDI_Affective_pre", "BDI_Somatic_pre",
+                            "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Somatic_post", "BDI_Harmonized_post",
+                            "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta", 
                             "BDI_sum_delta",
-                            "BDI_sum_pre",
-                            "BDI_sum_post"
+                            #"BDI_sum_pre",
+                            #"BDI_sum_post"
                             ] ,
-                },
-
-                {
-                'exp_number' : 11,
-                'target_col' :"BDI_Affective_post", 
-                'ignore_cols':[ 
-                            "BDI_Harmonized_pre",#
-                            "BDI_Cognitive_pre", "BDI_Somatic_pre",
-                            #"BDI_Affective_pre",  
-                            "BDI_Cognitive_post", #"BDI_Affective_post", 
-                            "BDI_Somatic_post", "BDI_Harmonized_post",
-                            "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
-                            "BDI_sum_delta",
-                            "BDI_sum_pre",
-                            "BDI_sum_post"
-                            ] ,
-                },
-                {
-                'exp_number' : 12,
-                'target_col' :"BDI_Somatic_post", 
-                'ignore_cols':[ 
-                            "BDI_Harmonized_pre", "BDI_Cognitive_pre", "BDI_Affective_pre", 
-                            #"BDI_Somatic_pre", 
-                            "BDI_Cognitive_post", "BDI_Affective_post", "BDI_Harmonized_post", #"BDI_Somatic_post", 
-                            "BDI_Cognitive_delta", "BDI_Affective_delta", "BDI_Somatic_delta","BDI_Harmonized_delta",
-                            "BDI_sum_delta",
-                            "BDI_sum_pre",
-                            "BDI_sum_post"
-                            ] ,
-                },
-
-
+                },   
     ]
     for exp_info in exp_infos:
 
         exp_number = exp_info['exp_number']
         target_col= exp_info['target_col']
         ignore_cols = exp_info['ignore_cols']
+        outlier_cols = exp_info['outlier_cols']
 
         main(folder_path=folder_path, 
             data_path="data/BDI/level2/bdi_stim.csv", 
             ignore_cols=ignore_cols, 
-            target_col=target_col, 
+            target_col=target_col,
+            outlier_cols=outlier_cols, 
             out=f"results/{exp_number}_{target_col}_stim/level2/XGBoost", 
             folds=10, 
             tune_folds=5, 
             tune=True, 
-            drop_iqr_outliers=True,
+            members=2,
             uncertainty=False, 
             filtered_data_path="filtered_bdi_demo.csv")

@@ -37,7 +37,7 @@ from properscoring import crps_ensemble
 # from hyperopt import hp
 
 # Custom Base Model
-from model_classes.BaseRegressionModel_Farzin import BaseRegressionModel
+from model_classes.BaseRegressionModel import BaseRegressionModel
 
 
 class NGBoostRegressionModel(BaseRegressionModel):
@@ -85,6 +85,7 @@ class NGBoostRegressionModel(BaseRegressionModel):
                 'verbose': False
             }
         self.ngb_hparams = ngb_hparams
+        self.ngb_hparams['random_state'] = random_state
         self.model = NGBRegressor(**self.ngb_hparams)
         self.model_name = "NGBoost"
         self.prob_func = ngb_hparams["Dist"]
@@ -198,8 +199,8 @@ class NGBoostRegressionModel(BaseRegressionModel):
         if groups is None:
             cv = KFold(n_splits=folds, shuffle=True, random_state=self.random_state)
         else:
-            cv = GroupKFold(n_splits=folds)
-    
+            cv = GroupKFold(n_splits=folds, random_state=self.random_state)
+
         # Pearson‐r scorer
         def pearson_corr(y_true, y_pred):
             return pearsonr(y_true, y_pred)[0]
@@ -600,125 +601,6 @@ class NGBoostRegressionModel(BaseRegressionModel):
         return mean_prediction, aleatoric_uncertainty, epistemic_uncertainty
 
     
-
-    #def calibration_analysis(self, ablation_idx = None):
-    #    """
-    #    Generate PIT histogram, QQ-plot, quantile‐calibration diagram, and CRPS.
-    #    Assumes that after LOOCV you have stored in self.metrics:
-    #      - 'pred_dist': a tuple/ list of 4 numpy arrays (mu, lam, alpha, beta), each of length n_samples
-    #      - 'y_test'   : the true y's for those held-out samples, length n_samples
-    #    """
-    #    # prepare output folder
-    #    if ablation_idx is not None:
-    #        save_path = f'{self.save_path}/ablation/ablation_step[{ablation_idx}]/calibration'
-    #    else:
-    #        save_path = f'{self.save_path}/calibration'
-    #    
-    #    os.makedirs(save_path, exist_ok=True)
-#
-    #    # pull out true values + predicted parameters
-    #    pred_dist = self.metrics['pred_dist'].T
-    #    y_test    = np.asarray(self.metrics['y_test'])
-    #    n         = len(y_test)
-#
-    #    # decide which family
-    #    if self.model.Dist == NormalInverseGamma:
-    #        # NIG→Student-t
-    #        mu_arr, lam_arr, alpha_arr, beta_arr = pred_dist[0], pred_dist[1], pred_dist[2], pred_dist[3]
-    #        nu    = 2 * alpha_arr
-    #        Omega = 2 * beta_arr * (1 + lam_arr)
-    #        scale = np.sqrt(Omega / (lam_arr * nu))
-    #        dists = [
-    #            st.t(df=nu[i], loc=mu_arr[i], scale=scale[i])
-    #            for i in range(n)
-    #        ]
-#
-    #    elif self.model.Dist == Normal:
-    #        # Gaussian
-    #        mu_arr, sigma_arr = pred_dist[0], pred_dist[1]
-    #        dists = [
-    #            st.norm(loc=mu_arr[i], scale=sigma_arr[i])
-    #            for i in range(n)
-    #        ]
-#
-    #    else:
-    #        raise ValueError(f"Expected 2 or 4 distribution parameters, got {len(pred_dist)}")
-#
-    #    # ---- 1) PIT ----
-    #    pit = np.array([dist.cdf(y) for dist, y in zip(dists, y_test)])
-#
-    #    plt.figure()
-    #    plt.hist(pit, bins=20, range=(0,1), edgecolor='k', alpha=0.7)
-    #    plt.axhline(n/20, color='r', linestyle='--', label='ideal')
-    #    plt.title('PIT Histogram')
-    #    plt.xlabel('PIT')
-    #    plt.ylabel('Count')
-    #    plt.legend()
-    #    plt.savefig(f'{save_path}/pit_hist.png')
-    #    plt.close()
-#
-    #    # ---- 2) PIT QQ plot ----
-    #    sorted_pit = np.sort(pit)
-    #    uniform_q  = np.linspace(0,1,n)
-    #    plt.figure()
-    #    plt.plot(uniform_q, sorted_pit, marker='.', linestyle='none')
-    #    plt.plot([0,1],[0,1], 'r--')
-    #    plt.title('PIT QQ‐Plot')
-    #    plt.xlabel('Uniform Quantile')
-    #    plt.ylabel('Empirical PIT Quantile')
-    #    plt.savefig(f'{save_path}/pit_qq.png')
-    #    plt.close()
-#
-    #    # ---- 3) Quantile‐Calibration ----
-    #    qs  = np.linspace(0.05, 0.95, 19)
-    #    obs = []
-    #    for q in qs:
-    #        yq = np.array([dist.ppf(q) for dist in dists])
-    #        obs.append(np.mean(y_test <= yq))
-#
-    #    plt.figure()
-    #    plt.plot(qs, obs, marker='o', linestyle='-')
-    #    plt.plot([0,1],[0,1],'r--')
-    #    plt.title('Quantile Calibration')
-    #    plt.xlabel('Nominal Quantile')
-    #    plt.ylabel('Observed Fraction ≤ Predicted')
-    #    plt.savefig(f'{save_path}/quantile_calib.png')
-    #    plt.close()
-#
-    #    # ---- 4) CRPS ----
-    #    # draw 500 samples per predictive distribution
-    #    samples = np.stack([dist.rvs(size=500) for dist in dists], axis=1)
-    #    # samples.shape == (500, n)
-    #    crps_vals = crps_ensemble(y_test, samples.T)
-    #    avg_crps  = crps_vals.mean()
-#
-    #    # baseline degenerate‐median model
-    #    median_pred   = np.median(y_test)
-    #    baseline_crps = np.mean(np.abs(y_test - median_pred))
-#
-    #    print(f"Average CRPS: {avg_crps:.4f}")
-    #    print(f"Baseline CRPS (degenerate at median): {baseline_crps:.4f}")
-#
-    #    # ---- 5) ECE ----
-    #    ece = np.mean(np.abs(np.array(obs) - qs))
-    #    print(f"Expected Calibration Error (ECE): {ece:.4f}")
-#
-    #    calibration_results = {
-    #        'ece': ece,
-    #        'avg_crps': avg_crps,
-    #        'baseline_crps': baseline_crps,
-    #    }
-    #    # Save calibration_results as CSV
-    #    # Flatten the dict for CSV saving
-    #    cal_df = pd.DataFrame([calibration_results],)
-    #    cal_df.to_csv(f'{save_path}/calibration_metrics.csv', index=False)
-#
-    #    # Save PIT and quantile calibration arrays as separate CSVs for clarity
-    #    pd.DataFrame({'pit': pit}).to_csv(f'{save_path}/pit_values.csv', index=False)
-    #    pd.DataFrame({'qs': qs, 'obs': obs}).to_csv(f'{save_path}/quantile_calibration.csv', index=False)
-    #    pd.DataFrame({'crps': crps_vals}).to_csv(f'{save_path}/crps_values.csv', index=False)
-    #    
-    #    return calibration_results
     def calibration_analysis(self, ablation_idx=None):
         """
         Generate PIT histogram, QQ‐plot, quantile‐calibration diagram, and CRPS.

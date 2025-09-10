@@ -10,7 +10,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 import pandas as pd
 from sklearn.model_selection import train_test_split, KFold, LeaveOneOut
 from sklearn.metrics import mean_squared_error
-from scipy.stats import pearsonr
+from scipy.stats import pearsonr, spearmanr
 from typing import Tuple, Dict
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,6 +27,7 @@ from sklearn.model_selection import (
     KFold, LeaveOneOut,
     GroupKFold, LeaveOneGroupOut
 )
+
 
 class BaseRegressionModel:
     """Base class for supervised regression models using scikit-learn and SHAP.
@@ -92,7 +93,12 @@ class BaseRegressionModel:
         self.target_name = target_name
         self.Pat_IDs = Pat_IDs
         self.split_shaps = split_shaps
-        
+        self.test_shap_mean = None
+        self.test_shap_variance = None
+        self.shap_mean  = None 
+        self.shap_variance = None
+        self.X_test = None
+
         if standardize == "zscore":
             self.scaler = ZScoreScaler()
         elif standardize == "tanh":
@@ -319,7 +325,8 @@ class BaseRegressionModel:
             tune=False, 
             tune_folds=10, 
             uncertainty=False, 
-            ablation_idx=None) -> Dict:
+            ablation_idx=None,
+            member_idx=None) -> Dict:
         """
         Perform nested cross-validation evaluation with optional tuning, SHAP, uncertainty estimation, and ablation.
 
@@ -535,6 +542,8 @@ class BaseRegressionModel:
         X_vals = np.concatenate(X_vals)
         r, p = pearsonr(y_vals, preds)
         f_squared = (r**2) / (1 - r**2)
+        rho, pval_spearman = spearmanr(y_vals, preds)
+
         mse = mean_squared_error(y_vals, preds)
         train_mse = mean_squared_error(y_trains, preds_train)
 
@@ -544,11 +553,17 @@ class BaseRegressionModel:
 
         if ablation_idx is not None:
             save_path = f'{self.save_path}/ablation/ablation_step[{ablation_idx}]/'
+            if member_idx is not None:
+                save_path = f'{save_path}/member[{member_idx}]/'
             os.makedirs(save_path, exist_ok=True)
             save_path = f'{save_path}_{self.target_name}'
         else:
+            if member_idx is not None:
+                save_path = f'{save_path}/member[{member_idx}]/'
             save_path = f'{self.save_path}/{self.target_name}'
 
+        
+            os.makedirs(save_path, exist_ok=True)
         
         if get_shap:
             if self.model_name == "NGBoost":
@@ -556,21 +571,21 @@ class BaseRegressionModel:
                     all_test_shap_mean_array = np.concatenate(all_test_shap_mean, axis=0)
                     all_test_shap_variance_array = np.concatenate(all_test_shap_variance, axis=0)
                     # Average over the folds to get an aggregated array of shape (n_samples, n_features)
-                    mean_shap_values = all_test_shap_mean_array
-                    variance_shap_values = all_test_shap_variance_array
+                    test_shap_mean = all_test_shap_mean_array
+                    test_shap_variance = all_test_shap_variance_array
                     # Save SHAP values to a file
-                    np.save(f'{save_path}_mean_shap_values_test.npy', mean_shap_values)
-                    np.save(f'{save_path}_predicitve_uncertainty_shap_values_test.npy', variance_shap_values)
+                    np.save(f'{save_path}_mean_shap_values_test.npy', test_shap_mean)
+                    np.save(f'{save_path}_predicitve_uncertainty_shap_values_test.npy', test_shap_variance)
                     np.save(f'{save_path}_all_shap_values(variance)_test.npy', all_test_shap_variance_array)
 
                     # Plot for mean SHAP values
-                    shap.summary_plot(mean_shap_values, features=X_vals, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                    shap.summary_plot(test_shap_mean, features=X_vals, feature_names=self.X.columns, show=False, max_display=self.top_n)
                     plt.title(f'{self.target_name} Summary Plot (Aggregated - Mean)', fontsize=16)
                     plt.subplots_adjust(top=0.90)
                     plt.savefig(f'{save_path}_mean_shap_aggregated_test.png')
                     plt.close()
 
-                    shap.summary_plot(variance_shap_values, features=X_vals, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                    shap.summary_plot(test_shap_variance, features=X_vals, feature_names=self.X.columns, show=False, max_display=self.top_n)
                     plt.title(f'{self.target_name} Summary Plot (Aggregated - Variance)', fontsize=16)
                     plt.subplots_adjust(top=0.90)
                     if self.prob_func == NormalInverseGamma:
@@ -636,9 +651,18 @@ class BaseRegressionModel:
                 #with open(f'{save_path}_mean_shap_explanations.pkl', 'wb') as fp:
                 #    pickle.dump(mean_shap_values, fp)
                 plt.close()
+
             np.save(f'{save_path}_all_shap_values(mu).npy', all_shap_mean_array)
+            self.X_test = X_vals
+            self.shap_mean = mean_shap_values
+            if self.split_shaps:
+                self.test_shap_mean = test_shap_mean
+            if self.model_name == "NGBoost":
+                self.shap_variance = variance_shap_values
+                if self.split_shaps:
+                    self.test_shap_variance = test_shap_variance
             
-            
+                
             # Compute the mean of the absolute SHAP values for each feature
             feature_importances = np.mean(np.abs(mean_shap_values), axis=0)
             feature_importance_dict = dict(zip(self.X.columns, feature_importances))
@@ -651,6 +675,7 @@ class BaseRegressionModel:
         'mse': mse,
         'train_mse': train_mse,
         'r': r,
+        'rho': rho,
         'f_squared':f_squared,
         'p_value': p,
         'y_pred': preds,
@@ -666,11 +691,11 @@ class BaseRegressionModel:
         metrics_df.to_csv(f'{save_path}_metrics.csv', index=False)
         
         # Save the trained model to a file
-        model_save_path = f'{save_path}_trained_model.pkl'
-        with open(model_save_path, 'wb') as model_file:
-            pickle.dump(self.model, model_file)
+        #model_save_path = f'{save_path}_trained_model.pkl'
+        #with open(model_save_path, 'wb') as model_file:
+        #    pickle.dump(self.model, model_file)
         
-        self.logging.info(f"Trained model saved to {model_save_path}.")
+        #self.logging.info(f"Trained model saved to {model_save_path}.")
         self.logging.info("Finished model evaluation.")
         return metrics
     
@@ -681,8 +706,9 @@ class BaseRegressionModel:
         tune=False, 
         tune_folds: int = 10, 
         features_per_step: int = 1, 
+        members: int = 1,
         threshold_to_one_fps: int = 10,
-        test_set = True) -> Dict:
+        test_set = True):
         """
         Perform iterative feature ablation analysis using nested cross-validation.
 
@@ -690,74 +716,166 @@ class BaseRegressionModel:
             Tuple[list, list, list]: Lists of R² scores, p-values, and removed feature names after each ablation step.
         """
         rs = []
+        rhos = []
         p_values = []
         removals = []
         test_rmse_list = []
         train_rmse_list = []
-        
+
         number_of_features = len(self.feature_selection['features'])
         i = 1
         while number_of_features > 0:
             self.logging.info(f"---- Starting ablation step {i} with {number_of_features} features remaining. ----")
-            # Determine the number of features to remove in this step
+
             if number_of_features > threshold_to_one_fps:
-                # Remove multiple features (up to `features_per_step` if more than the threshold)
                 features_to_remove = min(features_per_step, number_of_features)
             else:
-                # Remove just one feature at a time once the threshold is passed
                 features_to_remove = 1
 
-            save_path = f'{self.save_path}/ablation/'
-            metrics = self.nested_eval(folds=folds, get_shap=get_shap, tune=tune, tune_folds=tune_folds, ablation_idx=i)
-            metrics_df = pd.DataFrame([metrics])
-            metrics_df.to_csv(f'{save_path}/ablation_step[{i}]/{self.target_name}_metrics.csv', index=False)
+            feature_votes = {}
+            ensemble_rs = []
+            ensemble_rhos = []
+            ensemble_p_values = []
+            ensemble_train_mse = []
+            ensemble_test_mse = []
+            members_shap_mean = []
+            members_shap_mean_test = []
+            members_shap_variance = []
+            members_shap_variance_test = []
 
-            # let's save the preditcions for inspection
-            self.plot(
-                f"Actual vs. Prediction {self.model_name}- {self.target_name} No. features: {number_of_features}", 
-                modality='',
-                plot_df= pd.DataFrame({'Actual': metrics_df['y_test'].values[0],'Predicted': metrics_df['y_pred'].values[0]}),
-                save_path_file =f'{save_path}/ablation_step[{i}]/{self.target_name}_actual_vs_predicted.png' )
+            for m in range(members):
+                self.random_state += 1
+                save_path = f'{self.save_path}/ablation/ablation_step[{i}]/member[{m}]'
+                os.makedirs(save_path, exist_ok=True)
 
-            rs.append(metrics['r'])
-            p_values.append(metrics['p_value'])
+                metrics = self.nested_eval(
+                    folds=folds, 
+                    get_shap=get_shap, 
+                    tune=tune, 
+                    tune_folds=tune_folds, 
+                    ablation_idx=i, 
+                    member_idx=m)
+ 
+                metrics_df = pd.DataFrame([metrics])
+                metrics_df.to_csv(f'{save_path}/{self.target_name}_metrics.csv', index=False)
 
-            train_rmse_list.append(metrics['train_mse'] ** 0.5)
-            test_rmse_list.append(metrics['mse'] ** 0.5)
+                if self.shap_mean is not None:
+                    members_shap_mean.append(self.shap_mean)
 
-            if test_set:
-                importance = metrics['feature_importance_test']
-            else:
-                importance = metrics['feature_importance']
-            importance_indices = np.argsort(importance)
+                if hasattr(self, 'test_shap_mean') and self.test_shap_mean is not None:
+                    members_shap_mean_test.append(self.test_shap_mean)
 
-            # Remove the least important features
-            least_important_features = [self.feature_selection['features'][idx] for idx in importance_indices[:features_to_remove]]
-            
-            # Update X, y, and feature list
+                if hasattr(self, 'shap_variance') and self.shap_variance is not None:
+                    members_shap_variance.append(self.shap_variance)
+
+                if hasattr(self, 'test_shap_variance') and self.test_shap_variance is not None:
+                    members_shap_variance_test.append(self.test_shap_variance) 
+                
+                self.plot(
+                    f"Actual vs. Prediction {self.model_name}- {self.target_name} No. features: {number_of_features}", 
+                    modality='',
+                    plot_df=pd.DataFrame({'Actual': metrics_df['y_test'].values[0],'Predicted': metrics_df['y_pred'].values[0]}),
+                    save_path_file=f'{save_path}/{self.target_name}_actual_vs_predicted.png')
+
+                ensemble_rs.append(metrics['r'])
+                ensemble_rhos.append(metrics['rho'])
+                ensemble_p_values.append(metrics['p_value'])
+                ensemble_train_mse.append(metrics['train_mse'])
+                ensemble_test_mse.append(metrics['mse'])
+
+                if test_set:
+                    importance = metrics['feature_importance_test']
+                else:
+                    importance = metrics['feature_importance']
+
+                importance_indices = np.argsort(importance)
+                least_important = [self.feature_selection['features'][idx] for idx in importance_indices[:features_per_step]]
+
+                for feature in least_important:
+                    feature_votes[feature] = feature_votes.get(feature, 0) + 1
+
+            shap_save_path = f'{self.save_path}/ablation/ablation_step[{i}]'
+
+            # Mean SHAP
+            if members_shap_mean:
+                mean_shap_values = np.mean(np.stack(members_shap_mean), axis=0)
+                np.save(f'{shap_save_path}/{self.target_name}_mean_shap_values.npy', mean_shap_values)
+                shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                plt.title(f'{self.target_name} Summary Plot (Mean SHAP)', fontsize=16)
+                plt.subplots_adjust(top=0.90)
+                plt.savefig(f'{shap_save_path}/shap_aggregated_beeswarm.png')
+                plt.close()
+
+            # Test SHAP Mean
+            if members_shap_mean_test:
+                mean_shap_values_test = np.mean(np.stack(members_shap_mean_test), axis=0)
+                np.save(f'{shap_save_path}/{self.target_name}_mean_shap_values_test.npy', mean_shap_values_test)
+                shap.summary_plot(mean_shap_values_test, features=self.X_test, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                plt.title(f'{self.target_name} Summary Plot (Test SHAP)', fontsize=16)
+                plt.subplots_adjust(top=0.90)
+                plt.savefig(f'{shap_save_path}/shap_aggregated_beeswarm_test.png')
+                plt.close()
+
+            # SHAP Variance
+            if members_shap_variance:
+                var_shap_values = np.mean(np.stack(members_shap_variance), axis=0)
+                np.save(f'{shap_save_path}/{self.target_name}_variance_shap_values.npy', var_shap_values)
+                shap.summary_plot(var_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                plt.title(f'{self.target_name} SHAP Variance (Mean)', fontsize=16)
+                plt.subplots_adjust(top=0.90)
+                plt.savefig(f'{shap_save_path}/shap_variance_beeswarm.png')
+                plt.close()
+
+            # SHAP Variance Test
+            if members_shap_variance_test:
+                var_shap_values_test = np.mean(np.stack(members_shap_variance_test), axis=0)
+                np.save(f'{shap_save_path}/{self.target_name}_variance_shap_values_test.npy', var_shap_values_test)
+                shap.summary_plot(var_shap_values_test, features=self.X_test, feature_names=self.X.columns, show=False, max_display=self.top_n)
+                plt.title(f'{self.target_name} SHAP Variance Test (Mean)', fontsize=16)
+                plt.subplots_adjust(top=0.90)
+                plt.savefig(f'{shap_save_path}/shap_variance_beeswarm_test.png')
+                plt.close()
+
+            # Majority vote to determine features to remove
+            voted_features = sorted(feature_votes.items(), key=lambda x: -x[1])[:features_to_remove]
+            least_important_features = [feat for feat, count in voted_features]
+
+            # Update data
             self.X = self.X.drop(columns=least_important_features)
-            self.y = self.y.drop(columns=least_important_features)
-            for feature in least_important_features:
-                self.feature_selection['features'].remove(feature)
-            
-            removals.extend(least_important_features)
+            self.feature_selection['features'] = [f for f in self.feature_selection['features'] if f not in least_important_features]
 
-            # Update the number of remaining features
+            removals.extend(least_important_features)
             number_of_features -= features_to_remove
-            
-            # If using a specific model, perform additional calibration if needed
+
+            rs.append(np.mean(ensemble_rs))
+            rhos.append(np.mean(ensemble_rhos))
+            p_values.append(np.mean(ensemble_p_values))
+            train_rmse_list.append(np.mean(np.sqrt(ensemble_train_mse)))
+            test_rmse_list.append(np.mean(np.sqrt(ensemble_test_mse)))
+
+            # Plot average performance for the ensemble
+            plot_df = pd.DataFrame({
+                'Actual': np.concatenate([pd.DataFrame([m.y_test for m in metrics_df.itertuples()]).values.flatten()]),
+                'Predicted': np.concatenate([pd.DataFrame([m.y_pred for m in metrics_df.itertuples()]).values.flatten()])
+            })
+
+            self.plot(
+                f"Ensemble Prediction {self.model_name}- {self.target_name} No. features: {number_of_features}",
+                modality='',
+                plot_df=plot_df,
+                save_path_file=f'{self.save_path}/ablation/ablation_step[{i}]/{self.target_name}_ensemble_actual_vs_predicted.png')
+
             if self.model_name == "NGBoost":
                 self.calibration_analysis(ablation_idx=i)
 
-            # Increment the iteration counter (this is crucial when removing multiple features per step)
             i += 1
 
-            # If features remaining are fewer than the threshold, switch to one-by-one ablation
             if number_of_features <= threshold_to_one_fps:
-                features_per_step = 1  # From here on, remove only one feature at a time
+                features_per_step = 1
 
             self.logging.info(f"Feature ablation finished. Final r: {rs[-1] if rs else 'N/A'}, min r: {np.min(rs) if rs else 'N/A'}, max r: {np.max(rs) if rs else 'N/A'}")
-        
+
+
         # Define the custom color palette from your image
         custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
                 # Set Seaborn style, context, and custom palette
@@ -766,14 +884,15 @@ class BaseRegressionModel:
 
         # Save the removals list as a CSV file
         removals_df = pd.DataFrame({'Removed_Features': removals})
-        removals_df.to_csv(f'{save_path}{self.target_name}_ablation_history.csv', index=False)
+        save_path_ablation = f'{self.save_path}/ablation/'
+        removals_df.to_csv(f'{save_path_ablation}{self.target_name}_ablation_history.csv', index=False)
         
         # Create a figure
         plt.figure(figsize=(6, 4))
         x = range(i - 1)
                 # Plot each model's R² scores in a loop, using sample_sizes on the x-axis
         #for model_name, r_scores in results.items():
-        plot_df = pd.DataFrame({'x': x, 'rs': rs, 'train_rmse': train_rmse_list, 'test_rmse': test_rmse_list})
+        plot_df = pd.DataFrame({'x': x, 'rs': rs, 'rhos': rhos, 'train_rmse': train_rmse_list, 'test_rmse': test_rmse_list})
         sns.lineplot(data=plot_df, x='x', y='rs', label="R Score", marker='o')
         # Label the axes and set the title
         plt.xlabel("Number of removed features")
@@ -781,7 +900,19 @@ class BaseRegressionModel:
         plt.title("Pearson-R Scores Over Feature Ablation")
         plt.legend()
         plt.tight_layout()
-        plt.savefig(f'{save_path}_{self.target_name}_feature_ablation_R.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_R.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # Create a figure
+        plt.figure(figsize=(6, 4))
+        sns.lineplot(data=plot_df, x='x', y='rhos', label="R Score", marker='o')
+        # Label the axes and set the title
+        plt.xlabel("Number of removed features")
+        plt.ylabel("Spearman-Rho Score")
+        plt.title("Spearman-Rho Scores Over Feature Ablation")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_Rho.png', dpi=300, bbox_inches='tight')
         plt.close()
         
         # Error plot
@@ -793,7 +924,7 @@ class BaseRegressionModel:
         plt.title("Test and Train RMSE Over Feature Ablation")
         plt.legend()
         plt.tight_layout()
-        plt.savefig(f'{save_path}_{self.target_name}_feature_ablation_errors.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_errors.png', dpi=300, bbox_inches='tight')
         plt.close()
         
         return rs, p_values, removals
@@ -901,12 +1032,16 @@ class BaseRegressionModel:
         # using axis coordinates (0–1 range) so it doesn't get cut off
         plt.text(
             0.05, 0.95, 
-            f'R: {self.metrics["r"]:.2f}\nP-value: {self.metrics["p_value"]:.6f}\nf²: {self.metrics["f_squared"]:.3f}', 
+            f'Pearson R: {self.metrics["r"]:.2f}\n'
+            f'Spearman ρ: {self.metrics["rho"]:.2f}\n'
+            f'P-value: {self.metrics["p_value"]:.6f}\n'
+            f'f²: {self.metrics["f_squared"]:.3f}', 
             fontsize=12, 
-            transform=plt.gca().transAxes,  # use axis coordinates
+            transform=plt.gca().transAxes,
             verticalalignment='top',
             bbox=dict(facecolor='white', alpha=0.5)
         )
+
 
         ax = plt.gca()
         # get current y‐limits

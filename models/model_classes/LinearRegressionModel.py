@@ -12,7 +12,7 @@ from sklearn.linear_model import LinearRegression
 # Visualization
 import matplotlib.pyplot as plt
 import shap
-
+from utils.my_logging import Logging
 from typing import Union, List, Tuple
 # Custom Base Model
 from model_classes.BaseRegressionModel import BaseRegressionModel
@@ -28,7 +28,6 @@ class LinearRegressionModel(BaseRegressionModel):
         target_name (str): Name of the target column in the dataset.
         test_split_size (float, optional): Fraction of the data to use as test set. Defaults to 0.2.
         save_path (str, optional): Path to directory for saving outputs. Defaults to None.
-        identifier (str, optional): Optional run identifier used for saving results. Defaults to None.
         top_n (int, optional): Number of top features to consider. Use -1 for all. Defaults to 10.
     """
     def __init__(
@@ -38,11 +37,17 @@ class LinearRegressionModel(BaseRegressionModel):
             target_name: str,
             test_split_size: float = 0.2,
             save_path: str = None,
-            identifier: str = None,
-            top_n: int = 10,
+            top_n=-1,
             logging=None):
         
-        super().__init__(data_df, feature_selection, target_name, test_split_size, save_path, identifier, top_n, logging)
+        super().__init__(
+            data_df, 
+            feature_selection, 
+            target_name, 
+            test_split_size, 
+            save_path, 
+            top_n, 
+            logging)
         self.model = LinearRegression()
         self.model_name = "Linear Regression"
         if top_n == -1:
@@ -64,10 +69,11 @@ class LinearRegressionModel(BaseRegressionModel):
         # Drop rows with missing values for features and target
         data_df = data_df.dropna(subset=self.feature_selection['features'] + [self.feature_selection['target']])
         X = data_df[self.feature_selection['features']]
-        
+        bad_cols = [c for c in X.columns if X[c].apply(lambda v: isinstance(v, str)).any()]
+        X = X.drop(columns=bad_cols)
         y = data_df[self.feature_selection['target']]
         X = X.fillna(X.mean())
-        X = X.apply(pd.to_numeric, errors='coerce')
+        X = X.apply(pd.to_numeric, errors='coerce').dropna()
         
         m = y.mean()
         std = y.std()
@@ -97,7 +103,7 @@ class LinearRegressionModel(BaseRegressionModel):
         indices = np.argsort(attribution)[-self.top_n:][::-1]
         top_features = {feature_names[i]: attribution[i] for i in indices}
         if save_results:
-            np.save(f'{self.save_path}/{self.identifier}_{self.target_name}_feature_importance.npy', top_features)
+            np.save(f'{self.save_path}/{self.target_name}_feature_importance.npy')
         
         self.importances = top_features
 
@@ -107,20 +113,20 @@ class LinearRegressionModel(BaseRegressionModel):
         explainer = shap.LinearExplainer(self.model, background_data)
         shap_values = explainer.shap_values(self.X)
         # Plot aggregated SHAP values (beeswarm and bar plots)
-        shap.summary_plot(shap_values, self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-        plt.title(f'{self.identifier} SHAP Summary Plot (Aggregated)', fontsize=16)
+        shap.summary_plot(shap_values, self.X, feature_names=self.X.columns, show=False)
+        plt.title(f'SHAP Summary Plot (Aggregated)', fontsize=16)
         if save_results:
             plt.subplots_adjust(top=0.90)
             if iter_idx is not None:
                 save_path = self.save_path + "/singleSHAPs"
                 os.makedirs(save_path, exist_ok=True)
-                plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_{iter_idx}.png')
+                plt.savefig(f'{save_path}/{self.target_name}_shap_aggregated_beeswarm_{iter_idx}.png')
             elif ablation_idx is not None:
                 save_path = self.save_path + "/ablationSHAPs"
                 os.makedirs(save_path, exist_ok=True)
-                plt.savefig(f'{save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm_ablation_{ablation_idx}.png')
+                plt.savefig(f'{save_path}/{self.target_name}_shap_aggregated_beeswarm_ablation_{ablation_idx}.png')
             else:
-                plt.savefig(f'{self.save_path}/{self.identifier}_{self.target_name}_shap_aggregated_beeswarm.png')
+                plt.savefig(f'{self.save_path}/{self.target_name}_shap_aggregated_beeswarm.png')
             plt.close()
             
         if iter_idx is None:
