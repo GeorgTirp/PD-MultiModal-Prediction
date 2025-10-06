@@ -357,7 +357,7 @@ class BaseRegressionModel:
             if folds == -1:
                 outer_cv = LeaveOneGroupOut()
             else:
-                outer_cv = GroupKFold(n_splits=folds, random_state=self.random_state)
+                outer_cv = GroupKFold(n_splits=folds,)
             split_args = (self.X, self.y)
             split_kwargs = {'groups': self.Pat_IDs}
 
@@ -826,10 +826,18 @@ class BaseRegressionModel:
             train_rmse_list.append(np.mean(np.sqrt(ensemble_train_mse)))
             test_rmse_list.append(np.mean(np.sqrt(ensemble_test_mse)))
 
-            r_std_list.append(np.var(ensemble_rs))
-            rho_std_list.append(np.var(ensemble_rhos))
-            train_rmse_std_list.append(np.var(np.sqrt(ensemble_train_mse)))
-            test_rmse_std_list.append(np.var(np.sqrt(ensemble_test_mse)))
+            r_std_list.append(np.std(ensemble_rs, ddof=1) if len(ensemble_rs) > 1 else 0.0)
+            rho_std_list.append(np.std(ensemble_rhos, ddof=1) if len(ensemble_rhos) > 1 else 0.0)
+            train_rmse_std_list.append(np.std(train_rmse_list, ddof=1) if len(train_rmse_list) > 1 else 0.0)
+            test_rmse_std_list.append(np.std(test_rmse_list, ddof=1) if len(test_rmse_list) > 1 else 0.0)
+
+            def ci95(x):
+                if len(x) <= 1: return 0.0
+                return 1.96 * np.std(x, ddof=1) / np.sqrt(len(x))
+            r_err  = ci95(ensemble_rs)
+            rho_err = ci95(ensemble_rhos)
+            train_rmse_err = ci95(ensemble_train_mse)
+            test_rmse_err = ci95(ensemble_test_mse)
 
             # Final ensemble plot
             if self.model_name == "NGBoost":
@@ -866,7 +874,7 @@ class BaseRegressionModel:
 
         # R Score plot with std as whiskers
         plt.figure(figsize=(6, 4))
-        plt.errorbar(x, rs, yerr=r_std_list, label="R Score", marker='o', capsize=4)
+        plt.errorbar(x, rs, yerr=r_err, label="R Score", marker='o', capsize=4)
         plt.xlabel("Number of removed features")
         plt.ylabel("Pearson-R Score")
         plt.title("Pearson-R Scores Over Feature Ablation")
@@ -877,7 +885,7 @@ class BaseRegressionModel:
 
         # Rho plot with std as whiskers
         plt.figure(figsize=(6, 4))
-        plt.errorbar(x, rhos, yerr=rho_std_list, label="Spearman-Rho", marker='o', capsize=4)
+        plt.errorbar(x, rhos, yerr=rho_err, label="Spearman-Rho", marker='o', capsize=4)
         plt.xlabel("Number of removed features")
         plt.ylabel("Spearman-Rho Score")
         plt.title("Spearman-Rho Scores Over Feature Ablation")
@@ -888,8 +896,8 @@ class BaseRegressionModel:
 
         # RMSE plot with std as whiskers
         plt.figure(figsize=(6, 4))
-        plt.errorbar(x, test_rmse_list, yerr=test_rmse_std_list, label="Test RMSE", marker='o', capsize=4)
-        plt.errorbar(x, train_rmse_list, yerr=train_rmse_std_list, label="Train RMSE", marker='o', capsize=4)
+        plt.errorbar(x, test_rmse_list, yerr=test_rmse_err, label="Test RMSE", marker='o', capsize=4)
+        plt.errorbar(x, train_rmse_list, yerr=train_rmse_err, label="Train RMSE", marker='o', capsize=4)
         plt.xlabel("Number of removed features")
         plt.ylabel("RMSE")
         plt.title("Train and Test RMSE Over Feature Ablation")
