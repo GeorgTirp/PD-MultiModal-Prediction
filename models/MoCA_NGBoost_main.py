@@ -29,6 +29,7 @@ def outlier_removal(
     cols: List[str], 
     Q1: float = 0.25, 
     Q3: float = 0.75, 
+    iqr_mult: float = 1.5,
     logging=None
 ) -> pd.DataFrame:
     """
@@ -50,7 +51,7 @@ def outlier_removal(
     IQR = Q3_vals - Q1_vals
 
     # Identify outliers
-    is_outlier = (data_df[cols] < (Q1_vals - 3 * IQR)) | (data_df[cols] > (Q3_vals + 3 * IQR))
+    is_outlier = (data_df[cols] < (Q1_vals - iqr_mult * IQR)) | (data_df[cols] > (Q3_vals + iqr_mult * IQR))
 
     # Count outliers
     outlier_counts = is_outlier.sum()
@@ -243,7 +244,8 @@ def main(
         # Left locations in our dataframe is negated! otherwise sweetspot is [-12.08, -13.94,-6.74]
         data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [12.08, -13.94,-6.74])
         data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [11.90, -13.28, -6.74])
-
+    data_df["MoCA_diff"] = data_df["MoCA_sum_post"] - data_df["MoCA_sum_pre"]
+    data_df["MoCA_ratio"] = (data_df["MoCA_sum_post"] - data_df["MoCA_sum_pre"]) / (data_df["MoCA_sum_post"] + data_df["MoCA_sum_pre"])
     # Define target and features
     Feature_Selection['target'] = target_col
     Feature_Selection['features'] = feature_cols
@@ -279,12 +281,13 @@ def main(
     param_grid_ngb = {
     #'Dist': [NormalInverseGamma],
     #'Score' : [NIGLogScore],
-    'n_estimators': [300, 400, 500, 600],
-    'learning_rate': [0.01, 0.1],
-    'Base__max_depth': [ 5, 6, 7],
-    'Score__evid_strength': [0.1, 0.05,],
-    'Score__kl_strength': [0.005, 0.001],
+    'n_estimators': [200, 300, 400, 500, 600],
+    'learning_rate': [0.01, 0.05, 0.2],
+    'Base__max_depth': [3, 4, 5, 6],
+    'Score__evid_strength': [0.1, 0.05],
+    'Score__kl_strength': [ 0.05, 0.01],
     }
+
 
     
     
@@ -337,15 +340,16 @@ if __name__ == "__main__":
 
     exp_infos = [
                 {
-                'exp_number' : 1,
+                'exp_number' : 2,
                 'target_col' :"MoCA_sum_post", 
                 'feature_cols':[ 
                             "TimeSinceSurgery",
                             "AGE_AT_OP",
                             "TimeSinceDiag",
-                            "SEX",
+                            #"SEX",
                             "UPDRS_reduc_pre",
                             #"MoCA_sum_pre",
+                            #"MoCA_diff",
                             "MoCA_Executive_sum_pre",
                             #"MoCA_Executive_sum_post",
                             "MoCA_Erinnerung_sum_pre",
@@ -358,7 +362,7 @@ if __name__ == "__main__":
                             #"MoCA_Benennen_sum_post",
                             "MoCA_Abstraktion_sum_pre",
                             #"MoCA_Abstraktion_sum_post",
-                            "MoCA_Orientierung_sum_pre",
+                            #"MoCA_Orientierung_sum_pre",
                             #"MoCA_Orientierung_sum_post",
                             "LEDD_reduc",
                             "L_distance",
@@ -405,7 +409,18 @@ if __name__ == "__main__":
             out=f"results/{exp_number}_{target_col}_stim/level2/NGBoost", 
             folds=10, 
             tune_folds=5, 
-            tune=False, 
-            members=2,
+            tune=True, 
+            members=10,
             uncertainty=False, 
             filtered_data_path="filtered_MoCA_stim.csv")
+
+
+
+
+
+
+
+
+
+
+

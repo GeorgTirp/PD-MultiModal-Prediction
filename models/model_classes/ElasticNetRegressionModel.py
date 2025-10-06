@@ -193,13 +193,12 @@ class ElasticNetRegressionModel(BaseRegressionModel):
         """
         # choose grid: passed-in overrides class-level
         grid = param_grid if param_grid is not None else (getattr(self, "hparam_grid", None) or {})
-
+        rs = getattr(self, 'random_state', 42)
         # CV splitter
         if folds == -1:
             cv = LeaveOneOut() if groups is None else LeaveOneGroupOut()
         else:
             if groups is None:
-                rs = getattr(self, 'random_state', 42)
                 cv = KFold(n_splits=folds, shuffle=True, random_state=rs)
             else:
                 # GroupKFold has no shuffle/random_state

@@ -25,6 +25,7 @@ def outlier_removal(
     cols: List[str], 
     Q1: float = 0.25, 
     Q3: float = 0.75, 
+    iqr_mult: float = 1.5,
     logging=None
 ) -> pd.DataFrame:
     """
@@ -46,7 +47,7 @@ def outlier_removal(
     IQR = Q3_vals - Q1_vals
 
     # Identify outliers
-    is_outlier = (data_df[cols] < (Q1_vals - 3 * IQR)) | (data_df[cols] > (Q3_vals + 3 * IQR))
+    is_outlier = (data_df[cols] < (Q1_vals - iqr_mult * IQR)) | (data_df[cols] > (Q3_vals + iqr_mult * IQR))
 
     # Count outliers
     outlier_counts = is_outlier.sum()
@@ -71,7 +72,6 @@ def outlier_removal(
         logging.info(f"Remaining rows after outlier removal: {len(data_df_clean)}")
 
     return data_df_clean
-
 
 def signed_euclidean_distance(points: np.ndarray, sweetspot: np.ndarray) -> np.ndarray:
     """
@@ -237,9 +237,13 @@ def main(
     
     if 'X_L' in data_df.columns:
         # Left locations in our dataframe is negated! otherwise sweetspot is [-12.08, -13.94,-6.74]
-        data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [12.08, -13.94,-6.74])
-        data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [11.90, -13.28, -6.74])
+        data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [11.55, -14.37, -8.80])
+        data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [10.47, -13.56, -9.08])
+    data_df['L_distance'] = np.random.permutation(data_df['L_distance'].values)
+    data_df['R_distance'] = np.random.permutation(data_df['R_distance'].values)
+    data_df["STIM_distance"] = (data_df['L_distance'] + data_df['R_distance']) / 2
     data_df["MoCA_diff"] = data_df["MoCA_sum_post"] - data_df["MoCA_sum_pre"]
+    data_df["MoCA_ratio"] = (data_df["MoCA_sum_post"] - data_df["MoCA_sum_pre"]) / (data_df["MoCA_sum_post"] + data_df["MoCA_sum_pre"])
     # Define target and features
     Feature_Selection['target'] = target_col
     Feature_Selection['features'] = feature_cols
@@ -309,6 +313,7 @@ def main(
         top_n=-1,
         param_grid=param_grid_xgb,
         logging=logging,
+        #standardize="zscore",
         split_shaps=True,
         random_state=42)
 
@@ -321,7 +326,7 @@ def main(
         uncertainty=uncertainty)
 
     ######
-    model.plot(f"Actual vs. Prediction (NGBoost)")
+    model.plot(f"Actual vs. Prediction (XGBoost)")
     _,_, removals= model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds, members=members)
     #model.calibration_analysis()
     
@@ -334,16 +339,17 @@ if __name__ == "__main__":
 
     exp_infos = [
                 {
-                'exp_number' : 1,
-                'target_col' :"MoCA_sum_post", 
+                'exp_number' : 4,
+                'target_col' : "MoCA_sum_post", 
                 'feature_cols':[ 
                             "TimeSinceSurgery",
                             "AGE_AT_OP",
                             "TimeSinceDiag",
-                            "SEX",
+                            #"SEX",
                             "UPDRS_reduc_pre",
                             #"MoCA_sum_pre",
                             #"MoCA_diff",
+                            #"MoCA_ratio",
                             "MoCA_Executive_sum_pre",
                             #"MoCA_Executive_sum_post",
                             "MoCA_Erinnerung_sum_pre",
@@ -356,11 +362,12 @@ if __name__ == "__main__":
                             #"MoCA_Benennen_sum_post",
                             "MoCA_Abstraktion_sum_pre",
                             #"MoCA_Abstraktion_sum_post",
-                            "MoCA_Orientierung_sum_pre",
+                            #"MoCA_Orientierung_sum_pre",
                             #"MoCA_Orientierung_sum_post",
-                            #"LEDD_reduc",
-                            #"L_distance",
-                            #"R_distance"
+                            "LEDD_reduc",
+                            #"STIM_distance",
+                            "L_distance",
+                            "R_distance"
                             ] ,
                 'outlier_cols':[ 
                             "TimeSinceSurgery",
@@ -383,9 +390,10 @@ if __name__ == "__main__":
                             #"MoCA_Abstraktion_sum_post",
                             #"MoCA_Orientierung_sum_pre",
                             #"MoCA_Orientierung_sum_post",
-                            #"LEDD_reduc",
-                            #"L_distance",
-                            #"R_distance"
+                            "LEDD_reduc",
+                            #"STIM_distance",
+                            "L_distance",
+                            "R_distance"
                             ] ,
                 },
     ]
@@ -396,18 +404,14 @@ if __name__ == "__main__":
         feature_cols = exp_info['feature_cols']
         outlier_cols = exp_info['outlier_cols']
         main(folder_path=folder_path, 
-            data_path="data/MoCA/level2/moca_updrs.csv", 
+            data_path="data/MoCA/level2/moca_stim.csv", 
             feature_cols=feature_cols, 
             target_col=target_col, 
             outlier_cols=outlier_cols,
-            out=f"results/{exp_number}_{target_col}_updrs/level2/XGBoost", 
+            out=f"results/{exp_number}_{target_col}_stim_random/level2/XGBoost", 
             folds=10, 
             tune_folds=5, 
             tune=True, 
             members=10,
             uncertainty=False, 
-            filtered_data_path="filtered_MoCA_updrs.csv")
-
-
-
-
+            filtered_data_path="filtered_MoCA_stim.csv")
