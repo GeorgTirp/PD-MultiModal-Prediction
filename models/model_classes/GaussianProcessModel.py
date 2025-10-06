@@ -33,6 +33,90 @@ from scipy.stats import pearsonr, spearmanr
 # Custom Base Model
 from model_classes.BaseRegressionModel import BaseRegressionModel
 
+
+def _bayes_cg(A: np.ndarray,
+              b: np.ndarray,
+              *,
+              maxiter: Optional[int] = None,
+              tol: float = 1e-8) -> Tuple[np.ndarray, Dict[str, object]]:
+    """
+    Bayesian CG with calibrated prior V0 = A^{-1}.
+    Returns:
+      x_n : CG mean iterate (solution estimate)
+      info:
+        iterations          : number of iterations
+        residual_norm       : ||r_n||
+        S                   : np.ndarray of shape (n, m) with CG search dirs p_i
+        d                   : np.ndarray of shape (m,) with d_i = p_i^T A p_i
+        qform_fn(v)         : callable computing v^T V_n v = Σ (p_i^T v)^2 / d_i
+    """
+    if maxiter is None:
+        maxiter = A.shape[0]
+
+    x = np.zeros_like(b)
+    r = b.copy()
+    p = r.copy()
+
+    b_norm = float(np.linalg.norm(b)) + 1e-12
+    rs_old = float(r @ r)
+
+    S_cols = []
+    d_vals = []
+
+    iters = 0
+    for iters in range(1, maxiter + 1):
+        Ap = A @ p
+        denom = float(p @ Ap)                # d_i = p^T A p  (A-orthogonality diag)
+        if denom <= 0:
+            warnings.warn("CG encountered non-positive curvature; aborting early.", RuntimeWarning)
+            break
+
+        # save calibrated ingredients
+        S_cols.append(p.copy())
+        d_vals.append(denom)
+
+        alpha = rs_old / denom
+        x = x + alpha * p
+        r = r - alpha * Ap
+        rs_new = float(r @ r)
+        if np.sqrt(rs_new) <= tol * b_norm:
+            rs_old = rs_new
+            break
+        beta = rs_new / rs_old
+        p = r + beta * p
+        rs_old = rs_new
+
+    residual_norm = np.sqrt(rs_old)
+
+    # stack S and d
+    if len(S_cols) > 0:
+        S = np.column_stack(S_cols)                       # (n, m)
+        d = np.array(d_vals, dtype=b.dtype)               # (m,)
+    else:
+        S = np.zeros((A.shape[0], 0), dtype=b.dtype)
+        d = np.zeros((0,), dtype=b.dtype)
+
+    def qform(v: np.ndarray) -> float:
+        """
+        Compute v^T V_n v for V_n = S (S^T A S)^{-1} S^T.
+        Because S^T A S is diagonal with entries d_i, this is:
+            sum_i ( (p_i^T v)^2 / d_i ).
+        """
+        if d.size == 0:
+            return 0.0
+        t = S.T @ v                    # (m,)
+        return float((t * t / d).sum())
+
+    info = {
+        "iterations": float(iters),
+        "residual_norm": residual_norm,
+        "S": S,
+        "d": d,
+        "qform_fn": qform,             # calibrated quadratic-form accessor
+    }
+    return x, info
+
+
 jax.config.update("jax_enable_x64", True)
 
 
@@ -64,6 +148,10 @@ class JaxGaussianProcessRegressor:
         max_iters: int = 150,
         learning_rate: float = 0.05,
         random_state: int = 0,
+        solver: str = "bayes_cg",
+        bayes_cg_maxiter: Optional[int] = None,
+        bayes_cg_tol: float = 1e-6,
+        bayes_cg_prior_var: float = 1.0,
     ) -> None:
         self.nu = float(nu)
         self.normalize_y = bool(normalize_y)
@@ -73,6 +161,13 @@ class JaxGaussianProcessRegressor:
         self.max_iters = int(max_iters)
         self.learning_rate = float(learning_rate)
         self.random_state = int(random_state)
+        solver = solver.lower()
+        if solver not in {"cholesky", "bayes_cg"}:
+            raise ValueError("solver must be 'cholesky' or 'bayes_cg'")
+        self.solver = solver
+        self.bayes_cg_maxiter = bayes_cg_maxiter
+        self.bayes_cg_tol = bayes_cg_tol
+        self.bayes_cg_prior_var = bayes_cg_prior_var
 
         self.alpha_vector: Optional[np.ndarray] = None
         self._is_fit: bool = False
@@ -86,6 +181,8 @@ class JaxGaussianProcessRegressor:
         self.L_: Optional[jnp.ndarray] = None
         self.alpha_: Optional[jnp.ndarray] = None
         self.n_features_: Optional[int] = None
+        self.K_train_: Optional[np.ndarray] = None
+        self.bayes_cg_diagnostics_: Optional[Dict[str, float]] = None
 
         self._init_matern_fn()
 
@@ -325,15 +422,29 @@ class JaxGaussianProcessRegressor:
             diag = jnp.full((n_samples,), diag_noise)
         K = K + jnp.diag(diag + self.jitter)
 
-        L = jnp.linalg.cholesky(K)
-        alpha = jsp_linalg.solve_triangular(L, y_j, lower=True)
-        alpha = jsp_linalg.solve_triangular(L.T, alpha, lower=False)
-
         self.X_train_ = X_j
         self.params_ = params
         self.theta_ = best_theta
-        self.L_ = L
-        self.alpha_ = alpha
+        self.K_train_ = np.asarray(K)
+        self.bayes_cg_diagnostics_ = None
+
+        if self.solver == "cholesky":
+            L = jnp.linalg.cholesky(K)
+            alpha = jsp_linalg.solve_triangular(L, y_j, lower=True)
+            alpha = jsp_linalg.solve_triangular(L.T, alpha, lower=False)
+            self.L_ = L
+            self.alpha_ = alpha
+        else:
+            alpha_np, info = _bayes_cg(
+            self.K_train_,
+            np.asarray(y_j),
+            maxiter=self.bayes_cg_maxiter,
+            tol=self.bayes_cg_tol,
+        )
+        self.alpha_ = jnp.asarray(alpha_np)
+        self.L_ = None
+        self.bayes_cg_diagnostics_ = info
+
         self._is_fit = True
 
         return self
@@ -350,17 +461,44 @@ class JaxGaussianProcessRegressor:
         mean = K_trans.T @ self.alpha_
 
         if return_std:
-            v = jsp_linalg.solve_triangular(self.L_, K_trans, lower=True)
-            diag = self._kernel_diag(X_j, params) + (params.noise_scale**2 + self.base_alpha)
-            var = diag - jnp.sum(v**2, axis=0)
-            var = jnp.maximum(var, 1e-12)
-            std = jnp.sqrt(var) * self.y_scale_
+            if self.solver == "cholesky":
+                v = jsp_linalg.solve_triangular(self.L_, K_trans, lower=True)
+                diag = self._kernel_diag(X_j, params) + (params.noise_scale**2 + self.base_alpha)
+                var = diag - jnp.sum(v**2, axis=0)
+                var = jnp.maximum(var, 1e-12)
+                std = jnp.sqrt(var) * self.y_scale_
+            else:
+                diag = self._kernel_diag(X_j, params) + (params.noise_scale**2 + self.base_alpha)
+                K_trans_np = np.asarray(K_trans)
+            
+                var_vals = []
+                for col in range(K_trans_np.shape[1]):
+                    rhs = K_trans_np[:, col]
+            
+                    # BayesCG solve for A x ≈ rhs, and get calibrated V_n ingredients
+                    sol, info = _bayes_cg(
+                        self.K_train_,
+                        rhs,
+                        maxiter=self.bayes_cg_maxiter,
+                        tol=self.bayes_cg_tol,
+                    )
+            
+                    # Calibrated correction: rhs^T V_n rhs = qform(rhs)
+                    q_corr = info["qform_fn"](rhs)
+            
+                    # GP var with solver uncertainty: k(x*,x*) - rhs^T A^{-1} rhs
+                    # Approximate A^{-1} term with CG mean and add BayesCG calibration:
+                    #   rhs^T A^{-1} rhs  ≈  rhs^T sol  -  rhs^T V_n rhs
+                    # so: diag - rhs^T A^{-1} rhs  ≈  diag - rhs^T sol + q_corr
+                    var_i = float(diag[col] - rhs @ sol + q_corr)
+                    var_vals.append(max(var_i, 1e-12))
+            
+                std = np.sqrt(np.asarray(var_vals)) * self.y_scale_
         mean = mean * self.y_scale_ + self.y_mean_
 
         mean_np = np.asarray(mean)
         if return_std:
-            std_np = np.asarray(std)
-            return mean_np, std_np
+            return mean_np, np.asarray(std)
         return mean_np
 
     def negative_log_predictive_density(self, X: np.ndarray, y: np.ndarray) -> float:
@@ -412,6 +550,10 @@ class GaussianProcessModel(BaseRegressionModel):
             "nu": 1.5,
             "normalize_y": False,
             "n_restarts_optimizer": 10,
+            "solver": "bayes_cg",
+            "bayes_cg_maxiter": None,
+            "bayes_cg_tol": 1e-6,
+            "bayes_cg_prior_var": 1.0,
         }
         self.gp_hparams = default_hparams.copy()
         if hparams:
@@ -419,6 +561,7 @@ class GaussianProcessModel(BaseRegressionModel):
 
         self.param_grid = hparam_grid if hparam_grid is not None else {}
         self._hetero_alpha: Optional[np.ndarray] = None
+        self.solve_mode = self.gp_hparams.get("solver", "bayes_cg")
 
         p = len(self.feature_selection["features"])
         self.kernel_info = {"input_dim": p, "nu": self.gp_hparams["nu"]}
@@ -433,13 +576,18 @@ class GaussianProcessModel(BaseRegressionModel):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _build_model(self, params: dict) -> JaxGaussianProcessRegressor:
+    def _build_model(self, params: dict, solver: Optional[str] = None) -> JaxGaussianProcessRegressor:
+        solver_choice = solver if solver is not None else params.get("solver", "bayes_cg")
         model = JaxGaussianProcessRegressor(
             nu=params.get("nu", 1.5),
             normalize_y=params.get("normalize_y", False),
             n_restarts_optimizer=params.get("n_restarts_optimizer", 10),
             alpha=1e-10,
             random_state=getattr(self, "random_state", 0),
+            solver=solver_choice,
+            bayes_cg_maxiter=params.get("bayes_cg_maxiter"),
+            bayes_cg_tol=params.get("bayes_cg_tol", 1e-6),
+            bayes_cg_prior_var=params.get("bayes_cg_prior_var", 1.0),
         )
         if self._hetero_alpha is not None:
             model.alpha_vector = self._hetero_alpha
@@ -624,7 +772,7 @@ class GaussianProcessModel(BaseRegressionModel):
         for tr_idx, val_idx in splitter.split(*split_args, **split_kwargs):
             X_train, X_val = X_values[tr_idx], X_values[val_idx]
             y_train, y_val = y_values[tr_idx], y_values[val_idx]
-            model = self._build_model(params)
+            model = self._build_model(params, solver="cholesky")
             if alpha_vec is not None:
                 model.alpha_vector = alpha_vec[tr_idx]
             model.fit(X_train, y_train)
@@ -677,6 +825,8 @@ class GaussianProcessModel(BaseRegressionModel):
             best_params = self.gp_hparams.copy()
         else:
             self.gp_hparams.update(best_params)
+
+        self.solve_mode = self.gp_hparams.get("solver", self.solve_mode)
 
         self.model = self._build_model(self.gp_hparams)
         self.model.fit(X_values, y_values)
