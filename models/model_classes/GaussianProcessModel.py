@@ -151,7 +151,6 @@ class JaxGaussianProcessRegressor:
         solver: str = "bayes_cg",
         bayes_cg_maxiter: Optional[int] = None,
         bayes_cg_tol: float = 1e-6,
-        bayes_cg_prior_var: float = 1.0,
     ) -> None:
         self.nu = float(nu)
         self.normalize_y = bool(normalize_y)
@@ -167,7 +166,6 @@ class JaxGaussianProcessRegressor:
         self.solver = solver
         self.bayes_cg_maxiter = bayes_cg_maxiter
         self.bayes_cg_tol = bayes_cg_tol
-        self.bayes_cg_prior_var = bayes_cg_prior_var
 
         self.alpha_vector: Optional[np.ndarray] = None
         self._is_fit: bool = False
@@ -436,14 +434,14 @@ class JaxGaussianProcessRegressor:
             self.alpha_ = alpha
         else:
             alpha_np, info = _bayes_cg(
-            self.K_train_,
-            np.asarray(y_j),
-            maxiter=self.bayes_cg_maxiter,
-            tol=self.bayes_cg_tol,
-        )
-        self.alpha_ = jnp.asarray(alpha_np)
-        self.L_ = None
-        self.bayes_cg_diagnostics_ = info
+                self.K_train_,
+                np.asarray(y_j),
+                maxiter=self.bayes_cg_maxiter,
+                tol=self.bayes_cg_tol,
+            )
+            self.alpha_ = jnp.asarray(alpha_np)
+            self.L_ = None
+            self.bayes_cg_diagnostics_ = info
 
         self._is_fit = True
 
@@ -553,7 +551,7 @@ class GaussianProcessModel(BaseRegressionModel):
             "solver": "bayes_cg",
             "bayes_cg_maxiter": None,
             "bayes_cg_tol": 1e-6,
-            "bayes_cg_prior_var": 1.0,
+            "alpha": 1e-10, 
         }
         self.gp_hparams = default_hparams.copy()
         if hparams:
@@ -582,16 +580,16 @@ class GaussianProcessModel(BaseRegressionModel):
             nu=params.get("nu", 1.5),
             normalize_y=params.get("normalize_y", False),
             n_restarts_optimizer=params.get("n_restarts_optimizer", 10),
-            alpha=1e-10,
+            alpha=params.get("alpha", self.gp_hparams.get("alpha", 1e-10)),  # <-- pass through alpha
             random_state=getattr(self, "random_state", 0),
             solver=solver_choice,
             bayes_cg_maxiter=params.get("bayes_cg_maxiter"),
             bayes_cg_tol=params.get("bayes_cg_tol", 1e-6),
-            bayes_cg_prior_var=params.get("bayes_cg_prior_var", 1.0),
         )
         if self._hetero_alpha is not None:
             model.alpha_vector = self._hetero_alpha
         return model
+
 
     @staticmethod
     def _nlpd_scorer(est: JaxGaussianProcessRegressor, X: pd.DataFrame, y: pd.Series) -> float:
@@ -772,7 +770,8 @@ class GaussianProcessModel(BaseRegressionModel):
         for tr_idx, val_idx in splitter.split(*split_args, **split_kwargs):
             X_train, X_val = X_values[tr_idx], X_values[val_idx]
             y_train, y_val = y_values[tr_idx], y_values[val_idx]
-            model = self._build_model(params, solver="cholesky")
+            solver_choice = params.get("solver", "cholesky")
+            model = self._build_model(params, solver=solver_choice)
             if alpha_vec is not None:
                 model.alpha_vector = alpha_vec[tr_idx]
             model.fit(X_train, y_train)
@@ -801,25 +800,40 @@ class GaussianProcessModel(BaseRegressionModel):
         if groups is not None:
             groups_array = groups.values if hasattr(groups, "values") else np.asarray(groups)
 
-        nu_vals = egrid.get('nu', [self.gp_hparams.get('nu', 1.5)])
-        norm_vals = egrid.get('normalize_y', [self.gp_hparams.get('normalize_y', False)])
-        restart_vals = egrid.get('n_restarts_optimizer', [self.gp_hparams.get('n_restarts_optimizer', 10)])
+        # Build joint search space including solver-specific knobs if provided
+        search_space: Dict[str, list] = {}
+        for key, values in egrid.items():
+            if not isinstance(values, (list, tuple, np.ndarray)):
+                values = [values]
+            search_space[key] = list(values)
+
+        defaults = {
+            "nu": self.gp_hparams.get("nu", 1.5),
+            "normalize_y": self.gp_hparams.get("normalize_y", False),
+            "n_restarts_optimizer": self.gp_hparams.get("n_restarts_optimizer", 10),
+            "solver": self.gp_hparams.get("solver", "bayes_cg"),
+            "bayes_cg_tol": self.gp_hparams.get("bayes_cg_tol", 1e-6),
+            "bayes_cg_maxiter": self.gp_hparams.get("bayes_cg_maxiter"),
+            "alpha": self.gp_hparams.get("alpha", 1e-10),   # <-- NEW
+        }
+        for key, default_val in defaults.items():
+            if key not in search_space and default_val is not None:
+                search_space[key] = [default_val]
+
+        grid_keys = list(search_space.keys())
 
         best_score = np.inf
-        best_params = None
+        best_params: Optional[Dict[str, Union[int, float, bool, str, None]]] = None
 
-        for nu, norm_y, n_restart in product(nu_vals, norm_vals, restart_vals):
-            params = {
-                "nu": nu,
-                "normalize_y": norm_y,
-                "n_restarts_optimizer": n_restart,
-            }
+        for combo in product(*[search_space[k] for k in grid_keys]):
+            params = self.gp_hparams.copy()
+            params.update({k: combo[idx] for idx, k in enumerate(grid_keys)})
             score = self._evaluate_params(X_values, y_values, folds, groups_array, params)
             if hasattr(self, 'logging') and self.logging:
                 self.logging.info(f"Tuning params {params} | NLPD={score:.5f}")
             if score < best_score:
                 best_score = score
-                best_params = params
+                best_params = params.copy()
 
         if best_params is None:
             best_params = self.gp_hparams.copy()
@@ -830,8 +844,8 @@ class GaussianProcessModel(BaseRegressionModel):
 
         self.model = self._build_model(self.gp_hparams)
         self.model.fit(X_values, y_values)
-        if hasattr(self, 'logging') and self.logging:
-            self.logging.info(f"Best parameters found: {self.gp_hparams}")
-            self.logging.info(f"Best CV score (NLPD): {best_score:.6f}")
+        #if hasattr(self, 'logging') and self.logging:
+        #    self.logging.info(f"Best parameters found: {self.gp_hparams}")
+        #    self.logging.info(f"Best CV score (NLPD): {best_score:.6f}")
 
         return self.gp_hparams

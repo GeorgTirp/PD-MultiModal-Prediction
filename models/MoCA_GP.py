@@ -224,10 +224,14 @@ def main(
     #    'normalize_y': [False],
     #    'n_restarts_optimizer': [0, 3],
     #}
+    N = len(data_df)
     param_grid = {
-        'nu': [0.5, 1.5, 2.5],          # smoothness
+        'nu': [1.5, 2.5,],          # smoothness
         'normalize_y': [False],         # try both; centering helps stability
-        'n_restarts_optimizer': [3, 5, 10],   # more restarts for ARD
+        'n_restarts_optimizer': [3, 5],
+        "bayes_cg_tol": [1e-7, 1e-6,],           # cg tolerance
+        "bayes_cg_maxiter": [int(0.8*N) ,int(0.7*N)],
+        "alpha": [1e-6, 1e-4, 1e-2],
     }
     params = {
     'nu': 1.5,
