@@ -7,6 +7,8 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"     # Apple's Accelerate framework
 os.environ["NUMEXPR_NUM_THREADS"] = "1"  
 #import torch
 #torch.set_num_threads(1)
+import json
+from collections import Counter
 import pandas as pd
 from sklearn.model_selection import train_test_split, KFold, LeaveOneOut
 from sklearn.metrics import mean_squared_error
@@ -63,6 +65,7 @@ class BaseRegressionModel:
             top_n: int = 10,
             logging = None,
             standardize: str = "",
+            standardize_features: str = "",
             Pat_IDs = None,
             split_shaps=False,
             random_state=420) -> None:
@@ -105,7 +108,17 @@ class BaseRegressionModel:
             self.scaler = RobustTanhScaler()
         elif standardize == "sigmoid":
             self.scaler = RobustSigmoidScaler()
-        else: self.scaler = None
+        else: 
+            self.scaler = None
+
+        if standardize_features == "zscore":
+            self.feature_scaler = ZScoreScaler()
+        elif standardize_features == "tanh":
+            self.feature_scaler = RobustTanhScaler()
+        elif standardize_features == "sigmoid":
+            self.feature_scaler = RobustSigmoidScaler()
+        else:
+            self.feature_scaler = None
 
         if not os.path.exists(save_path):
             os.makedirs(save_path)
@@ -141,7 +154,16 @@ class BaseRegressionModel:
         self.logging.info("Finished prediction.")
         return pred
 
-    def evaluate(self, folds=10, get_shap=True, tune=False, tune_folds=10, nested=False, uncertainty=False) -> Dict:
+    def evaluate(
+        self,
+        folds: int = 10,
+        get_shap: bool = True,
+        tune: bool = False,
+        tune_folds: int = 10,
+        nested: bool = False,
+        uncertainty: bool = False,
+        safe_best_hparams: bool = False,
+    ) -> Dict:
         """
         Evaluate model performance using cross-validation, with options for tuning and SHAP explanation.
 
@@ -156,8 +178,18 @@ class BaseRegressionModel:
         Returns:
             dict: Dictionary of evaluation metrics such as MSE, R², p-values, and SHAP values.
         """
-        if nested==True:
-            return self.nested_eval(folds, get_shap, tune, tune_folds, uncertainty=uncertainty)
+        if safe_best_hparams and not nested:
+            raise ValueError("safe_best_hparams=True requires nested=True.")
+
+        if nested:
+            return self.nested_eval(
+                folds,
+                get_shap,
+                tune,
+                tune_folds,
+                uncertainty=uncertainty,
+                safe_best_hparams=safe_best_hparams,
+            )
         else:
             return self.sequential_eval(folds, get_shap, tune, tune_folds)
         
@@ -326,7 +358,8 @@ class BaseRegressionModel:
             tune_folds=10, 
             uncertainty=False, 
             ablation_idx=None,
-            member_idx=None) -> Dict:
+            member_idx=None,
+            safe_best_hparams: bool = False) -> Dict:
         """
         Perform nested cross-validation evaluation with optional tuning, SHAP, uncertainty estimation, and ablation.
 
@@ -381,6 +414,31 @@ class BaseRegressionModel:
         iter_idx = 0
         # Farzin was here
         #cv_r_values = []
+
+        hyperparam_votes = []
+        if safe_best_hparams:
+            def _to_serializable(value):
+                if isinstance(value, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+                    return int(value)
+                if isinstance(value, (np.floating, np.float64, np.float32, np.float16)):
+                    return float(value)
+                if isinstance(value, np.ndarray):
+                    return [_to_serializable(v) for v in value.tolist()]
+                if isinstance(value, (list, tuple)):
+                    return [_to_serializable(v) for v in value]
+                if isinstance(value, dict):
+                    return {k: _to_serializable(v) for k, v in value.items()}
+                if hasattr(value, "item"):
+                    try:
+                        return value.item()
+                    except Exception:
+                        return str(value)
+                if isinstance(value, (str, bool)) or value is None:
+                    return value
+                return str(value)
+
+            def _normalize_params(params: Dict) -> Dict:
+                return {k: _to_serializable(v) for k, v in params.items()}
         
         # 2) Outer CV loop
         for train_idx, val_idx in tqdm(
@@ -401,12 +459,19 @@ class BaseRegressionModel:
                 y_train_kf = self.scaler.transform(y_train_kf)
                 y_val_kf = self.scaler.transform(y_val_kf)
 
+            if self.feature_scaler is not None:
+                self.feature_scaler.fit(X_train_kf)
+                X_train_kf = self.feature_scaler.transform(X_train_kf)
+                X_val_kf = self.feature_scaler.transform(X_val_kf)
+
             groups_tr = None
             if self.Pat_IDs is not None:
                 groups_tr = self.Pat_IDs.iloc[train_idx].to_numpy()
 
+            best_params = None
+
             if tune:
-                self.tune_hparams(
+                best_params = self.tune_hparams(
                     X_train_kf, 
                     y_train_kf, 
                     self.param_grid, 
@@ -418,6 +483,15 @@ class BaseRegressionModel:
                     self.model.fit(X_train_kf, y_train_kf, sample_weight=w_train)
                 else:
                     self.model.fit(X_train_kf, y_train_kf)
+                if safe_best_hparams and hasattr(self.model, "get_params"):
+                    try:
+                        best_params = self.model.get_params()
+                    except Exception:
+                        best_params = None
+
+            if safe_best_hparams and best_params:
+                normalized_params = _normalize_params(best_params)
+                hyperparam_votes.append(normalized_params)
 
             pred = self.model.predict(X_val_kf)
             pred_train = self.model.predict(X_train_kf)
@@ -425,6 +499,10 @@ class BaseRegressionModel:
             if self.scaler is not None:
                 pred = self.scaler.inverse_transform(pred)
                 y_val_kf = self.scaler.inverse_transform(y_val_kf)
+
+            if self.feature_scaler is not None:
+                X_val_kf = self.feature_scaler.inverse_transform(X_val_kf)
+                X_train_kf = self.feature_scaler.inverse_transform(X_train_kf)
             
             test_std = pred.std()
             r, _ = pearsonr(y_val_kf, pred)
@@ -531,6 +609,35 @@ class BaseRegressionModel:
         # Farzin was here :D
         #print(f"Mean CV R: {np.mean(cv_r_values):.3f}")
         #print(f"Std CV R: {np.std(cv_r_values):.3f}")
+
+        if safe_best_hparams:
+            if hyperparam_votes:
+                vote_strings = [json.dumps(v, sort_keys=True) for v in hyperparam_votes]
+                vote_counter = Counter(vote_strings)
+                majority_key, _ = vote_counter.most_common(1)[0]
+                majority_params = json.loads(majority_key)
+                filename = f"{self.target_name}_best_hparams.json"
+                if ablation_idx is not None and member_idx is not None:
+                    filename = f"{self.target_name}_best_hparams_ablation_{ablation_idx}_member_{member_idx}.json"
+                elif ablation_idx is not None:
+                    filename = f"{self.target_name}_best_hparams_ablation_{ablation_idx}.json"
+                elif member_idx is not None:
+                    filename = f"{self.target_name}_best_hparams_member_{member_idx}.json"
+
+                os.makedirs(self.save_path, exist_ok=True)
+                best_params_path = os.path.join(self.save_path, filename)
+                with open(best_params_path, "w", encoding="utf-8") as fh:
+                    json.dump(majority_params, fh, indent=2)
+
+                self.best_hparams_ = majority_params
+                self.best_hparams_path_ = best_params_path
+                self.logging.info(
+                    f"Saved majority-vote hyperparameters (votes={len(hyperparam_votes)}) to {best_params_path}."
+                )
+            else:
+                self.logging.info(
+                    "safe_best_hparams=True but no hyperparameter votes were collected during nested evaluation."
+                )
         
         if self.model_name == "NGBoost":
             pred_dists = np.vstack(pred_dists)
