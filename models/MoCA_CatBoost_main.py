@@ -191,10 +191,13 @@ def main(
         filtered_df.to_csv(os.path.join(data_dir, filtered_data_path))
 
     param_grid_cat = {
-        'depth': [4, 5, 6],
-        'learning_rate': [0.01, 0.05, 0.1],
+        'depth': [3, 4, 5, 6],
+        'learning_rate': [0.01, 0.05,],
         'l2_leaf_reg': [1, 3, 5],
-        'iterations': [500, 600, 900]
+        'iterations': [300, 500, 700, 900],
+        'grow_policy': ['SymmetricTree'],
+        'min_data_in_leaf': [3, 5, 10],
+        'random_strength': [0, 0.5]
     }
 
     cat_defaults = {
@@ -231,8 +234,19 @@ def main(
     )
 
     model.plot("Actual vs. Prediction (CatBoost)")
-    _, _, removals = model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds, members=members)
+    #_, _, removals = model.feature_ablation(folds=folds, tune=tune, tune_folds=tune_folds, members=members)
 
+    inference_csv = os.path.join(folder_path, "data/MoCA/level2/ppmi_ledd.csv")
+    inference_save_dir = os.path.join(safe_path, "inference_ppmi_ledd")
+    model.inference(
+        inference_csv_path=inference_csv,
+        param_grid=param_grid_cat,
+        members=members,
+        folds=tune_folds,
+        target_col=target_col,
+        save_dir=inference_save_dir,
+        random_seed=42,
+    )
 
 if __name__ == "__main__":
     #folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
@@ -252,18 +266,20 @@ if __name__ == "__main__":
                 "MoCA_Sprache_sum_pre",
                 "MoCA_Aufmerksamkeit_sum_pre",
                 "MoCA_Abstraktion_sum_pre",
-                "LEDD_reduc",
-                "L_distance",
-                "R_distance",
+                #"LEDD_reduc",
+                "LEDD_pre",
+                #"L_distance",
+                #"R_distance",
             ],
             'outlier_cols': [
                 "TimeSinceSurgery",
                 "TimeSinceDiag",
                 "UPDRS_reduc_pre",
                 "MoCA_sum_pre",
-                "LEDD_reduc",
-                "L_distance",
-                "R_distance"
+                #"LEDD_reduc",
+                "LEDD_pre",
+                #"L_distance",
+                #"R_distance"
             ],
         },
     ]
@@ -271,15 +287,15 @@ if __name__ == "__main__":
     for exp_info in exp_infos:
         main(
             folder_path=folder_path,
-            data_path="data/MoCA/level2/moca_stim.csv",
+            data_path="data/MoCA/level2/moca_ledd.csv",
             feature_cols=exp_info['feature_cols'],
             target_col=exp_info['target_col'],
             outlier_cols=exp_info['outlier_cols'],
-            out=f"results/{exp_info['exp_number']}_{exp_info['target_col']}_stim/level2/CatBoost",
+            out=f"results/{exp_info['exp_number']}_{exp_info['target_col']}_ledd/level2/CatBoost",
             folds=10,
             tune_folds=5,
-            tune=False,
-            members=1,
+            tune=True,
+            members=10,
             uncertainty=False,
-            filtered_data_path="filtered_MoCA_stim_catboost.csv",
+            filtered_data_path="filtered_MoCA_ledd.csv",
         )

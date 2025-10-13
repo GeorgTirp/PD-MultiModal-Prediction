@@ -9,6 +9,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 #torch.set_num_threads(1)
 import json
 from collections import Counter
+import copy
 import pandas as pd
 from sklearn.model_selection import train_test_split, KFold, LeaveOneOut
 from sklearn.metrics import mean_squared_error
@@ -27,9 +28,11 @@ import pickle
 from model_classes.scalers import RobustTanhScaler, RobustSigmoidScaler, ZScoreScaler
 from sklearn.model_selection import (
     KFold, LeaveOneOut,
-    GroupKFold, LeaveOneGroupOut
+    GroupKFold, LeaveOneGroupOut,
+    ParameterGrid
 )
-
+from sklearn.base import clone as skl_clone
+from typing import Optional, List
 
 class BaseRegressionModel:
     """Base class for supervised regression models using scikit-learn and SHAP.
@@ -790,7 +793,10 @@ class BaseRegressionModel:
             plt.close()
 
         _save_shap_csv(all_shap_mean_array, f'{save_path}_all_shap_values(mu).csv')
-        self.X_test = X_vals
+        try:
+            self.X_test = pd.DataFrame(X_vals, columns=self.X.columns)
+        except Exception:
+            self.X_test = X_vals
         self.shap_mean = mean_shap_values
         if self.split_shaps:
             self.test_shap_mean = test_shap_mean
@@ -837,6 +843,356 @@ class BaseRegressionModel:
         self.logging.info("Finished model evaluation.")
         return metrics
     
+    def inference(
+        self,
+        inference_csv_path: str,
+        param_grid: Optional[dict] = None,
+        members: int = 1,
+        folds: int = 5,
+        target_col: Optional[str] = None,
+        save_dir: Optional[str] = None,
+        random_seed: Optional[int] = None,
+    ) -> Dict:
+        """
+        Perform ensemble inference on a new dataset with optional hyperparameter tuning.
+
+        Args:
+            inference_csv_path (str): Path to CSV containing features (and optional target).
+            param_grid (dict, optional): Hyperparameter combinations to evaluate.
+            members (int, optional): Number of ensemble members. Defaults to 1.
+            folds (int, optional): Number of CV folds per member for voting. Defaults to 5.
+            target_col (str, optional): Target column name. Defaults to self.target_name.
+            save_dir (str, optional): Directory to store inference artefacts.
+            random_seed (int, optional): Seed for ensemble member generation.
+
+        Returns:
+            Dict: Dictionary containing predictions, metrics, chosen hyperparameters, and paths.
+        """
+        if members < 1:
+            raise ValueError("members must be >= 1.")
+
+        if target_col is None:
+            target_col = self.target_name
+
+        if not os.path.exists(inference_csv_path):
+            raise FileNotFoundError(f"Inference CSV not found: {inference_csv_path}")
+
+        inference_df = pd.read_csv(inference_csv_path)
+
+        # Determine common feature set
+        original_features = list(self.feature_selection.get('features', []))
+        common_features = [f for f in original_features if f in inference_df.columns]
+        if not common_features:
+            raise ValueError("No overlapping features between training features and inference CSV.")
+
+        if len(common_features) < len(original_features):
+            dropped = set(original_features) - set(common_features)
+            self.logging.warning(f"Dropping missing features for inference: {sorted(dropped)}")
+
+        X_train_full = self.X[common_features].copy()
+        y_train_full = self.y.copy()
+        X_infer = inference_df[common_features].copy()
+        y_infer = inference_df[target_col].copy() if target_col in inference_df.columns else None
+
+        # Prepare save paths
+        inference_root = save_dir or os.path.join(self.save_path, "inference")
+        os.makedirs(inference_root, exist_ok=True)
+
+        # Base parameters and parameter grid
+        base_params = {}
+        if hasattr(self.model, "get_params"):
+            try:
+                base_params = self.model.get_params(deep=True)
+            except Exception:
+                base_params = {}
+
+        param_candidates = list(ParameterGrid(param_grid)) if param_grid else [{}]
+
+        # Seed handling for ensemble members
+        seed_source = random_seed if random_seed is not None else getattr(self, "random_state", 0)
+        rng = np.random.default_rng(seed_source)
+        member_seeds = rng.integers(low=0, high=np.iinfo(np.uint32).max, size=members, dtype=np.uint32)
+
+        if folds == -1:
+            if self.Pat_IDs is not None:
+                cv_splitter = LeaveOneGroupOut()
+                groups = self.Pat_IDs.to_numpy()
+            else:
+                cv_splitter = LeaveOneOut()
+                groups = None
+        else:
+            if self.Pat_IDs is not None:
+                cv_splitter = GroupKFold(n_splits=folds)
+                groups = self.Pat_IDs.to_numpy()
+            else:
+                cv_splitter = KFold(n_splits=folds, shuffle=True, random_state=seed_source)
+                groups = None
+
+        if param_grid and folds == 1:
+            raise ValueError("When param_grid is provided, folds must be >= 2 to enable majority voting.")
+
+        def _instantiate_model(param_update: Dict) -> object:
+            params = {**base_params, **param_update}
+            try:
+                return self.model.__class__(**params)
+            except Exception:
+                model_clone = skl_clone(self.model)
+                try:
+                    model_clone.set_params(**params)
+                except Exception:
+                    for key, val in params.items():
+                        try:
+                            model_clone.set_params(**{key: val})
+                        except Exception:
+                            pass
+                return model_clone
+
+        def _fit_feature_scaler(X_fit: pd.DataFrame):
+            if self.feature_scaler is None:
+                return None
+            scaler = copy.deepcopy(self.feature_scaler)
+            scaler.fit(X_fit)
+            return scaler
+
+        def _fit_target_scaler(y_fit: pd.Series):
+            if self.scaler is None:
+                return None
+            scaler = copy.deepcopy(self.scaler)
+            scaler.fit(y_fit)
+            return scaler
+
+        def _transform_features(scaler, X: pd.DataFrame) -> np.ndarray:
+            if scaler is None:
+                return X.to_numpy()
+            return scaler.transform(X)
+
+        def _transform_target(scaler, y: pd.Series) -> np.ndarray:
+            if scaler is None:
+                return y.to_numpy()
+            transformed = scaler.transform(y)
+            return np.asarray(transformed).ravel()
+
+        def _inverse_target(scaler, y_pred: np.ndarray) -> np.ndarray:
+            if scaler is None:
+                return np.asarray(y_pred).ravel()
+            inv = scaler.inverse_transform(np.asarray(y_pred))
+            return np.asarray(inv).ravel()
+
+        member_models = []
+        member_params = []
+        member_predictions = []
+        member_shap_values = []
+        member_feature_mats = []
+        member_metrics = []
+
+        original_model = self.model
+        original_features_state = list(self.feature_selection.get('features', []))
+
+        for idx in range(members):
+            self.logging.info(f"[Inference] Starting ensemble member {idx} (seed={int(member_seeds[idx])})")
+            fold_votes = []
+
+            for fold_idx, split in enumerate(cv_splitter.split(X_train_full, y_train_full, groups=groups) if groups is not None else cv_splitter.split(X_train_full, y_train_full)):
+                train_idx, val_idx = split
+                X_tr = X_train_full.iloc[train_idx]
+                X_val = X_train_full.iloc[val_idx]
+                y_tr = y_train_full.iloc[train_idx]
+                y_val = y_train_full.iloc[val_idx]
+
+                feature_scaler_fold = _fit_feature_scaler(X_tr)
+                target_scaler_fold = _fit_target_scaler(y_tr)
+
+                X_tr_proc = _transform_features(feature_scaler_fold, X_tr)
+                X_val_proc = _transform_features(feature_scaler_fold, X_val)
+                y_tr_proc = _transform_target(target_scaler_fold, y_tr)
+                y_val_raw = y_val.to_numpy()
+
+                best_params = None
+                best_score = np.inf
+
+                for candidate in param_candidates:
+                    model_candidate = _instantiate_model(candidate)
+                    fit_kwargs = {}
+                    if hasattr(self, 'weights') and self.weights is not None:
+                        fit_kwargs["sample_weight"] = self.weights[train_idx]
+
+                    model_candidate.fit(X_tr_proc, y_tr_proc, **fit_kwargs)
+                    preds_val_proc = model_candidate.predict(X_val_proc)
+                    preds_val = _inverse_target(target_scaler_fold, preds_val_proc)
+
+                    score = mean_squared_error(y_val_raw, preds_val)
+                    if score < best_score:
+                        best_score = score
+                        best_params = candidate
+
+                if best_params is None:
+                    best_params = {}
+                fold_votes.append(best_params)
+                self.logging.info(f"[Inference] Member {idx}, fold {fold_idx}: voted params {best_params}")
+
+            if fold_votes:
+                vote_strings = [json.dumps(v, sort_keys=True) for v in fold_votes]
+                vote_counter = Counter(vote_strings)
+                chosen_key, _ = vote_counter.most_common(1)[0]
+                chosen_params = json.loads(chosen_key)
+            else:
+                chosen_params = {}
+
+            member_params.append(chosen_params)
+
+            # Final training on full dataset with voted params
+            feature_scaler_final = _fit_feature_scaler(X_train_full)
+            target_scaler_final = _fit_target_scaler(y_train_full)
+
+            X_train_final = _transform_features(feature_scaler_final, X_train_full)
+            y_train_final = _transform_target(target_scaler_final, y_train_full)
+            X_infer_final = _transform_features(feature_scaler_final, X_infer)
+
+            member_model = _instantiate_model(chosen_params)
+            fit_kwargs = {}
+            if hasattr(self, 'weights') and self.weights is not None:
+                fit_kwargs["sample_weight"] = self.weights
+            member_model.fit(X_train_final, y_train_final, **fit_kwargs)
+
+            preds_proc = member_model.predict(X_infer_final)
+            preds = _inverse_target(target_scaler_final, preds_proc)
+            member_predictions.append(preds)
+
+            # Persist model artefacts
+            member_artifacts = {
+                "model": member_model,
+                "feature_scaler": feature_scaler_final,
+                "target_scaler": target_scaler_final,
+                "features": common_features,
+            }
+            model_path = os.path.join(inference_root, f"member_{idx}_model.pkl")
+            with open(model_path, "wb") as fh:
+                pickle.dump(member_artifacts, fh)
+            self.logging.info(f"[Inference] Saved member {idx} artefacts to {model_path}")
+
+            # Collect SHAP values for ensemble aggregation
+            try:
+                self.model = member_model
+                self.feature_selection['features'] = common_features
+                shap_vals = self.feature_importance(
+                    X_train_full[common_features],
+                    top_n=-1,
+                    save_results=False,
+                    iter_idx=None,
+                    validation=False,
+                )
+                if isinstance(shap_vals, list):
+                    shap_vals = np.asarray(shap_vals)
+                member_shap_values.append(np.asarray(shap_vals))
+                member_feature_mats.append(X_train_full[common_features].to_numpy())
+            except Exception as shap_err:
+                self.logging.warning(f"[Inference] Failed to compute SHAP for member {idx}: {shap_err}")
+
+            # Store per-member metrics on inference data if target available
+            metrics_member = {}
+            if y_infer is not None:
+                preds_series = pd.Series(preds, index=X_infer.index)
+                y_series = y_infer
+                r, _ = pearsonr(y_series, preds_series)
+                rho, _ = spearmanr(y_series, preds_series)
+                mse = mean_squared_error(y_series, preds_series)
+                metrics_member = {
+                    "r": r,
+                    "rho": rho,
+                    "mse": mse,
+                    "rmse": np.sqrt(mse),
+                }
+            member_metrics.append(metrics_member)
+
+            member_models.append({
+                "model": member_model,
+                "feature_scaler": feature_scaler_final,
+                "target_scaler": target_scaler_final,
+            })
+
+        # Restore original state
+        self.model = original_model
+        self.feature_selection['features'] = original_features_state
+
+        member_predictions_array = np.vstack(member_predictions)
+        ensemble_predictions = member_predictions_array.mean(axis=0)
+
+        results_df = pd.DataFrame({"Prediction": ensemble_predictions})
+        if y_infer is not None:
+            results_df["Actual"] = y_infer.values
+        results_df_path = os.path.join(inference_root, "ensemble_predictions.csv")
+        results_df.to_csv(results_df_path, index=False)
+        self.logging.info(f"[Inference] Saved ensemble predictions to {results_df_path}")
+
+        metrics = {}
+        plot_df = None
+        if y_infer is not None:
+            r, _ = pearsonr(y_infer, ensemble_predictions)
+            rho, _ = spearmanr(y_infer, ensemble_predictions)
+            mse = mean_squared_error(y_infer, ensemble_predictions)
+            rmse = np.sqrt(mse)
+            metrics = {
+                "r": r,
+                "rho": rho,
+                "mse": mse,
+                "rmse": rmse,
+            }
+            plot_df = pd.DataFrame({"Actual": y_infer, "Predicted": ensemble_predictions})
+            plot_path = os.path.join(inference_root, f"{self.target_name}_ensemble_actual_vs_predicted.png")
+            self.plot(
+                f"Actual vs. Prediction (Ensemble of {members}) - {self.model_name}",
+                plot_df=plot_df,
+                save_path_file=plot_path,
+            )
+
+        # Ensemble SHAP aggregation
+        shap_plot_path = None
+        if member_shap_values:
+            try:
+                shap_stack = np.stack(member_shap_values, axis=0)
+                shap_mean = np.mean(shap_stack, axis=0)
+                feature_matrix = X_train_full[common_features]
+                shap_plot_path = os.path.join(inference_root, f"{self.target_name}_ensemble_shap_beeswarm.png")
+                plt.figure(figsize=(8, 6))
+                shap.summary_plot(
+                    shap_mean,
+                    features=feature_matrix,
+                    feature_names=common_features,
+                    show=False,
+                    max_display=self.top_n if self.top_n > 0 else None,
+                )
+                plt.title(f"{self.target_name} Ensemble SHAP Summary", fontsize=14)
+                plt.tight_layout()
+                plt.savefig(shap_plot_path, dpi=300, bbox_inches="tight")
+                plt.close()
+                shap_csv_path = os.path.join(inference_root, f"{self.target_name}_ensemble_shap_values.csv")
+                pd.DataFrame(shap_mean, columns=common_features).to_csv(shap_csv_path, index=False)
+            except Exception as shap_agg_err:
+                self.logging.warning(f"[Inference] Failed to create ensemble SHAP plot: {shap_agg_err}")
+
+        summary_path = os.path.join(inference_root, "ensemble_summary.json")
+        summary_payload = {
+            "members": members,
+            "folds": folds,
+            "param_grid": param_grid,
+            "member_params": member_params,
+            "metrics": metrics,
+            "member_metrics": member_metrics,
+            "prediction_csv": results_df_path,
+            "shap_plot": shap_plot_path,
+        }
+        with open(summary_path, "w", encoding="utf-8") as fh:
+            json.dump(summary_payload, fh, indent=2)
+
+        return {
+            "predictions": ensemble_predictions,
+            "metrics": metrics,
+            "member_params": member_params,
+            "member_predictions": member_predictions_array,
+            "prediction_csv": results_df_path,
+            "summary_json": summary_path,
+            "shap_plot": shap_plot_path,
+        }
     def feature_ablation(
         self, 
         folds: int = -1, 
@@ -1243,19 +1599,17 @@ class BaseRegressionModel:
             threshold_to_one_fps: int = 10,
             test_set: bool = True):
         """
-        Perform iterative feature ablation using an *ensemble* at each step.
-
-        Differences vs. feature_ablation:
-          - For each ablation step, we average the member predictions to form an ensemble prediction
-            (aligned by test indices) and recompute metrics (RMSE, r, rho, p-value) on this ensemble.
-          - We still keep/record distinct member metrics so CIs/whiskers can be plotted.
-          - We also save an averaged SHAP beeswarm (true per-row mean if rows align, else pooled rows)
-            at each step.
-          - We still select features to remove via majority vote using per-member importances.
-
-        Returns:
-            Tuple[list, list, list]: Lists of ensemble Pearson r, ensemble p-values,
-            and removed feature names after each ablation step.
+        Feature ablation where, at each step, we form an *ensemble* by averaging member predictions,
+        then recompute all scores (RMSE, r, rho, p_value) w.r.t. that ensemble prediction.
+    
+        Also:
+          • Keeps distinct member metrics so we can draw CIs in the ablation plots.
+          • Saves an averaged (ensemble) SHAP beeswarm per step *and* writes the ensemble SHAP values to CSV
+            with current column names (similar to nested_eval). Beeswarm includes color gradient by passing
+            the matching feature matrix used for SHAP (averaged or pooled across members).
+          • Removes features by majority vote over per-member importances.
+    
+        Outputs saved under: {self.save_path}/ablation/ablation_step[i]/ ...
         """
         import os
         import numpy as np
@@ -1263,8 +1617,8 @@ class BaseRegressionModel:
         import matplotlib.pyplot as plt
         import seaborn as sns
         from scipy import stats
-
-        # ---- helpers ----
+    
+        # -------------------- small helpers --------------------
         def _pearson_r(y_true, y_pred):
             y_true = np.asarray(y_true).ravel()
             y_pred = np.asarray(y_pred).ravel()
@@ -1272,7 +1626,7 @@ class BaseRegressionModel:
                 return 0.0, 1.0
             r, p = stats.pearsonr(y_true, y_pred)
             return float(r), float(p)
-
+    
         def _spearman_rho(y_true, y_pred):
             y_true = np.asarray(y_true).ravel()
             y_pred = np.asarray(y_pred).ravel()
@@ -1280,118 +1634,56 @@ class BaseRegressionModel:
                 return 0.0
             rho, _ = stats.spearmanr(y_true, y_pred)
             return float(rho)
-
+    
         def _mse(y_true, y_pred):
             y_true = np.asarray(y_true).ravel()
             y_pred = np.asarray(y_pred).ravel()
             return float(np.mean((y_true - y_pred) ** 2))
-
+    
         def _rmse(y_true, y_pred):
             return float(np.sqrt(_mse(y_true, y_pred)))
-
-        def _ci95(values):
-            if len(values) <= 1:
-                return 0.0
-            return 1.96 * np.std(values, ddof=1) / np.sqrt(len(values))
-
-        def _save_avg_beeswarm(step_dir, feature_names_current, shap_list, X_list, tag="test"):
-            """Save averaged SHAP beeswarm across members into step_dir."""
-            if not shap_list:
-                return
-            import shap
-
-            save_bee = f"{step_dir}/{self.target_name}_SHAP_beeswarm_{tag}_ENSEMBLE.png"
-
-            # Try true mean per row if all shapes the same and (optionally) same indices.
-            same_shape = len({(sv.shape[0], sv.shape[1]) for sv in shap_list}) == 1
-            if same_shape:
-                shap_stack = np.stack([np.asarray(sv) for sv in shap_list], axis=0)  # (members, n_rows, n_features)
-                shap_avg = np.mean(shap_stack, axis=0)
-                data_avg = None
-                if X_list and len(X_list) == len(shap_list):
-                    try:
-                        same_rows = all(
-                            getattr(X_list[0], "index", None) is not None and
-                            getattr(X_list[k], "index", None) is not None and
-                            X_list[k].index.equals(X_list[0].index)
-                            for k in range(len(X_list))
-                        )
-                    except Exception:
-                        same_rows = False
-                    if same_rows:
-                        data_avg = np.mean(np.stack([x[feature_names_current].values for x in X_list], axis=0), axis=0)
-                expl = shap.Explanation(
-                    values=shap_avg,
-                    base_values=np.zeros(shap_avg.shape[0]),
-                    data=data_avg,
-                    feature_names=list(feature_names_current),
-                )
-            else:
-                # Pooling fallback
-                shap_pool = np.vstack([np.asarray(sv) for sv in shap_list])
-                data_pool = None
-                if X_list and any(x is not None for x in X_list):
-                    data_pool = np.vstack([x[feature_names_current].values for x in X_list if x is not None])
-                expl = shap.Explanation(
-                    values=shap_pool,
-                    base_values=np.zeros(shap_pool.shape[0]),
-                    data=data_pool,
-                    feature_names=list(feature_names_current),
-                )
-
-            plt.figure(figsize=(8, 6))
-            shap.plots.beeswarm(expl, show=False)
-            plt.tight_layout()
-            plt.savefig(save_bee, dpi=300, bbox_inches="tight")
-            plt.close()
-
-        # ---- containers for ablation curves (ENSEMBLE-level metrics) ----
+    
+        # -------------------- containers for ablation curves (ENSEMBLE-level metrics) --------------------
         rs, rhos, p_values, removals = [], [], [], []
         train_rmse_list, test_rmse_list = [], []
-
-        # ---- error bars from distinct member performances ----
+        # stds from per-member metrics (for whiskers)
         r_std_list, rho_std_list, train_rmse_std_list, test_rmse_std_list = [], [], [], []
-
+    
         number_of_features = len(self.feature_selection['features'])
         i = 1
-
-        # Stable but distinct seeds per member across steps
+    
+        # Deterministic but distinct seeds per member across steps
         global_random_state = int(getattr(self, "random_state", 0))
         rng_global = np.random.default_rng(global_random_state)
         member_seeds = rng_global.integers(
             low=0, high=np.iinfo(np.uint32).max, size=members, dtype=np.uint32
         )
-
+    
         while number_of_features > 0:
-            self.logging.info(f"---- Starting ablation step {i} with {number_of_features} features remaining. ----")
-
-            if number_of_features > threshold_to_one_fps:
-                features_to_remove = min(features_per_step, number_of_features)
-            else:
-                features_to_remove = 1
-
             step_dir = f'{self.save_path}/ablation/ablation_step[{i}]'
             os.makedirs(step_dir, exist_ok=True)
-
+            self.logging.info(f"---- Starting ablation step {i} with {number_of_features} features remaining. ----")
+    
+            features_to_remove = min(features_per_step, number_of_features) if number_of_features > threshold_to_one_fps else 1
+    
             # Per-member collections
             feature_votes = {}
             member_rs, member_rhos, member_p_values = [], [], []
             member_train_mse, member_test_mse = [], []
-
-            # For building ensemble predictions
+    
             member_y_tests, member_y_preds, member_test_index = [], [], []
-
-            # SHAP collectors for ensemble beeswarm
-            members_shap_values_test, members_X_test = [], []
-            members_shap_values_train, members_X_train = [], []
-
+    
+            # SHAP collectors (arrays) and matching feature matrices for coloring
+            shap_test_list, shap_train_list = [], []
+            x_test_list,   x_train_list   = [], []
+    
             for m in range(members):
                 self.random_state = int(member_seeds[m])   # same seed for this member at every step
                 self.logging.info(f"[ablation step {i}] member {m} seed={self.random_state}")
-
-                save_path = f'{step_dir}/member[{m}]'
-                os.makedirs(save_path, exist_ok=True)
-
+    
+                member_dir = f'{step_dir}/member[{m}]'
+                os.makedirs(member_dir, exist_ok=True)
+    
                 metrics = self.nested_eval(
                     folds=folds, 
                     get_shap=get_shap, 
@@ -1399,52 +1691,73 @@ class BaseRegressionModel:
                     tune_folds=tune_folds, 
                     ablation_idx=i, 
                     member_idx=m)
-
-                # Persist the member metrics as-is
-                pd.DataFrame([metrics]).to_csv(f'{save_path}/{self.target_name}_metrics.csv', index=False)
-
-                # Cache predictions/targets for later ensemble recomputation
+    
+                # Persist member metrics (unchanged)
+                pd.DataFrame([metrics]).to_csv(f'{member_dir}/{self.target_name}_metrics.csv', index=False)
+    
+                # Predictions & indices for building ensemble
                 member_y_tests.append(np.asarray(metrics['y_test']).ravel())
                 member_y_preds.append(np.asarray(metrics['y_pred']).ravel())
                 member_test_index.append(metrics.get('test_index', None))
-
-                # Optional: SHAP matrices (test preferred)
-                if hasattr(self, "test_shap_values") and self.test_shap_values is not None:
-                    members_shap_values_test.append(np.asarray(self.test_shap_values))
-                    if hasattr(self, "test_X_for_shap"):
-                        members_X_test.append(self.test_X_for_shap.copy())
-                if hasattr(self, "shap_values") and self.shap_values is not None:
-                    members_shap_values_train.append(np.asarray(self.shap_values))
-                    if hasattr(self, "X_for_shap"):
-                        members_X_train.append(self.X_for_shap.copy())
-
-                # Member-level plots (unchanged)
+    
+                # Member-level scatter plot
                 self.plot(
                     f"Actual vs. Prediction {self.model_name}- {self.target_name} No. features: {number_of_features}", 
                     modality='',
                     plot_df=pd.DataFrame({'Actual': metrics['y_test'], 'Predicted': metrics['y_pred']}),
-                    save_path_file=f'{save_path}/{self.target_name}_actual_vs_predicted.png')
-
-                # Collect member scalar metrics (for CIs)
+                    save_path_file=f'{member_dir}/{self.target_name}_actual_vs_predicted.png')
+    
+                # Distinct member scalar metrics (for CIs)
                 member_rs.append(metrics['r'])
                 member_rhos.append(metrics['rho'])
                 member_p_values.append(metrics['p_value'])
                 member_train_mse.append(metrics['train_mse'])
                 member_test_mse.append(metrics['mse'])
-
-                # Majority-vote least important features
+    
+                # Collect SHAP matrices + feature matrices for coloring.
+                # ---- TEST ----
+                if 'test_shap_values' in metrics and metrics['test_shap_values'] is not None:
+                    shap_test_list.append(np.asarray(metrics['test_shap_values']))
+                    # NEW: always try both sources for the features matrix
+                    Xcand = metrics.get('X_test_for_shap', None)
+                    if Xcand is None and hasattr(self, 'X_test') and self.X_test is not None:
+                        Xcand = self.X_test
+                    if Xcand is not None:
+                        try:
+                            x_test_list.append(Xcand[self.feature_selection['features']].copy())
+                        except Exception:
+                            pass
+                elif hasattr(self, 'test_shap_mean') and getattr(self, 'test_shap_mean') is not None:
+                    shap_test_list.append(np.asarray(self.test_shap_mean))
+                    if hasattr(self, 'X_test') and self.X_test is not None:
+                        try:
+                            x_test_list.append(self.X_test[self.feature_selection['features']].copy())
+                        except Exception:
+                            pass
+                        
+                # ---- TRAIN ----
+                if 'shap_values' in metrics and metrics['shap_values'] is not None:
+                    shap_train_list.append(np.asarray(metrics['shap_values']))
+                    if 'X_for_shap' in metrics and metrics['X_for_shap'] is not None:
+                        try:
+                            x_train_list.append(metrics['X_for_shap'][self.feature_selection['features']].copy())
+                        except Exception:
+                            pass
+                elif hasattr(self, 'shap_mean') and getattr(self, 'shap_mean') is not None:
+                    shap_train_list.append(np.asarray(self.shap_mean))
+                    try:
+                        x_train_list.append(self.X[self.feature_selection['features']].copy())
+                    except Exception:
+                        pass
+                    
+                # Majority vote using per-member importances
                 importance = metrics['feature_importance_test'] if test_set else metrics['feature_importance']
                 importance_indices = np.argsort(importance)
                 least_important = [self.feature_selection['features'][idx] for idx in importance_indices[:features_per_step]]
                 for feat in least_important:
                     feature_votes[feat] = feature_votes.get(feat, 0) + 1
-
-            # ---------- Build ENSEMBLE prediction aligned by test indices ----------
-            # Strategy:
-            #   - If every member provides test_index and they all match, take simple mean per row.
-            #   - Else, align by index via dict; if some rows are missing in some members, average across
-            #     available predictions for that row.
-            #   - Save ensemble-level "Actual vs Predicted" and recomputed metrics.
+    
+            # -------------------- Build ensemble prediction (aligned) --------------------
             can_simple_stack = (
                 members > 0 and
                 all(idx is not None for idx in member_test_index) and
@@ -1452,19 +1765,15 @@ class BaseRegressionModel:
                 len({len(y) for y in member_y_tests}) == 1 and
                 len({len(p) for p in member_y_preds}) == 1
             )
-
             if can_simple_stack:
-                # Simple, fast path
                 y_test_ref = member_y_tests[0]
                 y_pred_stack = np.vstack(member_y_preds)  # (members, n_rows)
                 y_pred_ens = np.mean(y_pred_stack, axis=0)
             else:
-                # Robust alignment by arbitrary indices
-                pred_map = {}  # index -> list of predictions
-                y_map = {}     # index -> true y (must be identical across members for an index)
+                # robust alignment by index; averages across available predictions per row-id
+                pred_map, y_map = {}, {}
                 for y_t, y_p, idx in zip(member_y_tests, member_y_preds, member_test_index):
                     if idx is None:
-                        # If no indices, fallback to position-based averaging over common length
                         n = min(len(y_t), len(y_p))
                         for k in range(n):
                             pred_map.setdefault(k, []).append(y_p[k])
@@ -1474,24 +1783,20 @@ class BaseRegressionModel:
                         for k, rid in enumerate(idx):
                             pred_map.setdefault(rid, []).append(y_p[k])
                             y_map[rid] = y_t[k]
-                # Build aligned arrays
                 aligned_ids = list(y_map.keys())
                 aligned_ids.sort(key=lambda z: (isinstance(z, (str, bytes)), z))
                 y_test_ref = np.array([y_map[rid] for rid in aligned_ids], dtype=float)
                 y_pred_ens = np.array([np.mean(pred_map[rid]) for rid in aligned_ids], dtype=float)
-
+    
             # Ensemble-level metrics
             ens_r, ens_p = _pearson_r(y_test_ref, y_pred_ens)
             ens_rho = _spearman_rho(y_test_ref, y_pred_ens)
             ens_mse_test = _mse(y_test_ref, y_pred_ens)
             ens_rmse_test = float(np.sqrt(ens_mse_test))
-
-            # For train RMSE on ensemble: we don't recompute (train sets differ across members).
-            # Use mean of member train MSE as a proxy and take sqrt after averaging MSE.
             ens_mse_train = float(np.mean(member_train_mse)) if member_train_mse else np.nan
             ens_rmse_train = float(np.sqrt(ens_mse_train)) if not np.isnan(ens_mse_train) else np.nan
-
-            # Save ensemble metrics for this step
+    
+            # Save ensemble metrics + ensemble Actual vs Predicted
             pd.DataFrame([{
                 "r_ensemble": ens_r,
                 "rho_ensemble": ens_rho,
@@ -1503,77 +1808,184 @@ class BaseRegressionModel:
                 "members": members,
                 "features_remaining": number_of_features
             }]).to_csv(f"{step_dir}/{self.target_name}_metrics_ENSEMBLE.csv", index=False)
-
-            # Save an ensemble Actual vs Predicted plot
+    
             self.plot(
                 f"Actual vs. Prediction (ENSEMBLE of {members}) - {self.model_name} - {self.target_name} - No. features: {number_of_features}",
                 modality='',
                 plot_df=pd.DataFrame({"Actual": y_test_ref, "Predicted": y_pred_ens}),
                 save_path_file=f"{step_dir}/{self.target_name}_actual_vs_predicted_ENSEMBLE.png"
             )
-
-            # Averaged SHAP beeswarms (test preferred)
+    
+            # ===================== ENSEMBLE SHAP: collect & save (CSV + beeswarm w/ color) =====================
             feature_names_current = list(self.feature_selection['features'])
-            _save_avg_beeswarm(step_dir, feature_names_current, members_shap_values_test, members_X_test,  tag="test")
-            _save_avg_beeswarm(step_dir, feature_names_current, members_shap_values_train, members_X_train, tag="train")
-
-            # ---------- Determine features to remove via majority vote ----------
+            n_feat_current = len(feature_names_current)
+    
+            def _collect_member_shap_arrays(shap_src_list):
+                out = []
+                for sv in shap_src_list:
+                    if sv is None:
+                        continue
+                    arr = np.asarray(sv)
+                    if arr.ndim == 1:
+                        arr = arr.reshape(1, -1)
+                    elif arr.ndim > 2:
+                        arr = arr.reshape(-1, arr.shape[-1])
+                    if arr.shape[1] < n_feat_current:
+                        continue
+                    if arr.shape[1] > n_feat_current:
+                        arr = arr[:, :n_feat_current]
+                    out.append(arr)
+                return out
+    
+            def _collect_member_X_arrays(X_src_list):
+                outs = []
+                for X in (X_src_list or []):
+                    if X is None:
+                        continue
+                    try:
+                        if isinstance(X, pd.DataFrame):
+                            Xc = X[feature_names_current]
+                            arr = Xc.to_numpy(dtype=float)
+                        elif isinstance(X, pd.Series):
+                            arr = X.loc[:, feature_names_current].to_numpy(dtype=float)
+                        else:
+                            arr = np.asarray(X, dtype=float)
+                            if arr.ndim == 1:
+                                arr = arr.reshape(-1, 1)
+                            if arr.shape[1] < n_feat_current:
+                                continue
+                            if arr.shape[1] > n_feat_current:
+                                arr = arr[:, :n_feat_current]
+                        if arr.ndim == 1:
+                            arr = arr.reshape(-1, 1)
+                        outs.append(arr)
+                    except Exception:
+                        pass
+                return outs
+    
+            def _average_or_pool(arr_list: list) -> np.ndarray:
+                if not arr_list:
+                    return None
+                shapes = {(a.shape[0], a.shape[1]) for a in arr_list}
+                if len(shapes) == 1:
+                    stack = np.stack(arr_list, axis=0)      # (members, n_rows, n_feat)
+                    return np.mean(stack, axis=0)           # (n_rows, n_feat)
+                return np.vstack(arr_list)                  # (sum_rows, n_feat)
+    
+            def _save_csv(arr2d: np.ndarray, tag: str):
+                csv_path = os.path.join(step_dir, f"{self.target_name}_mean_shap_values_{tag}_ENSEMBLE.csv")
+                pd.DataFrame(arr2d, columns=feature_names_current).to_csv(csv_path, index=False)
+                return csv_path
+    
+            def _save_beeswarm(arr2d: np.ndarray, X_arr: np.ndarray, tag: str):
+                import shap
+                max_disp = getattr(self, "top_n", None)
+                plt.figure(figsize=(8, 6))
+                if X_arr is not None and X_arr.shape == arr2d.shape:
+                    shap.summary_plot(arr2d, features=X_arr, feature_names=feature_names_current,
+                                      show=False, max_display=max_disp)
+                else:
+                    shap.summary_plot(arr2d, features=None, feature_names=feature_names_current,
+                                      show=False, max_display=max_disp)
+                plt.title(f"{self.target_name} SHAP Beeswarm (Ensemble, {tag})", fontsize=14)
+                plt.tight_layout()
+                out_png = os.path.join(step_dir, f"{self.target_name}_shap_aggregated_beeswarm_{tag}_ENSEMBLE.png")
+                plt.savefig(out_png, dpi=300, bbox_inches="tight")
+                plt.close()
+                self.logging.info(f"[ablation {i}] Saved ensemble SHAP beeswarm ({tag}) to: {out_png}")
+    
+            def _save_placeholder(reason_txt: str, tag: str):
+                with open(os.path.join(step_dir, f"{self.target_name}_SHAP_{tag}_ENSEMBLE_reason.txt"),
+                          "w", encoding="utf-8") as fh:
+                    fh.write(reason_txt)
+                fig = plt.figure(figsize=(4, 2))
+                plt.axis('off')
+                plt.text(0.02, 0.5, f"No averaged SHAP ({tag})\n{reason_txt}", va='center')
+                plt.tight_layout()
+                fig.savefig(os.path.join(step_dir, f"{self.target_name}_shap_aggregated_beeswarm_{tag}_ENSEMBLE.png"),
+                            dpi=200, bbox_inches="tight")
+                plt.close(fig)
+                self.logging.warning(f"[ablation {i}] {reason_txt}")
+    
+            # Build normalized sets
+            test_mats  = _collect_member_shap_arrays(shap_test_list)
+            train_mats = _collect_member_shap_arrays(shap_train_list)
+            Xtest_mats = _collect_member_X_arrays(x_test_list)
+            Xtrain_mats= _collect_member_X_arrays(x_train_list)
+    
+            # TEST save
+            if test_mats:
+                ens_test = _average_or_pool(test_mats)
+                X_test_ens = _average_or_pool(Xtest_mats) if Xtest_mats else None
+                csv_path = _save_csv(ens_test, tag="test")
+                try:
+                    _save_beeswarm(ens_test, X_test_ens, tag="test")
+                except Exception as e:
+                    _save_placeholder(f"Beeswarm failed for test ({type(e).__name__}: {e})", tag="test")
+                self.logging.info(f"[ablation {i}] Saved ensemble TEST SHAP CSV: {csv_path}")
+            else:
+                _save_placeholder("No valid test SHAP matrices collected (width < current feature count or empty).", tag="test")
+    
+            # TRAIN save
+            if train_mats:
+                ens_train = _average_or_pool(train_mats)
+                X_train_ens = _average_or_pool(Xtrain_mats) if Xtrain_mats else None
+                csv_path = _save_csv(ens_train, tag="train")
+                try:
+                    _save_beeswarm(ens_train, X_train_ens, tag="train")
+                except Exception as e:
+                    _save_placeholder(f"Beeswarm failed for train ({type(e).__name__}: {e})", tag="train")
+                self.logging.info(f"[ablation {i}] Saved ensemble TRAIN SHAP CSV: {csv_path}")
+            else:
+                _save_placeholder("No valid train SHAP matrices collected (width < current feature count or empty).", tag="train")
+            # =================== END ENSEMBLE SHAP save block ===================
+    
+            # -------------------- Remove features by majority vote --------------------
             voted_features = sorted(feature_votes.items(), key=lambda x: -x[1])[:features_to_remove]
             least_important_features = [feat for feat, _ in voted_features]
-
-            # Remove features and record
+    
             self.X = self.X.drop(columns=least_important_features)
             self.feature_selection['features'] = [f for f in self.feature_selection['features'] if f not in least_important_features]
             removals.extend(least_important_features)
             number_of_features -= features_to_remove
-
-            # ---------- Append ENSEMBLE curves + CI from member metrics ----------
+    
+            # -------------------- Append ENSEMBLE curves + CI from member metrics --------------------
             rs.append(ens_r)
             rhos.append(ens_rho)
             p_values.append(ens_p)
             train_rmse_list.append(ens_rmse_train)
             test_rmse_list.append(ens_rmse_test)
-
+    
             r_std_list.append(np.std(member_rs, ddof=1) if len(member_rs) > 1 else 0.0)
             rho_std_list.append(np.std(member_rhos, ddof=1) if len(member_rhos) > 1 else 0.0)
-
-            # For RMSE CIs, compute on member-level RMSEs (sqrt of member MSEs)
             member_train_rmse = [np.sqrt(x) for x in member_train_mse] if member_train_mse else []
             member_test_rmse  = [np.sqrt(x) for x in member_test_mse]  if member_test_mse  else []
             train_rmse_std_list.append(np.std(member_train_rmse, ddof=1) if len(member_train_rmse) > 1 else 0.0)
             test_rmse_std_list.append(np.std(member_test_rmse,  ddof=1) if len(member_test_rmse)  > 1 else 0.0)
-
-            # Optional calibration per step for NGBoost
+    
             if self.model_name == "NGBoost":
                 self.calibration_analysis(ablation_idx=i)
-
-            # Adjust FPS if close to the end
+    
             i += 1
             if number_of_features <= threshold_to_one_fps:
                 features_per_step = 1
-
-            self.logging.info(
-                f"[step {i-1}] Ensemble r={rs[-1]:.4f} (member r mean={np.mean(member_rs):.4f})"
-            )
-
-        # ---------- Final plotting with error bars (CIs from member metrics) ----------
+    
+            self.logging.info(f"[ablation step {i-1}] Ensemble r={rs[-1]:.4f} | min/max member r=({np.min(member_rs):.4f},{np.max(member_rs):.4f})")
+    
+        # -------------------- Final plots (whiskers = member stds) --------------------
         custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
         sns.set_theme(style="whitegrid", context="paper")
         sns.set_palette(custom_palette)
-
+    
         x = list(range(i - 1))
         save_path_ablation = f'{self.save_path}/ablation/'
-
-        # Compute 95% CI on per-step member distributions (values used as yerr)
-        # Note: We already stored std lists; here we compute CI from member metrics where possible.
-        # For plotting, we use the per-step *std* we collected (convert to CI if desired).
-        # Using std as whiskers to match your previous convention:
+    
         r_err   = r_std_list
         rho_err = rho_std_list
         train_rmse_err = train_rmse_std_list
         test_rmse_err  = test_rmse_std_list
-
-        # R (ensemble) with whiskers from member std
+    
+        # R (ensemble)
         plt.figure(figsize=(6, 4))
         plt.errorbar(x, rs, yerr=r_err, label="Pearson-R (Ensemble)", marker='o', capsize=4)
         plt.xlabel("Number of removed features")
@@ -1583,7 +1995,7 @@ class BaseRegressionModel:
         plt.tight_layout()
         plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_ENSEMBLE_R.png', dpi=300, bbox_inches='tight')
         plt.close()
-
+    
         # Rho (ensemble)
         plt.figure(figsize=(6, 4))
         plt.errorbar(x, rhos, yerr=rho_err, label="Spearman-Rho (Ensemble)", marker='o', capsize=4)
@@ -1594,8 +2006,8 @@ class BaseRegressionModel:
         plt.tight_layout()
         plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_ENSEMBLE_Rho.png', dpi=300, bbox_inches='tight')
         plt.close()
-
-        # RMSE (ensemble) with whiskers from member RMSE stds
+    
+        # RMSE (ensemble)
         plt.figure(figsize=(6, 4))
         plt.errorbar(x, test_rmse_list, yerr=test_rmse_err, label="Test RMSE (Ensemble)", marker='o', capsize=4)
         plt.errorbar(x, train_rmse_list, yerr=train_rmse_err, label="Train RMSE (proxy mean)", marker='o', capsize=4)
@@ -1606,13 +2018,12 @@ class BaseRegressionModel:
         plt.tight_layout()
         plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_ENSEMBLE_errors.png', dpi=300, bbox_inches='tight')
         plt.close()
-
+    
         # Save feature removal history
         pd.DataFrame({'Removed_Features': removals}).to_csv(
             f'{save_path_ablation}{self.target_name}_ENSEMBLE_ablation_history.csv', index=False)
-
+    
         return rs, p_values, removals
-       
 
     
     def feature_importance(self, top_n: int = 10, batch_size=None, iter_idx=None, ablation_idx=None, save_results=True) -> Dict:
