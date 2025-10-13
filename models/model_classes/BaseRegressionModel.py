@@ -686,6 +686,23 @@ class BaseRegressionModel:
             os.makedirs(save_path, exist_ok=True)
         
         if get_shap:
+            feature_names = list(self.feature_selection.get('features', self.X.columns.tolist()))
+
+            def _save_shap_csv(array: np.ndarray, file_path: str) -> None:
+                """Persist SHAP arrays with feature headers as CSV."""
+                arr = np.asarray(array)
+                if arr.ndim == 1:
+                    arr = arr.reshape(1, -1)
+                elif arr.ndim > 2:
+                    arr = arr.reshape(-1, arr.shape[-1])
+                # Fall back to current X columns if feature list length mismatched
+                if arr.shape[1] != len(feature_names):
+                    cols = list(self.X.columns[:arr.shape[1]])
+                else:
+                    cols = feature_names
+                shap_df = pd.DataFrame(arr, columns=cols)
+                shap_df.to_csv(file_path, index=False)
+
             if self.model_name == "NGBoost":
                 if self.split_shaps:
                     all_test_shap_mean_array = np.concatenate(all_test_shap_mean, axis=0)
@@ -694,9 +711,9 @@ class BaseRegressionModel:
                     test_shap_mean = all_test_shap_mean_array
                     test_shap_variance = all_test_shap_variance_array
                     # Save SHAP values to a file
-                    np.save(f'{save_path}_mean_shap_values_test.npy', test_shap_mean)
-                    np.save(f'{save_path}_predicitve_uncertainty_shap_values_test.npy', test_shap_variance)
-                    np.save(f'{save_path}_all_shap_values(variance)_test.npy', all_test_shap_variance_array)
+                    _save_shap_csv(test_shap_mean, f'{save_path}_mean_shap_values_test.csv')
+                    _save_shap_csv(test_shap_variance, f'{save_path}_predicitve_uncertainty_shap_values_test.csv')
+                    _save_shap_csv(all_test_shap_variance_array, f'{save_path}_all_shap_values(variance)_test.csv')
 
                     # Plot for mean SHAP values
                     shap.summary_plot(test_shap_mean, features=X_vals, feature_names=self.X.columns, show=False, max_display=self.top_n)
@@ -721,9 +738,9 @@ class BaseRegressionModel:
                 variance_shap_values = np.mean(all_shap_variance_array, axis=0)
 
                 # Save SHAP values to a file
-                np.save(f'{save_path}_mean_shap_values.npy', mean_shap_values)
-                np.save(f'{save_path}_predicitve_uncertainty_shap_values.npy', variance_shap_values)
-                np.save(f'{save_path}_all_shap_values(variance).npy', all_shap_variance_array)
+                _save_shap_csv(mean_shap_values, f'{save_path}_mean_shap_values.csv')
+                _save_shap_csv(variance_shap_values, f'{save_path}_predicitve_uncertainty_shap_values.csv')
+                _save_shap_csv(all_shap_variance_array, f'{save_path}_all_shap_values(variance).csv')
         
                 # Plot for mean SHAP values
                 shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
@@ -753,43 +770,42 @@ class BaseRegressionModel:
                     #plt.close()
 
                     test_shap_mean = np.concatenate(all_shap_test, axis=0)
-                    np.save(f'{self.save_path}/{self.target_name}_mean_shap_values_test.npy', test_shap_mean)
+                    _save_shap_csv(test_shap_mean, f'{self.save_path}/{self.target_name}_mean_shap_values_test.csv')
                     shap.summary_plot(test_shap_mean , features=X_vals, feature_names=self.X.columns, show=False, max_display=self.top_n)
                     plt.title(f'{self.target_name}  Summary Plot (Aggregated)', fontsize=16)
                     plt.subplots_adjust(top=0.90)
                     plt.savefig(f'{save_path}_shap_aggregated_beeswarm_test.png')
                     plt.close()
-                
-                all_shap_mean_array = np.stack(all_shap_values, axis=0)
-                # Average over the folds to get an aggregated array of shape (n_samples, n_features)
-                mean_shap_values = np.mean(all_shap_mean_array, axis=0)
-                np.save(f'{self.save_path}/{self.target_name}_mean_shap_values.npy', mean_shap_values)
-                shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
-                plt.title(f'{self.target_name}  Summary Plot (Aggregated)', fontsize=16)
-                plt.subplots_adjust(top=0.90)
-                plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png')
-                #with open(f'{save_path}_mean_shap_explanations.pkl', 'wb') as fp:
-                #    pickle.dump(mean_shap_values, fp)
-                plt.close()
-
-            np.save(f'{save_path}_all_shap_values(mu).npy', all_shap_mean_array)
-            self.X_test = X_vals
-            self.shap_mean = mean_shap_values
-            if self.split_shaps:
-                self.test_shap_mean = test_shap_mean
-            if self.model_name == "NGBoost":
-                self.shap_variance = variance_shap_values
-                if self.split_shaps:
-                    self.test_shap_variance = test_shap_variance
             
-                
-            # Compute the mean of the absolute SHAP values for each feature
-            feature_importances = np.mean(np.abs(mean_shap_values), axis=0)
-            feature_importance_dict = dict(zip(self.X.columns, feature_importances))
+            all_shap_mean_array = np.stack(all_shap_values, axis=0)
+            # Average over the folds to get an aggregated array of shape (n_samples, n_features)
+            mean_shap_values = np.mean(all_shap_mean_array, axis=0)
+            _save_shap_csv(mean_shap_values, f'{self.save_path}/{self.target_name}_mean_shap_values.csv')
+            shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
+            plt.title(f'{self.target_name}  Summary Plot (Aggregated)', fontsize=16)
+            plt.subplots_adjust(top=0.90)
+            plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png')
+            #with open(f'{save_path}_mean_shap_explanations.pkl', 'wb') as fp:
+            #    pickle.dump(mean_shap_values, fp)
+            plt.close()
+
+        _save_shap_csv(all_shap_mean_array, f'{save_path}_all_shap_values(mu).csv')
+        self.X_test = X_vals
+        self.shap_mean = mean_shap_values
+        if self.split_shaps:
+            self.test_shap_mean = test_shap_mean
+        if self.model_name == "NGBoost":
+            self.shap_variance = variance_shap_values
             if self.split_shaps:
-                feature_importances_test = np.mean(np.abs(test_shap_mean), axis=0)
-                feature_importance_test_dict = dict(zip(self.X.columns, feature_importances))
-            # Save feature importances to a file
+                self.test_shap_variance = test_shap_variance
+        
+        # Compute the mean of the absolute SHAP values for each feature
+        feature_importances = np.mean(np.abs(mean_shap_values), axis=0)
+        feature_importance_dict = dict(zip(self.X.columns, feature_importances))
+        if self.split_shaps:
+            feature_importances_test = np.mean(np.abs(test_shap_mean), axis=0)
+            feature_importance_test_dict = dict(zip(self.X.columns, feature_importances))
+        # Save feature importances to a file
             
 
         metrics = {
@@ -802,6 +818,7 @@ class BaseRegressionModel:
         'y_pred': preds,
         'y_test': y_vals,
         'pred_dist': pred_dists,
+        'test_index': val_idx,
         'epistemic': epistemic_uncertainty if uncertainty else None,
         'aleatoric': aleatoric_uncertainty if uncertainty else None,
         'feature_importance': feature_importances if get_shap else None,
@@ -841,6 +858,7 @@ class BaseRegressionModel:
         rs, rhos, p_values, removals = [], [], [], []
         train_rmse_list, test_rmse_list = [], []
         r_std_list, rho_std_list, train_rmse_std_list, test_rmse_std_list = [], [], [], []
+        
 
         number_of_features = len(self.feature_selection['features'])
         i = 1
@@ -853,6 +871,9 @@ class BaseRegressionModel:
         )
 
         while number_of_features > 0:
+            ensemble_y_tests, ensemble_y_preds, ensemble_test_idx = [], [], []
+            members_shap_values_test, members_X_test = [], []
+            members_shap_values_train, members_X_train = [], []
             self.logging.info(f"---- Starting ablation step {i} with {number_of_features} features remaining. ----")
 
             if number_of_features > threshold_to_one_fps:
@@ -885,6 +906,18 @@ class BaseRegressionModel:
                 metrics_df = pd.DataFrame([metrics])
                 metrics_df.to_csv(f'{save_path}/{self.target_name}_metrics.csv', index=False)
 
+                ensemble_y_tests.append(metrics['y_test'])
+                ensemble_y_preds.append(metrics['y_pred'])
+                ensemble_test_idx.append(metrics.get('test_index', None))
+
+                if hasattr(self, "test_shap_values") and self.test_shap_values is not None:
+                    members_shap_values_test.append(self.test_shap_values)
+                    if hasattr(self, "test_X_for_shap"):
+                        members_X_test.append(self.test_X_for_shap)
+                if hasattr(self, "shap_values") and self.shap_values is not None:
+                    members_shap_values_train.append(self.shap_values)
+                    if hasattr(self, "X_for_shap"):
+                        members_X_train.append(self.X_for_shap)
                 if self.shap_mean is not None:
                     members_shap_mean.append(self.shap_mean)
 
@@ -918,6 +951,187 @@ class BaseRegressionModel:
             # SHAP plots saved as before (no change)
             # [Omitted here for brevity, unchanged from original]
 
+            # ========= NEW: step-level (across members) averages =========
+            step_dir = f'{self.save_path}/ablation/ablation_step[{i}]'
+            os.makedirs(step_dir, exist_ok=True)
+            feature_names_current = list(self.feature_selection['features'])
+
+            def save_avg_beeswarm(shap_list, X_list, tag: str):
+                if not shap_list: 
+                    return
+                # If all members used identical rows, take a true mean across members per-row; else pool rows.
+                same_shape = len({(sv.shape[0], sv.shape[1]) for sv in shap_list}) == 1
+                if same_shape:
+                    # Try true per-row mean (best)
+                    shap_avg = np.mean(np.stack(shap_list, axis=0), axis=0)  # (n_rows, n_features)
+                    data_avg = None
+                    if X_list and all(x is not None for x in X_list) and \
+                       len({(x.shape[0], x.shape[1]) for x in X_list}) == 1:
+                        data_avg = np.mean(np.stack([x.values for x in X_list], axis=0), axis=0)  # (n_rows, n_features)
+                    expl = shap.Explanation(
+                        values=shap_avg,
+                        base_values=np.zeros(shap_avg.shape[0]),
+                        data=data_avg,
+                        feature_names=feature_names_current
+                    )
+                else:
+                    # Pool all rows from all members (good proxy of average distribution)
+                    shap_pool = np.vstack(shap_list)                                  # (sum_rows, n_features)
+                    data_pool = None
+                    if X_list and any(x is not None for x in X_list):
+                        data_pool = np.vstack([x.values for x in X_list if x is not None])
+                    expl = shap.Explanation(
+                        values=shap_pool,
+                        base_values=np.zeros(shap_pool.shape[0]),
+                        data=data_pool,
+                        feature_names=feature_names_current
+                    )
+
+                plt.figure(figsize=(8, 6))
+                shap.plots.beeswarm(expl, show=False)  # do not pass color/style; let SHAP choose
+                plt.tight_layout()
+                plt.savefig(f"{step_dir}/{self.target_name}_SHAP_beeswarm_{tag}_AVG.png", dpi=300, bbox_inches="tight")
+                plt.close()
+
+            # Save averaged test/train beeswarms if available
+            save_avg_beeswarm(members_shap_values_test,  members_X_test,  tag="test")
+            save_avg_beeswarm(members_shap_values_train, members_X_train, tag="train")
+            # --- 1) Average scalar metrics across members ---
+            avg_r        = float(np.mean(ensemble_rs))
+            avg_rho      = float(np.mean(ensemble_rhos))
+            avg_p        = float(np.mean(ensemble_p_values))
+            avg_train_mse= float(np.mean(ensemble_train_mse))
+            avg_test_mse = float(np.mean(ensemble_test_mse))
+            avg_train_rmse = float(np.sqrt(avg_train_mse))
+            avg_test_rmse  = float(np.sqrt(avg_test_mse))
+            
+            pd.DataFrame([{
+                "r": avg_r,
+                "rho": avg_rho,
+                "p_value": avg_p,
+                "train_mse": avg_train_mse,
+                "mse": avg_test_mse,
+                "train_rmse": avg_train_rmse,
+                "rmse": avg_test_rmse,
+                "members": members,
+                "features_remaining": number_of_features
+            }]).to_csv(f"{step_dir}/{self.target_name}_metrics_avg_over_members.csv", index=False)
+            
+            # --- 2) “Average” Actual vs Predicted plot across members ---
+            # We’ll try a *true* mean prediction per sample if we can align test indices.
+            # Your nested_eval already returns y_test and y_pred in metrics.
+            # If you can also add 'test_index' to metrics, we can align perfectly.
+            try:
+                # Build a dict of predictions by row index
+                preds_by_index = {}
+                y_by_index = {}
+                have_indices = True
+                for m_metrics in [metrics_df.iloc[0] for _ in range(1)]:  # placeholder to keep scope tools quiet
+                    pass
+                # Re-read actual member-level metrics we collected
+                members_payload = []  # (y_test, y_pred, test_index or None)
+                for m in range(members):
+                    # reconstruct from files we just wrote (fast) OR
+                    # keep them in lists while looping members (recommended).
+                    # If you still have them in memory from the loop, use that instead:
+                    #   y_t = ensemble_y_tests[m]; y_p = ensemble_y_preds[m]; idx = ensemble_test_idx[m] (optional)
+                    pass
+            except Exception:
+                have_indices = False
+            
+            # Simpler: if you *can* keep these during the loop, do this:
+            # (Add these lists before the loop)
+            #   ensemble_y_tests, ensemble_y_preds, ensemble_test_idx = [], [], []
+            # (Inside the loop after metrics_df):
+            #   ensemble_y_tests.append(metrics['y_test'])
+            #   ensemble_y_preds.append(metrics['y_pred'])
+            #   ensemble_test_idx.append(metrics.get('test_index', None))
+            
+            avg_plot_save = f"{step_dir}/{self.target_name}_actual_vs_predicted_AVG.png"
+            if members > 0:
+                if all(x is not None for x in locals().get('ensemble_test_idx', [])) \
+                   and len(set(tuple(np.asarray(idx).ravel()) for idx in ensemble_test_idx)) == 1:
+                    # True per-row mean (same test rows across members)
+                    y_test_ref = np.asarray(ensemble_y_tests[0]).ravel()
+                    y_pred_stack = np.vstack([np.asarray(p).ravel() for p in ensemble_y_preds])
+                    y_pred_mean = np.mean(y_pred_stack, axis=0)
+                    plot_df_avg = pd.DataFrame({"Actual": y_test_ref, "Predicted": y_pred_mean})
+                else:
+                    # Fallback: pool all member predictions for a stable scatter cloud
+                    plot_df_avg = pd.DataFrame({
+                        "Actual": np.concatenate([np.asarray(y).ravel() for y in ensemble_y_tests]),
+                        "Predicted": np.concatenate([np.asarray(p).ravel() for p in ensemble_y_preds]),
+                    })
+            
+                self.plot(
+                    f"Actual vs. Prediction (AVERAGED over {members} members) - {self.model_name} - {self.target_name} - No. features: {number_of_features}",
+                    modality='',
+                    plot_df=plot_df_avg,
+                    save_path_file=avg_plot_save
+                )
+            
+            # --- 3) Averaged SHAP beeswarm across members ---
+            # We support both train and test SHAP; prefer test if present.
+            # During the member loop, also append raw SHAP arrays + feature names:
+            #   members_shap_values_test = []; members_X_test = []
+            #   (inside member loop):
+            #   if hasattr(self, "test_shap_values") and self.test_shap_values is not None:
+            #       members_shap_values_test.append(self.test_shap_values)  # (n_samples, n_features)
+            #       members_X_test.append(self.test_X_for_shap)             # Data used to color beeswarm (optional)
+            
+            def _save_avg_beeswarm(shap_list, X_list, tag="test"):
+                if not shap_list:
+                    return
+                save_bee = f"{step_dir}/{self.target_name}_SHAP_beeswarm_{tag}_AVG.png"
+            
+                # Try true mean per row if rows align; else pool values.
+                same_rows = False
+                if X_list and all(x is not None for x in X_list):
+                    # crude alignment check on shape/indices if you keep an index
+                    try:
+                        same_rows = all(getattr(X_list[0], "index", None) is not None and
+                                        getattr(X_list[k], "index", None) is not None and
+                                        (X_list[k].index.equals(X_list[0].index)) for k in range(len(X_list)))
+                    except Exception:
+                        same_rows = False
+            
+                import shap
+                import matplotlib.pyplot as plt
+            
+                if same_rows:
+                    # True mean across members: average SHAP per-sample, per-feature
+                    shap_stack = np.stack(shap_list, axis=0)  # (members, n_samples, n_features)
+                    shap_avg = np.mean(shap_stack, axis=0)    # (n_samples, n_features)
+                    X_ref = X_list[0]
+                    plt.figure(figsize=(8, 6))
+                    shap.plots.beeswarm(shap.Explanation(values=shap_avg, feature_names=list(X_ref.columns)),
+                                        show=False)
+                    plt.tight_layout()
+                    plt.savefig(save_bee, dpi=300, bbox_inches="tight")
+                    plt.close()
+                else:
+                    # Pool all SHAP rows from all members (good approximation to the average distribution)
+                    shap_pool = np.vstack(shap_list)  # (sum_samples, n_features)
+                    # Feature names from first X if available, otherwise from self.feature_selection
+                    feature_names = list(X_list[0].columns) if (X_list and X_list[0] is not None) \
+                                    else list(self.feature_selection['features'])
+                    plt.figure(figsize=(8, 6))
+                    shap.plots.beeswarm(shap.Explanation(values=shap_pool, feature_names=feature_names),
+                                        show=False)
+                    plt.tight_layout()
+                    plt.savefig(save_bee, dpi=300, bbox_inches="tight")
+                    plt.close()
+            
+            # Call the helper for test/train if you collected them during the loop
+            try:
+                _save_avg_beeswarm(members_shap_values_test, members_X_test, tag="test")
+            except NameError:
+                pass
+            try:
+                _save_avg_beeswarm(members_shap_values_train, members_X_train, tag="train")
+            except NameError:
+                pass
+            # ========= END NEW =========
             voted_features = sorted(feature_votes.items(), key=lambda x: -x[1])[:features_to_remove]
             least_important_features = [feat for feat, count in voted_features]
 
@@ -1017,7 +1231,388 @@ class BaseRegressionModel:
         pd.DataFrame({'Removed_Features': removals}).to_csv(f'{save_path_ablation}{self.target_name}_ablation_history.csv', index=False)
 
         return rs, p_values, removals
-            
+    
+    def feature_ablation_ensemble(
+            self, 
+            folds: int = -1, 
+            get_shap: bool = True, 
+            tune: bool = False, 
+            tune_folds: int = 10, 
+            features_per_step: int = 1, 
+            members: int = 1,
+            threshold_to_one_fps: int = 10,
+            test_set: bool = True):
+        """
+        Perform iterative feature ablation using an *ensemble* at each step.
+
+        Differences vs. feature_ablation:
+          - For each ablation step, we average the member predictions to form an ensemble prediction
+            (aligned by test indices) and recompute metrics (RMSE, r, rho, p-value) on this ensemble.
+          - We still keep/record distinct member metrics so CIs/whiskers can be plotted.
+          - We also save an averaged SHAP beeswarm (true per-row mean if rows align, else pooled rows)
+            at each step.
+          - We still select features to remove via majority vote using per-member importances.
+
+        Returns:
+            Tuple[list, list, list]: Lists of ensemble Pearson r, ensemble p-values,
+            and removed feature names after each ablation step.
+        """
+        import os
+        import numpy as np
+        import pandas as pd
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        from scipy import stats
+
+        # ---- helpers ----
+        def _pearson_r(y_true, y_pred):
+            y_true = np.asarray(y_true).ravel()
+            y_pred = np.asarray(y_pred).ravel()
+            if y_true.size < 2 or np.allclose(np.std(y_true), 0) or np.allclose(np.std(y_pred), 0):
+                return 0.0, 1.0
+            r, p = stats.pearsonr(y_true, y_pred)
+            return float(r), float(p)
+
+        def _spearman_rho(y_true, y_pred):
+            y_true = np.asarray(y_true).ravel()
+            y_pred = np.asarray(y_pred).ravel()
+            if y_true.size < 2:
+                return 0.0
+            rho, _ = stats.spearmanr(y_true, y_pred)
+            return float(rho)
+
+        def _mse(y_true, y_pred):
+            y_true = np.asarray(y_true).ravel()
+            y_pred = np.asarray(y_pred).ravel()
+            return float(np.mean((y_true - y_pred) ** 2))
+
+        def _rmse(y_true, y_pred):
+            return float(np.sqrt(_mse(y_true, y_pred)))
+
+        def _ci95(values):
+            if len(values) <= 1:
+                return 0.0
+            return 1.96 * np.std(values, ddof=1) / np.sqrt(len(values))
+
+        def _save_avg_beeswarm(step_dir, feature_names_current, shap_list, X_list, tag="test"):
+            """Save averaged SHAP beeswarm across members into step_dir."""
+            if not shap_list:
+                return
+            import shap
+
+            save_bee = f"{step_dir}/{self.target_name}_SHAP_beeswarm_{tag}_ENSEMBLE.png"
+
+            # Try true mean per row if all shapes the same and (optionally) same indices.
+            same_shape = len({(sv.shape[0], sv.shape[1]) for sv in shap_list}) == 1
+            if same_shape:
+                shap_stack = np.stack([np.asarray(sv) for sv in shap_list], axis=0)  # (members, n_rows, n_features)
+                shap_avg = np.mean(shap_stack, axis=0)
+                data_avg = None
+                if X_list and len(X_list) == len(shap_list):
+                    try:
+                        same_rows = all(
+                            getattr(X_list[0], "index", None) is not None and
+                            getattr(X_list[k], "index", None) is not None and
+                            X_list[k].index.equals(X_list[0].index)
+                            for k in range(len(X_list))
+                        )
+                    except Exception:
+                        same_rows = False
+                    if same_rows:
+                        data_avg = np.mean(np.stack([x[feature_names_current].values for x in X_list], axis=0), axis=0)
+                expl = shap.Explanation(
+                    values=shap_avg,
+                    base_values=np.zeros(shap_avg.shape[0]),
+                    data=data_avg,
+                    feature_names=list(feature_names_current),
+                )
+            else:
+                # Pooling fallback
+                shap_pool = np.vstack([np.asarray(sv) for sv in shap_list])
+                data_pool = None
+                if X_list and any(x is not None for x in X_list):
+                    data_pool = np.vstack([x[feature_names_current].values for x in X_list if x is not None])
+                expl = shap.Explanation(
+                    values=shap_pool,
+                    base_values=np.zeros(shap_pool.shape[0]),
+                    data=data_pool,
+                    feature_names=list(feature_names_current),
+                )
+
+            plt.figure(figsize=(8, 6))
+            shap.plots.beeswarm(expl, show=False)
+            plt.tight_layout()
+            plt.savefig(save_bee, dpi=300, bbox_inches="tight")
+            plt.close()
+
+        # ---- containers for ablation curves (ENSEMBLE-level metrics) ----
+        rs, rhos, p_values, removals = [], [], [], []
+        train_rmse_list, test_rmse_list = [], []
+
+        # ---- error bars from distinct member performances ----
+        r_std_list, rho_std_list, train_rmse_std_list, test_rmse_std_list = [], [], [], []
+
+        number_of_features = len(self.feature_selection['features'])
+        i = 1
+
+        # Stable but distinct seeds per member across steps
+        global_random_state = int(getattr(self, "random_state", 0))
+        rng_global = np.random.default_rng(global_random_state)
+        member_seeds = rng_global.integers(
+            low=0, high=np.iinfo(np.uint32).max, size=members, dtype=np.uint32
+        )
+
+        while number_of_features > 0:
+            self.logging.info(f"---- Starting ablation step {i} with {number_of_features} features remaining. ----")
+
+            if number_of_features > threshold_to_one_fps:
+                features_to_remove = min(features_per_step, number_of_features)
+            else:
+                features_to_remove = 1
+
+            step_dir = f'{self.save_path}/ablation/ablation_step[{i}]'
+            os.makedirs(step_dir, exist_ok=True)
+
+            # Per-member collections
+            feature_votes = {}
+            member_rs, member_rhos, member_p_values = [], [], []
+            member_train_mse, member_test_mse = [], []
+
+            # For building ensemble predictions
+            member_y_tests, member_y_preds, member_test_index = [], [], []
+
+            # SHAP collectors for ensemble beeswarm
+            members_shap_values_test, members_X_test = [], []
+            members_shap_values_train, members_X_train = [], []
+
+            for m in range(members):
+                self.random_state = int(member_seeds[m])   # same seed for this member at every step
+                self.logging.info(f"[ablation step {i}] member {m} seed={self.random_state}")
+
+                save_path = f'{step_dir}/member[{m}]'
+                os.makedirs(save_path, exist_ok=True)
+
+                metrics = self.nested_eval(
+                    folds=folds, 
+                    get_shap=get_shap, 
+                    tune=tune, 
+                    tune_folds=tune_folds, 
+                    ablation_idx=i, 
+                    member_idx=m)
+
+                # Persist the member metrics as-is
+                pd.DataFrame([metrics]).to_csv(f'{save_path}/{self.target_name}_metrics.csv', index=False)
+
+                # Cache predictions/targets for later ensemble recomputation
+                member_y_tests.append(np.asarray(metrics['y_test']).ravel())
+                member_y_preds.append(np.asarray(metrics['y_pred']).ravel())
+                member_test_index.append(metrics.get('test_index', None))
+
+                # Optional: SHAP matrices (test preferred)
+                if hasattr(self, "test_shap_values") and self.test_shap_values is not None:
+                    members_shap_values_test.append(np.asarray(self.test_shap_values))
+                    if hasattr(self, "test_X_for_shap"):
+                        members_X_test.append(self.test_X_for_shap.copy())
+                if hasattr(self, "shap_values") and self.shap_values is not None:
+                    members_shap_values_train.append(np.asarray(self.shap_values))
+                    if hasattr(self, "X_for_shap"):
+                        members_X_train.append(self.X_for_shap.copy())
+
+                # Member-level plots (unchanged)
+                self.plot(
+                    f"Actual vs. Prediction {self.model_name}- {self.target_name} No. features: {number_of_features}", 
+                    modality='',
+                    plot_df=pd.DataFrame({'Actual': metrics['y_test'], 'Predicted': metrics['y_pred']}),
+                    save_path_file=f'{save_path}/{self.target_name}_actual_vs_predicted.png')
+
+                # Collect member scalar metrics (for CIs)
+                member_rs.append(metrics['r'])
+                member_rhos.append(metrics['rho'])
+                member_p_values.append(metrics['p_value'])
+                member_train_mse.append(metrics['train_mse'])
+                member_test_mse.append(metrics['mse'])
+
+                # Majority-vote least important features
+                importance = metrics['feature_importance_test'] if test_set else metrics['feature_importance']
+                importance_indices = np.argsort(importance)
+                least_important = [self.feature_selection['features'][idx] for idx in importance_indices[:features_per_step]]
+                for feat in least_important:
+                    feature_votes[feat] = feature_votes.get(feat, 0) + 1
+
+            # ---------- Build ENSEMBLE prediction aligned by test indices ----------
+            # Strategy:
+            #   - If every member provides test_index and they all match, take simple mean per row.
+            #   - Else, align by index via dict; if some rows are missing in some members, average across
+            #     available predictions for that row.
+            #   - Save ensemble-level "Actual vs Predicted" and recomputed metrics.
+            can_simple_stack = (
+                members > 0 and
+                all(idx is not None for idx in member_test_index) and
+                len({tuple(np.asarray(idx).ravel()) for idx in member_test_index}) == 1 and
+                len({len(y) for y in member_y_tests}) == 1 and
+                len({len(p) for p in member_y_preds}) == 1
+            )
+
+            if can_simple_stack:
+                # Simple, fast path
+                y_test_ref = member_y_tests[0]
+                y_pred_stack = np.vstack(member_y_preds)  # (members, n_rows)
+                y_pred_ens = np.mean(y_pred_stack, axis=0)
+            else:
+                # Robust alignment by arbitrary indices
+                pred_map = {}  # index -> list of predictions
+                y_map = {}     # index -> true y (must be identical across members for an index)
+                for y_t, y_p, idx in zip(member_y_tests, member_y_preds, member_test_index):
+                    if idx is None:
+                        # If no indices, fallback to position-based averaging over common length
+                        n = min(len(y_t), len(y_p))
+                        for k in range(n):
+                            pred_map.setdefault(k, []).append(y_p[k])
+                            y_map[k] = y_t[k]
+                    else:
+                        idx = np.asarray(idx).ravel()
+                        for k, rid in enumerate(idx):
+                            pred_map.setdefault(rid, []).append(y_p[k])
+                            y_map[rid] = y_t[k]
+                # Build aligned arrays
+                aligned_ids = list(y_map.keys())
+                aligned_ids.sort(key=lambda z: (isinstance(z, (str, bytes)), z))
+                y_test_ref = np.array([y_map[rid] for rid in aligned_ids], dtype=float)
+                y_pred_ens = np.array([np.mean(pred_map[rid]) for rid in aligned_ids], dtype=float)
+
+            # Ensemble-level metrics
+            ens_r, ens_p = _pearson_r(y_test_ref, y_pred_ens)
+            ens_rho = _spearman_rho(y_test_ref, y_pred_ens)
+            ens_mse_test = _mse(y_test_ref, y_pred_ens)
+            ens_rmse_test = float(np.sqrt(ens_mse_test))
+
+            # For train RMSE on ensemble: we don't recompute (train sets differ across members).
+            # Use mean of member train MSE as a proxy and take sqrt after averaging MSE.
+            ens_mse_train = float(np.mean(member_train_mse)) if member_train_mse else np.nan
+            ens_rmse_train = float(np.sqrt(ens_mse_train)) if not np.isnan(ens_mse_train) else np.nan
+
+            # Save ensemble metrics for this step
+            pd.DataFrame([{
+                "r_ensemble": ens_r,
+                "rho_ensemble": ens_rho,
+                "p_value_ensemble": ens_p,
+                "train_mse_proxy_mean": ens_mse_train,
+                "mse_ensemble": ens_mse_test,
+                "train_rmse_proxy": ens_rmse_train,
+                "rmse_ensemble": ens_rmse_test,
+                "members": members,
+                "features_remaining": number_of_features
+            }]).to_csv(f"{step_dir}/{self.target_name}_metrics_ENSEMBLE.csv", index=False)
+
+            # Save an ensemble Actual vs Predicted plot
+            self.plot(
+                f"Actual vs. Prediction (ENSEMBLE of {members}) - {self.model_name} - {self.target_name} - No. features: {number_of_features}",
+                modality='',
+                plot_df=pd.DataFrame({"Actual": y_test_ref, "Predicted": y_pred_ens}),
+                save_path_file=f"{step_dir}/{self.target_name}_actual_vs_predicted_ENSEMBLE.png"
+            )
+
+            # Averaged SHAP beeswarms (test preferred)
+            feature_names_current = list(self.feature_selection['features'])
+            _save_avg_beeswarm(step_dir, feature_names_current, members_shap_values_test, members_X_test,  tag="test")
+            _save_avg_beeswarm(step_dir, feature_names_current, members_shap_values_train, members_X_train, tag="train")
+
+            # ---------- Determine features to remove via majority vote ----------
+            voted_features = sorted(feature_votes.items(), key=lambda x: -x[1])[:features_to_remove]
+            least_important_features = [feat for feat, _ in voted_features]
+
+            # Remove features and record
+            self.X = self.X.drop(columns=least_important_features)
+            self.feature_selection['features'] = [f for f in self.feature_selection['features'] if f not in least_important_features]
+            removals.extend(least_important_features)
+            number_of_features -= features_to_remove
+
+            # ---------- Append ENSEMBLE curves + CI from member metrics ----------
+            rs.append(ens_r)
+            rhos.append(ens_rho)
+            p_values.append(ens_p)
+            train_rmse_list.append(ens_rmse_train)
+            test_rmse_list.append(ens_rmse_test)
+
+            r_std_list.append(np.std(member_rs, ddof=1) if len(member_rs) > 1 else 0.0)
+            rho_std_list.append(np.std(member_rhos, ddof=1) if len(member_rhos) > 1 else 0.0)
+
+            # For RMSE CIs, compute on member-level RMSEs (sqrt of member MSEs)
+            member_train_rmse = [np.sqrt(x) for x in member_train_mse] if member_train_mse else []
+            member_test_rmse  = [np.sqrt(x) for x in member_test_mse]  if member_test_mse  else []
+            train_rmse_std_list.append(np.std(member_train_rmse, ddof=1) if len(member_train_rmse) > 1 else 0.0)
+            test_rmse_std_list.append(np.std(member_test_rmse,  ddof=1) if len(member_test_rmse)  > 1 else 0.0)
+
+            # Optional calibration per step for NGBoost
+            if self.model_name == "NGBoost":
+                self.calibration_analysis(ablation_idx=i)
+
+            # Adjust FPS if close to the end
+            i += 1
+            if number_of_features <= threshold_to_one_fps:
+                features_per_step = 1
+
+            self.logging.info(
+                f"[step {i-1}] Ensemble r={rs[-1]:.4f} (member r mean={np.mean(member_rs):.4f})"
+            )
+
+        # ---------- Final plotting with error bars (CIs from member metrics) ----------
+        custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
+        sns.set_theme(style="whitegrid", context="paper")
+        sns.set_palette(custom_palette)
+
+        x = list(range(i - 1))
+        save_path_ablation = f'{self.save_path}/ablation/'
+
+        # Compute 95% CI on per-step member distributions (values used as yerr)
+        # Note: We already stored std lists; here we compute CI from member metrics where possible.
+        # For plotting, we use the per-step *std* we collected (convert to CI if desired).
+        # Using std as whiskers to match your previous convention:
+        r_err   = r_std_list
+        rho_err = rho_std_list
+        train_rmse_err = train_rmse_std_list
+        test_rmse_err  = test_rmse_std_list
+
+        # R (ensemble) with whiskers from member std
+        plt.figure(figsize=(6, 4))
+        plt.errorbar(x, rs, yerr=r_err, label="Pearson-R (Ensemble)", marker='o', capsize=4)
+        plt.xlabel("Number of removed features")
+        plt.ylabel("Pearson-R")
+        plt.title("Ensemble Pearson-R Over Feature Ablation")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_ENSEMBLE_R.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # Rho (ensemble)
+        plt.figure(figsize=(6, 4))
+        plt.errorbar(x, rhos, yerr=rho_err, label="Spearman-Rho (Ensemble)", marker='o', capsize=4)
+        plt.xlabel("Number of removed features")
+        plt.ylabel("Spearman-Rho")
+        plt.title("Ensemble Spearman-Rho Over Feature Ablation")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_ENSEMBLE_Rho.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # RMSE (ensemble) with whiskers from member RMSE stds
+        plt.figure(figsize=(6, 4))
+        plt.errorbar(x, test_rmse_list, yerr=test_rmse_err, label="Test RMSE (Ensemble)", marker='o', capsize=4)
+        plt.errorbar(x, train_rmse_list, yerr=train_rmse_err, label="Train RMSE (proxy mean)", marker='o', capsize=4)
+        plt.xlabel("Number of removed features")
+        plt.ylabel("RMSE")
+        plt.title("Ensemble Train/Test RMSE Over Feature Ablation")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_ENSEMBLE_errors.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # Save feature removal history
+        pd.DataFrame({'Removed_Features': removals}).to_csv(
+            f'{save_path_ablation}{self.target_name}_ENSEMBLE_ablation_history.csv', index=False)
+
+        return rs, p_values, removals
+       
 
     
     def feature_importance(self, top_n: int = 10, batch_size=None, iter_idx=None, ablation_idx=None, save_results=True) -> Dict:
