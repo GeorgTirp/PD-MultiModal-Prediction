@@ -10,6 +10,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 import json
 from collections import Counter
 import copy
+import inspect
 import pandas as pd
 from sklearn.model_selection import train_test_split, KFold, LeaveOneOut
 from sklearn.metrics import mean_squared_error
@@ -104,6 +105,7 @@ class BaseRegressionModel:
         self.shap_mean  = None 
         self.shap_variance = None
         self.X_test = None
+        self._raw_df = data_df.copy()
 
         if standardize == "zscore":
             self.scaler = ZScoreScaler()
@@ -378,7 +380,8 @@ class BaseRegressionModel:
             dict: Dictionary of performance metrics, uncertainties, SHAP values, and predictions.
         """
         self.logging.info("Starting model evaluation...")
-
+        X, y, z, m, std = self.model_specific_preprocess(self._raw_df.copy())
+        self.X, self.y, self.z, self.m, self.std = X, y, z, m, std
         #1) Choose outer CV depending on whether we have pat_ids
         if self.Pat_IDs is None:
             # fallback to standard CV
@@ -852,6 +855,7 @@ class BaseRegressionModel:
         target_col: Optional[str] = None,
         save_dir: Optional[str] = None,
         random_seed: Optional[int] = None,
+        drop_nan: bool = True,
     ) -> Dict:
         """
         Perform ensemble inference on a new dataset with optional hyperparameter tuning.
@@ -893,6 +897,24 @@ class BaseRegressionModel:
         y_train_full = self.y.copy()
         X_infer = inference_df[common_features].copy()
         y_infer = inference_df[target_col].copy() if target_col in inference_df.columns else None
+
+        if drop_nan:
+            train_mask = ~X_train_full.isna().any(axis=1)
+            dropped_train = len(train_mask) - train_mask.sum()
+            if dropped_train > 0:
+                self.logging.info(f"[Inference] Dropping {dropped_train} training rows with NaNs in {len(common_features)}-feature set.")
+            X_train_full = X_train_full.loc[train_mask].reset_index(drop=True)
+            y_train_full = y_train_full.loc[train_mask].reset_index(drop=True)
+
+            infer_mask = ~X_infer.isna().any(axis=1)
+            if y_infer is not None:
+                infer_mask &= ~y_infer.isna()
+            dropped_infer = len(infer_mask) - infer_mask.sum()
+            if dropped_infer > 0:
+                self.logging.info(f"[Inference] Dropping {dropped_infer} inference rows with NaNs among selected features/target.")
+            X_infer = X_infer.loc[infer_mask].reset_index(drop=True)
+            if y_infer is not None:
+                y_infer = y_infer.loc[infer_mask].reset_index(drop=True)
 
         # Prepare save paths
         inference_root = save_dir or os.path.join(self.save_path, "inference")
@@ -981,8 +1003,8 @@ class BaseRegressionModel:
         member_models = []
         member_params = []
         member_predictions = []
-        member_shap_values = []
-        member_feature_mats = []
+        member_shap_values_train = []
+        member_shap_values_test = []
         member_metrics = []
 
         original_model = self.model
@@ -1074,17 +1096,36 @@ class BaseRegressionModel:
             try:
                 self.model = member_model
                 self.feature_selection['features'] = common_features
-                shap_vals = self.feature_importance(
-                    X_train_full[common_features],
-                    top_n=-1,
-                    save_results=False,
-                    iter_idx=None,
-                    validation=False,
-                )
-                if isinstance(shap_vals, list):
-                    shap_vals = np.asarray(shap_vals)
-                member_shap_values.append(np.asarray(shap_vals))
-                member_feature_mats.append(X_train_full[common_features].to_numpy())
+                fi_signature = inspect.signature(self.feature_importance)
+                base_kwargs = {
+                    "X": X_train_full[common_features],
+                    "top_n": -1,
+                    "save_results": False,
+                    "iter_idx": None,
+                }
+                if "validation" in fi_signature.parameters:
+                    base_kwargs["validation"] = False
+
+                shap_train = self.feature_importance(**base_kwargs)
+                if isinstance(shap_train, list):
+                    shap_train = np.asarray(shap_train)
+                shap_train = np.asarray(shap_train)
+                if shap_train.ndim == 1:
+                    shap_train = shap_train.reshape(1, -1)
+                member_shap_values_train.append(shap_train)
+
+                if self.split_shaps and not X_infer.empty:
+                    infer_kwargs = base_kwargs.copy()
+                    infer_kwargs["X"] = X_infer[common_features]
+                    if "validation" in fi_signature.parameters:
+                        infer_kwargs["validation"] = True
+                    shap_test = self.feature_importance(**infer_kwargs)
+                    if isinstance(shap_test, list):
+                        shap_test = np.asarray(shap_test)
+                    shap_test = np.asarray(shap_test)
+                    if shap_test.ndim == 1:
+                        shap_test = shap_test.reshape(1, -1)
+                    member_shap_values_test.append(shap_test)
             except Exception as shap_err:
                 self.logging.warning(f"[Inference] Failed to compute SHAP for member {idx}: {shap_err}")
 
@@ -1127,15 +1168,18 @@ class BaseRegressionModel:
         metrics = {}
         plot_df = None
         if y_infer is not None:
-            r, _ = pearsonr(y_infer, ensemble_predictions)
+            r, p_val = pearsonr(y_infer, ensemble_predictions)
             rho, _ = spearmanr(y_infer, ensemble_predictions)
             mse = mean_squared_error(y_infer, ensemble_predictions)
             rmse = np.sqrt(mse)
             metrics = {
                 "r": r,
                 "rho": rho,
+                "p_value": p_val,
                 "mse": mse,
                 "rmse": rmse,
+                "y_test": y_infer.to_numpy(),
+                "y_pred": ensemble_predictions,
             }
             plot_df = pd.DataFrame({"Actual": y_infer, "Predicted": ensemble_predictions})
             plot_path = os.path.join(inference_root, f"{self.target_name}_ensemble_actual_vs_predicted.png")
@@ -1143,13 +1187,18 @@ class BaseRegressionModel:
                 f"Actual vs. Prediction (Ensemble of {members}) - {self.model_name}",
                 plot_df=plot_df,
                 save_path_file=plot_path,
+                N=len(plot_df),
+                metrics_override=metrics
             )
 
         # Ensemble SHAP aggregation
         shap_plot_path = None
-        if member_shap_values:
+        shap_plot_test_path = None
+        shap_csv_path = None
+        shap_csv_test_path = None
+        if member_shap_values_train:
             try:
-                shap_stack = np.stack(member_shap_values, axis=0)
+                shap_stack = np.stack(member_shap_values_train, axis=0)
                 shap_mean = np.mean(shap_stack, axis=0)
                 feature_matrix = X_train_full[common_features]
                 shap_plot_path = os.path.join(inference_root, f"{self.target_name}_ensemble_shap_beeswarm.png")
@@ -1170,8 +1219,44 @@ class BaseRegressionModel:
             except Exception as shap_agg_err:
                 self.logging.warning(f"[Inference] Failed to create ensemble SHAP plot: {shap_agg_err}")
 
+        if self.split_shaps and member_shap_values_test:
+            try:
+                shap_stack_test = np.stack(member_shap_values_test, axis=0)
+                shap_mean_test = np.mean(shap_stack_test, axis=0)
+                feature_matrix_test = X_infer[common_features]
+                shap_plot_test_path = os.path.join(inference_root, f"{self.target_name}_ensemble_shap_beeswarm_test.png")
+                plt.figure(figsize=(8, 6))
+                shap.summary_plot(
+                    shap_mean_test,
+                    features=feature_matrix_test,
+                    feature_names=common_features,
+                    show=False,
+                    max_display=self.top_n if self.top_n > 0 else None,
+                )
+                plt.title(f"{self.target_name} Ensemble SHAP Summary (Inference Set)", fontsize=14)
+                plt.tight_layout()
+                plt.savefig(shap_plot_test_path, dpi=300, bbox_inches="tight")
+                plt.close()
+                shap_csv_test_path = os.path.join(inference_root, f"{self.target_name}_ensemble_shap_values_test.csv")
+                pd.DataFrame(shap_mean_test, columns=common_features).to_csv(shap_csv_test_path, index=False)
+            except Exception as shap_test_err:
+                self.logging.warning(f"[Inference] Failed to create inference SHAP plot: {shap_test_err}")
+
         summary_path = os.path.join(inference_root, "ensemble_summary.json")
-        summary_payload = {
+        def _json_sanitize(obj):
+            if isinstance(obj, (np.integer, np.int64, np.int32, np.uint32, np.int16, np.int8)):
+                return int(obj)
+            if isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return [_json_sanitize(v) for v in obj.tolist()]
+            if isinstance(obj, list):
+                return [_json_sanitize(v) for v in obj]
+            if isinstance(obj, dict):
+                return {k: _json_sanitize(v) for k, v in obj.items()}
+            return obj
+
+        summary_payload = _json_sanitize({
             "members": members,
             "folds": folds,
             "param_grid": param_grid,
@@ -1179,8 +1264,11 @@ class BaseRegressionModel:
             "metrics": metrics,
             "member_metrics": member_metrics,
             "prediction_csv": results_df_path,
-            "shap_plot": shap_plot_path,
-        }
+            "shap_plot_train": shap_plot_path,
+            "shap_plot_test": shap_plot_test_path,
+            "shap_csv_train": shap_csv_path,
+            "shap_csv_test": shap_csv_test_path,
+        })
         with open(summary_path, "w", encoding="utf-8") as fh:
             json.dump(summary_payload, fh, indent=2)
 
@@ -1191,7 +1279,10 @@ class BaseRegressionModel:
             "member_predictions": member_predictions_array,
             "prediction_csv": results_df_path,
             "summary_json": summary_path,
-            "shap_plot": shap_plot_path,
+            "shap_plot_train": shap_plot_path,
+            "shap_plot_test": shap_plot_test_path,
+            "shap_csv_train": shap_csv_path,
+            "shap_csv_test": shap_csv_test_path,
         }
     def feature_ablation(
         self, 
@@ -1412,18 +1503,38 @@ class BaseRegressionModel:
                     y_pred_stack = np.vstack([np.asarray(p).ravel() for p in ensemble_y_preds])
                     y_pred_mean = np.mean(y_pred_stack, axis=0)
                     plot_df_avg = pd.DataFrame({"Actual": y_test_ref, "Predicted": y_pred_mean})
+                    avg_metrics = {
+                        "r": avg_r,
+                        "rho": avg_rho,
+                        "p_value": avg_p,
+                        "mse": avg_test_mse,
+                        "rmse": avg_test_rmse,
+                        "y_test": y_test_ref,
+                        "y_pred": y_pred_mean,
+                    }
                 else:
                     # Fallback: pool all member predictions for a stable scatter cloud
                     plot_df_avg = pd.DataFrame({
                         "Actual": np.concatenate([np.asarray(y).ravel() for y in ensemble_y_tests]),
                         "Predicted": np.concatenate([np.asarray(p).ravel() for p in ensemble_y_preds]),
                     })
-            
+                    avg_metrics = {
+                        "r": avg_r,
+                        "rho": avg_rho,
+                        "p_value": avg_p,
+                        "mse": avg_test_mse,
+                        "rmse": avg_test_rmse,
+                        "y_test": plot_df_avg["Actual"].to_numpy(),
+                        "y_pred": plot_df_avg["Predicted"].to_numpy(),
+                    }
+
                 self.plot(
                     f"Actual vs. Prediction (AVERAGED over {members} members) - {self.model_name} - {self.target_name} - No. features: {number_of_features}",
                     modality='',
                     plot_df=plot_df_avg,
-                    save_path_file=avg_plot_save
+                    save_path_file=avg_plot_save,
+                    N=len(plot_df_avg),
+                    metrics_override=avg_metrics
                 )
             
             # --- 3) Averaged SHAP beeswarm across members ---
@@ -1491,7 +1602,6 @@ class BaseRegressionModel:
             voted_features = sorted(feature_votes.items(), key=lambda x: -x[1])[:features_to_remove]
             least_important_features = [feat for feat, count in voted_features]
 
-            self.X = self.X.drop(columns=least_important_features)
             self.feature_selection['features'] = [f for f in self.feature_selection['features'] if f not in least_important_features]
             removals.extend(least_important_features)
             number_of_features -= features_to_remove
@@ -1808,12 +1918,28 @@ class BaseRegressionModel:
                 "members": members,
                 "features_remaining": number_of_features
             }]).to_csv(f"{step_dir}/{self.target_name}_metrics_ENSEMBLE.csv", index=False)
-    
+
+            denom = 1 - (ens_r ** 2)
+            f_squared_ens = np.inf if np.isclose(denom, 0) else (ens_r ** 2) / denom
+            ensemble_metrics = {
+                "r": ens_r,
+                "rho": ens_rho,
+                "p_value": ens_p,
+                "f_squared": f_squared_ens,
+                "mse": ens_mse_test,
+                "rmse": ens_rmse_test,
+                "y_test": y_test_ref,
+                "y_pred": y_pred_ens,
+            }
+            self.metrics = ensemble_metrics
+
             self.plot(
                 f"Actual vs. Prediction (ENSEMBLE of {members}) - {self.model_name} - {self.target_name} - No. features: {number_of_features}",
                 modality='',
                 plot_df=pd.DataFrame({"Actual": y_test_ref, "Predicted": y_pred_ens}),
-                save_path_file=f"{step_dir}/{self.target_name}_actual_vs_predicted_ENSEMBLE.png"
+                save_path_file=f"{step_dir}/{self.target_name}_actual_vs_predicted_ENSEMBLE.png",
+                N=len(y_test_ref),
+                metrics_override=ensemble_metrics
             )
     
             # ===================== ENSEMBLE SHAP: collect & save (CSV + beeswarm w/ color) =====================
@@ -2061,13 +2187,15 @@ class BaseRegressionModel:
     
         
 
-    def plot(self, title, modality='', plot_df=None, save_path_file=None) -> None:
+    def plot(self, title, modality='', plot_df=None, save_path_file=None, N=None, metrics_override=None) -> None:
         """
         Generate a scatter plot of predicted vs. actual target values with regression line and confidence intervals.
 
         Args:
             title (str): Title of the plot.
             modality (str, optional): Modality string to label axes (e.g., "MRI"). Defaults to empty string.
+            metrics_override (dict, optional): Metrics dictionary to use for annotations/derived values.
+                Falls back to `self.metrics` if not provided.
         """
         self.logging.info("Starting plot generation.")
         
@@ -2082,11 +2210,17 @@ class BaseRegressionModel:
         # Create a wider (landscape) figure
         plt.figure(figsize=(10, 6))
 
+        metrics_src = metrics_override if metrics_override is not None else self.metrics
+        if metrics_src is None:
+            raise ValueError("No metrics available for plotting. Provide metrics_override or ensure self.metrics is set.")
+
         if plot_df is None:
             # Create a DataFrame for Seaborn
+            if 'y_test' not in metrics_src or 'y_pred' not in metrics_src:
+                raise ValueError("Metrics must contain 'y_test' and 'y_pred' when plot_df is not provided.")
             plot_df = pd.DataFrame({
-                'Actual': self.metrics['y_test'],
-                'Predicted': self.metrics['y_pred']
+                'Actual': metrics_src['y_test'],
+                'Predicted': metrics_src['y_pred']
             })
 
         # Scatter plot only (no regression line)
@@ -2125,18 +2259,45 @@ class BaseRegressionModel:
         )
         # Add text (R and p-value) in the top-left corner inside the plot
         # using axis coordinates (0–1 range) so it doesn't get cut off
-        plt.text(
-            0.05, 0.95, 
-            f'Pearson R: {self.metrics["r"]:.2f}\n'
-            f'Spearman ρ: {self.metrics["rho"]:.2f}\n'
-            f'P-value: {self.metrics["p_value"]:.6f}\n'
-            f'f²: {self.metrics["f_squared"]:.3f}\n' 
-            f'RMSE: {np.sqrt(self.metrics["mse"]):.6f}',
-            fontsize=12, 
-            transform=plt.gca().transAxes,
-            verticalalignment='top',
-            bbox=dict(facecolor='white', alpha=0.5)
-        )
+        text_lines = []
+        r_val = metrics_src.get("r")
+        if r_val is not None and not pd.isna(r_val):
+            text_lines.append(f'Pearson R: {r_val:.2f}')
+
+        rho_val = metrics_src.get("rho")
+        if rho_val is not None and not pd.isna(rho_val):
+            text_lines.append(f'Spearman ρ: {rho_val:.2f}')
+
+        p_val = metrics_src.get("p_value")
+        if p_val is not None and not pd.isna(p_val):
+            text_lines.append(f'P-value: {p_val:.6f}')
+
+        f_sq = metrics_src.get("f_squared")
+        if (f_sq is None or pd.isna(f_sq)) and r_val is not None and not pd.isna(r_val):
+            denom = 1 - r_val ** 2
+            if np.isclose(denom, 0):
+                f_sq = np.inf
+            else:
+                f_sq = (r_val ** 2) / denom
+        if f_sq is not None and not pd.isna(f_sq):
+            text_lines.append(f'f²: {f_sq:.3f}' if np.isfinite(f_sq) else 'f²: ∞')
+
+        rmse_val = metrics_src.get("rmse")
+        mse_val = metrics_src.get("mse")
+        if rmse_val is None and mse_val is not None and not pd.isna(mse_val):
+            rmse_val = np.sqrt(mse_val)
+        if rmse_val is not None and not pd.isna(rmse_val):
+            text_lines.append(f'RMSE: {rmse_val:.6f}')
+
+        if text_lines:
+            plt.text(
+                0.05, 0.95, 
+                "\n".join(text_lines),
+                fontsize=12, 
+                transform=plt.gca().transAxes,
+                verticalalignment='top',
+                bbox=dict(facecolor='white', alpha=0.5)
+            )
 
 
         ax = plt.gca()
@@ -2154,7 +2315,10 @@ class BaseRegressionModel:
         # Label axes and set title
         plt.xlabel(f'Actual {modality} {self.target_name}', fontsize=12)
         plt.ylabel(f'Predicted {modality} {self.target_name}', fontsize=12)
-        plt.title(title + "  N=" + str(len(self.y)), fontsize=14)
+        if N is not None:
+            plt.title(title + "  N=" + str(N), fontsize=14)
+        else:   
+            plt.title(title + "  N=" + str(len(self.y)), fontsize=14)
 
         # Show grid and ensure everything fits nicely
         plt.grid(False)

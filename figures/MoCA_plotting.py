@@ -1,11 +1,14 @@
 import numpy as np
 import pandas as pd
 import os
+import glob
 import matplotlib.pyplot as plt
 import seaborn as sns
+from typing import List, Optional
 from sklearn.decomposition import PCA
 from matplotlib.lines import Line2D 
 from matplotlib.collections import PolyCollection
+from matplotlib import colors as mcolors
 import seaborn as sns
 from sklearn.model_selection import train_test_split, KFold, GridSearchCV, LeaveOneOut
 import pickle
@@ -18,7 +21,110 @@ from sklearn.svm import SVC
 from sklearn.model_selection import GridSearchCV
 from scipy.stats import ttest_rel, false_discovery_control
 from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import AutoMinorLocator
 import shap
+
+def _load_shap_data(shap_path: str):
+    """
+    Load SHAP values from either a NumPy binary or CSV file. Returns a tuple of
+    (array, feature_names) where feature_names is None for NumPy inputs.
+    """
+    if shap_path.lower().endswith(".csv"):
+        shap_df = pd.read_csv(shap_path)
+        shap_df = shap_df.loc[:, ~shap_df.columns.str.contains("^Unnamed")]
+        return shap_df.to_numpy(), list(shap_df.columns)
+    shap_values = np.load(shap_path, allow_pickle=True)
+    return shap_values, None
+
+
+def _ensure_2d_shap(shap_values: np.ndarray) -> np.ndarray:
+    """Ensure SHAP values are returned as a 2D (samples x features) array."""
+    shap_values = np.asarray(shap_values)
+    if shap_values.ndim == 3:
+        # Combine folds/samples so downstream code can operate on samples directly.
+        n_folds, n_samples, n_features = shap_values.shape
+        return shap_values.reshape(n_folds * n_samples, n_features)
+    if shap_values.ndim == 2:
+        return shap_values
+    if shap_values.ndim == 1:
+        return shap_values[:, np.newaxis]
+    raise ValueError(f"Unsupported SHAP array shape: {shap_values.shape}")
+
+
+def _prepare_dataframe(path: str) -> pd.DataFrame:
+    """Load a CSV and drop unnamed index columns if they exist."""
+    df = pd.read_csv(path)
+    unnamed_cols = [col for col in df.columns if col.lower().startswith("unnamed")]
+    if unnamed_cols:
+        df = df.drop(columns=unnamed_cols)
+    return df
+
+
+def _resolve_remaining_features(
+        df: pd.DataFrame,
+        removals: pd.DataFrame,
+        shap_values: np.ndarray,
+        shap_feature_names: Optional[List[str]]) -> list:
+    """
+    Determine the list of features that correspond to the supplied SHAP values.
+    Prefer explicit feature names shipped with the SHAP file; fall back to the
+    ablation removal history if necessary.
+    """
+    if shap_feature_names:
+        # Keep only columns that are present in the dataframe.
+        remaining = [name for name in shap_feature_names if name in df.columns]
+        if not remaining:
+            raise ValueError(
+                "None of the SHAP feature names match the provided dataframe columns."
+            )
+        return remaining
+
+    df = df.drop(columns=["BDI_diff", "BDI_ratio", "Pat_ID"], errors="ignore")
+    df = df.drop(columns=["MoCA_diff", "MoCA_ratio", "Pat_ID"], errors="ignore")
+    original_features = [col for col in df.columns if col != "BDI_diff"]
+
+    shap_matrix = np.asarray(shap_values)
+    n_shap_cols = shap_matrix.shape[-1]
+    n_removed_before = len(original_features) - n_shap_cols
+
+    if n_removed_before < 0 or n_removed_before > len(removals):
+        raise ValueError(
+            f"Calculated removed_count = {n_removed_before} is invalid. "
+            "Check that shap_values and removal_list correspond."
+        )
+
+    removed_up_to_now = removals.iloc[:n_removed_before, 0].astype(str).tolist()
+    remaining_features = [f for f in original_features if f not in removed_up_to_now]
+    return remaining_features
+
+
+def _select_best_metrics(metrics_paths: List[str], score_columns: Optional[List[str]] = None) -> Optional[str]:
+    """
+    Given a list of metric file paths, return the one with the highest score.
+    Score columns are checked in order; defaults to ['r2', 'r', 'r_ensemble'].
+    """
+    if score_columns is None:
+        score_columns = ["r2", "r", "r_ensemble"]
+    best_path = None
+    best_score = -np.inf
+    for path in metrics_paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            df = _prepare_dataframe(path)
+        except Exception:
+            continue
+        score = None
+        for col in score_columns:
+            if col in df.columns:
+                score = df[col].iloc[0]
+                break
+        if score is None or pd.isna(score):
+            continue
+        if score > best_score:
+            best_score = score
+            best_path = path
+    return best_path
 
 def plot_stim_positions(positions: pd.DataFrame, safe_path: str = "") -> None:
     """ Plot the stimulation positions in the brain"""
@@ -73,8 +179,10 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
             "ideal_line": "black",
         }
 
-    boxplots_colors = sns.color_palette("deep")
-    violin_colors = sns.color_palette("deep")
+    base_palette = sns.color_palette("deep")
+    violin_color = base_palette[0]
+    violin_rgba = mcolors.to_rgba(violin_color, alpha=0.4)
+    violin_rgba_light = mcolors.to_rgba(violin_color, alpha=1.0)
     scatter_color = 'black'
     
     # color palette from DL project:
@@ -91,7 +199,7 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
             inner=None,
             cut=0,
             linewidth=0,
-            color=violin_colors[idx],
+            color=violin_rgba,
             ax=ax,
             width=violin_width,
             #split=False
@@ -99,6 +207,8 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
         for collection in ax.collections[-1:]:
             if not isinstance(collection, PolyCollection):
                 continue  # skip non-violin objects
+            collection.set_facecolor(violin_rgba_light)
+            collection.set_edgecolor(violin_rgba)
             for path in collection.get_paths():
                 verts = path.vertices
                 mean_x = np.mean(verts[:, 0])
@@ -130,19 +240,26 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
         
     
     # Boxplot (make it slimmer)
+    box_rgba = mcolors.to_rgba(violin_color, alpha=0.33)
+    box_edge_rgba = mcolors.to_rgba("black", alpha=1)
+    palette = [violin_rgba] * data.shape[1]
     bp = sns.boxplot(
         data=data,
         width=box_width,
         showcaps=True,
-        whiskerprops={'color': 'black'},
-        medianprops={'color': 'black'},
+        whiskerprops={'color': box_edge_rgba},
+        medianprops={'color': box_edge_rgba},
+        capprops={'color': box_edge_rgba},
         flierprops={'marker': ''},  # Do not mark outliers
+        palette=palette,
+        boxprops={'facecolor': box_rgba, 'edgecolor': box_edge_rgba},
         ax=ax
     )
 
-    for patch, color in zip(bp.artists, boxplots_colors):
-        patch.set_facecolor(color)
-        patch.set_alpha(0.5)
+    for patch in bp.artists:
+        patch.set_facecolor(box_rgba)
+        patch.set_edgecolor(box_edge_rgba)
+        patch.set_alpha(box_rgba[-1])
    
     
     # Scatter plot (overlay on boxplot)
@@ -247,9 +364,9 @@ def demographics_pre_post(
         show = False) -> None:
     """ Plot the demographic data before and after the treatment as raincloud plot"""
 
-    data = pd.read_csv(modality_path)
+    data = _prepare_dataframe(modality_path)
     if model_data_path is not None:
-        model_df = pd.read_csv(model_data_path)
+        model_df = _prepare_dataframe(model_data_path)
         data = data[data['OP_DATUM'].isin(model_df['OP_DATUM'])]
     
 
@@ -284,7 +401,7 @@ def demographics_pre_post(
 def histoplot(input_path: str, feature: str,  save_path: str, show: bool = False) -> None:
     """ Plot the demographic data before and after the treatment as raincloud plot"""
     # Load the data
-    data = pd.read_csv(input_path)
+    data = _prepare_dataframe(input_path)
     sns.set_theme(style="white", context="paper")
     sns.set_palette("deep")
     # Create a figure with two subplots
@@ -299,6 +416,12 @@ def histoplot(input_path: str, feature: str,  save_path: str, show: bool = False
         xlabel = 'Time Since Diagnosis (years)'
         save_path = save_path + "time_since_diag_histoplot"
         color = 'green'
+
+    elif feature == 'AGE_AT_OP':
+        title = 'Distribution of Age at Operation'
+        xlabel = 'Age at Operation (years)'
+        save_path = save_path + "age_at_op_histoplot"
+        color = 'orange'
 
     fig, ax = plt.subplots(figsize=(10, 6))
     print(data[feature].mean())
@@ -348,23 +471,146 @@ def visualize_demographics(
     demographics_pre_post(quest_prepost_path, op_dates_path, questionnaire, save_path)
     histoplot(quest, "TimeSinceSurgery", save_path)
     histoplot(quest, "TimeSinceDiag", save_path)
+    histoplot(quest, "AGE_AT_OP", save_path)
 
+
+
+def _load_ensemble_predictions(step_dir: str, target_name: str):
+    """Aggregate member-level metrics to compute ensemble predictions."""
+    ensemble_metrics_path = os.path.join(step_dir, f"{target_name}_metrics_ENSEMBLE.csv")
+    if not os.path.exists(ensemble_metrics_path):
+        raise FileNotFoundError(f"Ensemble metrics not found at {ensemble_metrics_path}")
+
+    metrics_df = _prepare_dataframe(ensemble_metrics_path)
+    row = metrics_df.iloc[0]
+    r_val = row.get("r_ensemble")
+    p_val = row.get("p_value_ensemble")
+    rho_val = row.get("rho_ensemble")
+
+    member_pattern = os.path.join(glob.escape(step_dir), "member*", f"{target_name}_metrics.csv")
+    member_paths = sorted(glob.glob(member_pattern))
+    if not member_paths:
+        raise FileNotFoundError(
+            f"No member metrics found in {step_dir}. "
+            "Provide an ensemble predictions CSV or ensure member metrics are present."
+        )
+
+    member_y_tests = []
+    member_y_preds = []
+    for path in member_paths:
+        metrics_df = _prepare_dataframe(path)
+        row = metrics_df.iloc[0]
+        try:
+            y_test = np.asarray(ast.literal_eval(str(row["y_test"])), dtype=float)
+            y_pred = np.asarray(ast.literal_eval(str(row["y_pred"])), dtype=float)
+        except (ValueError, SyntaxError):
+            y_test = np.fromstring(str(row["y_test"]).strip("[]"), sep=" ")
+            y_pred = np.fromstring(str(row["y_pred"]).strip("[]"), sep=" ")
+        member_y_tests.append(y_test)
+        member_y_preds.append(y_pred)
+
+    min_len = min(len(y) for y in member_y_tests)
+    member_y_tests = [y[:min_len] for y in member_y_tests]
+    member_y_preds = [y[:min_len] for y in member_y_preds]
+
+    y_test_ref = member_y_tests[0]
+    pred_stack = np.vstack(member_y_preds)
+    pred_mean = np.mean(pred_stack, axis=0)
+
+    if r_val is None or pd.isna(r_val) or p_val is None or pd.isna(p_val) or rho_val is None or pd.isna(rho_val):
+        r_val, p_val = pearsonr(y_test_ref, pred_mean)
+        rho_val, _ = spearmanr(y_test_ref, pred_mean)
+
+    return (
+        pd.DataFrame({"Actual": y_test_ref, "Predicted": pred_mean}),
+        float(r_val),
+        float(p_val),
+        float(rho_val)
+    )
+
+
+def _load_inference_predictions(inference_dir: str):
+    """Load ensemble predictions produced during inference."""
+    ensemble_metrics_path = os.path.join(inference_dir, "ensemble_predictions_metrics_ENSEMBLE.csv")
+    if not os.path.exists(ensemble_metrics_path):
+        raise FileNotFoundError(f"Ensemble metrics not found at {ensemble_metrics_path}")
+
+    metrics_df = _prepare_dataframe(ensemble_metrics_path)
+    row = metrics_df.iloc[0]
+    r_val = row.get("r_ensemble")
+    p_val = row.get("p_value_ensemble")
+    rho_val = row.get("rho_ensemble")
+
+    member_pattern = os.path.join(glob.escape(inference_dir), "member*", "ensemble_predictions.csv")
+    member_paths = sorted(glob.glob(member_pattern))
+    if not member_paths:
+        raise FileNotFoundError(
+            f"No member metrics found in {inference_dir}. "
+            "Provide an ensemble predictions CSV or ensure member metrics are present."
+        )
+
+    member_y_tests = []
+    member_y_preds = []
+    for path in member_paths:
+        metrics_df = _prepare_dataframe(path)
+        row = metrics_df.iloc[0]
+        try:
+            y_test = np.asarray(ast.literal_eval(str(row["y_test"])), dtype=float)
+            y_pred = np.asarray(ast.literal_eval(str(row["y_pred"])), dtype=float)
+        except (ValueError, SyntaxError):
+            y_test = np.fromstring(str(row["y_test"]).strip("[]"), sep=" ")
+            y_pred = np.fromstring(str(row["y_pred"]).strip("[]"), sep=" ")
+        member_y_tests.append(y_test)
+        member_y_preds.append(y_pred)
+
+    min_len = min(len(y) for y in member_y_tests)
+    member_y_tests = [y[:min_len] for y in member_y_tests]
+    member_y_preds = [y[:min_len] for y in member_y_preds]
+
+    y_test_ref = member_y_tests[0]
+    pred_stack = np.vstack(member_y_preds)
+    pred_mean = np.mean(pred_stack, axis=0)
+
+    if r_val is None or pd.isna(r_val) or p_val is None or pd.isna(p_val) or rho_val is None or pd.isna(rho_val):
+        r_val, p_val = pearsonr(y_test_ref, pred_mean)
+        rho_val, _ = spearmanr(y_test_ref, pred_mean)
+
+    return (
+        pd.DataFrame({"Actual": y_test_ref, "Predicted": pred_mean}),
+        float(r_val),
+        float(p_val),
+        float(rho_val)
+    )
 
 
 def regression_figures(
-        metrics_path_best: str, 
-        metrics_path_full: str , 
+        ensemble_step_full: str,
+        ensemble_step_best: str,
+        inference_dirs: list,
         data_path: str,
         save_path: str,
         quest=None) -> None:
     """ Plot predicted vs. actual values """
-    if quest == "BDI":
+    if inference_dirs is None:
+        inference_dirs = []
+    elif isinstance(inference_dirs, str):
+        inference_dirs = [inference_dirs]
+    quest_key = (quest or "").lower()
+    if quest_key.startswith("bdi"):
         x_label = "Actual BDI Ratio"
         y_label = "Predicted BDI Ratio"
-        
-    elif quest == "MoCA":
-        x_label = "Actual MoCA Ratio"
-        y_label = "Predicted MoCA Ratio"
+        linear_pre_col = "BDI_sum_pre"
+        target_preferences = [("BDI_ratio", "BDI Ratio"), ("BDI_sum_post", "BDI Sum Post")]
+    elif quest_key.startswith("moca"):
+        linear_pre_col = "MoCA_sum_pre"
+        if "sum_post" in quest_key:
+            x_label = "Actual MoCA Sum Post"
+            y_label = "Predicted MoCA Sum Post"
+            target_preferences = [("MoCA_sum_post", "MoCA Sum Post"), ("MoCA_ratio", "MoCA Ratio")]
+        else:
+            x_label = "Actual MoCA Ratio"
+            y_label = "Predicted MoCA Ratio"
+            target_preferences = [("MoCA_ratio", "MoCA Ratio"), ("MoCA_sum_post", "MoCA Sum Post")]
     else:
         raise ValueError("Invalid questionnaire type. Choose 'BDI' or 'MoCA'.")
    
@@ -372,11 +618,13 @@ def regression_figures(
             plot_df, 
             r, 
             p, 
-            save_path, 
+            save_prefix, 
             title, 
-            xlabel=x_label,
-            ylabel = y_label,
-            type="model"):
+            x_col,
+            y_col,
+            xlabel,
+            ylabel,
+            rho=None):
         # Set the context for the plot
         
         
@@ -390,17 +638,15 @@ def regression_figures(
             "scatter": "grey",
             "ideal_line": "black",
         }
-        # Fit a regression line
-        if type == "model":
-            x,y = 'Actual', 'Predicted'
-        elif type == "linear":
-            x,y = 'Pre', 'Ratio'
-        else:
-            raise ValueError("Invalid type. Choose 'model' or 'linear'.")
-        # Read your metrics CSV:
+        sns.set_theme(style="ticks", context="paper", rc={
+        "xtick.minor.size": 2, "ytick.minor.size": 2,
+        "xtick.minor.width": 0.8, "ytick.minor.width": 0.8,
+        # Some matplotlib versions honor these visibility flags
+        "xtick.minor.visible": True, "ytick.minor.visible": True,
+        })
         sns.scatterplot(
-            x=x, 
-            y=y, 
+            x=x_col, 
+            y=y_col, 
             data=plot_df, 
             alpha=0.7
         )
@@ -412,8 +658,8 @@ def regression_figures(
         #plt.plot([min_val, max_val], [min_val, max_val], color=colors["ideal_line"], alpha=0.5, linestyle='--')
         
         sns.regplot(
-            x=x, 
-            y=y, 
+            x=x_col, 
+            y=y_col, 
             data=plot_df, 
             scatter=False, 
             color=colors["line"], 
@@ -422,8 +668,8 @@ def regression_figures(
         # Plot confidence intervals
         ci = 95  # Confidence interval percentage
         sns.regplot(
-            x=x, 
-            y=y, 
+            x=x_col, 
+            y=y_col, 
             data=plot_df, 
             scatter=False, 
             color=colors["line"], 
@@ -432,9 +678,12 @@ def regression_figures(
         )
         # Add text (R and p-value) in the top-left corner inside the plot
         # using axis coordinates (0–1 range) so it doesn't get cut off
+        stat_lines = [f'R: {r:.2f}', f'P-value: {p:.6f}']
+        if rho is not None:
+            stat_lines.insert(1, f'Spearman ρ: {rho:.2f}')
         plt.text(
             0.05, 0.95, 
-            f'R: {r:.2f}\nP-value: {p:.6f}', 
+            "\n".join(stat_lines),
             fontsize=12, 
             transform=plt.gca().transAxes,  # use axis coordinates
             verticalalignment='top',
@@ -447,95 +696,160 @@ def regression_figures(
         min_y, max_y = ax.get_ylim()
 
         # shade below y=0 (improvement)
-        ax.axhspan(min_y, 0,
-                   color="#" + colors["improvement"],
-                   alpha=0.08, zorder=0)
-        # shade above y=0 (deterioration)
-        ax.axhspan(0, max_y,
-                   color="#" + colors["deterioration"],
-                   alpha=0.08, zorder=0)
+        if min_y < 0 < max_y:
+            ax.axhspan(min_y, 0,
+                       color="#" + colors["improvement"],
+                       alpha=0.08, zorder=0)
+            # shade above y=0 (deterioration)
+            ax.axhspan(0, max_y,
+                       color="#" + colors["deterioration"],
+                       alpha=0.08, zorder=0)
 
         # re‐apply limits so axes don’t auto‐expand
-        
         pad = 0.05  # 5% padding
-        x_min, x_max = plot_df[x].min(), plot_df[x].max()
-        y_min, y_max = plot_df[y].min(), plot_df[y].max()
-        ax.set_xlim(x_min - pad * (x_max - x_min), x_max + pad * (x_max - x_min))
-        ax.set_ylim(y_min - pad * (y_max - y_min), y_max + pad * (y_max - y_min))
-        #if type == "model":
-        #    ax.set_ylim(y_min, y_max)
-        #    ax.set_xlim(x_min, x_max)
-        # Label axes and set title
+        combined_min = min(plot_df[x_col].min(), plot_df[y_col].min())
+        combined_max = max(plot_df[x_col].max(), plot_df[y_col].max())
+
+        # apply symmetric padding
+        delta = (combined_max - combined_min)
+        combined_min -= pad * delta
+        combined_max += pad * delta
+
+        ax.set_xlim(combined_min, combined_max)
+        ax.set_ylim(combined_min, combined_max)
+
+        # 2) Explicit minor locators (don’t rely on defaults)
+        ax.xaxis.set_minor_locator(AutoMinorLocator(2))  # 2 ⇒ one minor tick between majors
+        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+
+        # 3) Force minor tick visibility (some styles set these False)
+        ax.tick_params(which='minor', bottom=True, top=False, left=True, right=False,
+                       length=4, width=0.8, color='lightgrey')
+
+        # labels/title, grid off, despine, etc.
         plt.xlabel(xlabel, fontsize=12)
         plt.ylabel(ylabel, fontsize=12)
-        plt.title(title + "  N=" + str(N), fontsize=14)
-        # Show grid and ensure everything fits nicely
+        plt.title(f"{title}  N={len(plot_df)}", fontsize=14)
         plt.grid(False)
-        sns.set_context("paper")
-        # Optionally choose a style you like
         sns.despine()
+
         plt.tight_layout()
-        # Save and close
-        plt.savefig(f'{save_path}_{title}.png')
-        plt.savefig(f'{save_path}_{title}.svg')
+        plt.savefig(f'{save_prefix}_{title}.png')
+        plt.savefig(f'{save_prefix}_{title}.svg')
         plt.close()
-        
     
-    def plot_model(metrics_path: str, title: str):
-        # Read the metrics CSV
-        metrics_df = pd.read_csv(metrics_path)
+    def plot_linear_regression(data_path: str, title: str, save_prefix: str, xlabel: str = "BDI Pre Score", ylabel: str = "BDI Ratio"):
         # Read the BDI data CSV
-        df = pd.read_csv(data_path)
-        # Extract the best model's metrics
-        best_model = metrics_df.iloc[0]
+        df = _prepare_dataframe(data_path)
         # Extract the y_test and y_pred arrays from the DataFrame
-        y_test_str = best_model["y_test"]
-        y_pred_str = best_model["y_pred"]
-        # Parse the string into a Python list of floats
-        try:
-            y_test = ast.literal_eval(y_test_str)
-            y_pred = ast.literal_eval(y_pred_str)
-        except (ValueError, SyntaxError):
-            # fallback: strip brackets and split on whitespace
-            y_test = list(map(float, y_test_str.strip("[]").split()))
-            y_pred = list(map(float, y_pred_str.strip("[]").split()))
-        N = len(y_test)
-        # Build your plotting DataFrame
+        if quest_key.startswith("bdi"):
+            if "BDI_sum_post" not in df.columns and {"BDI_sum_pre", "BDI_diff"}.issubset(df.columns):
+                df["BDI_sum_post"] = df["BDI_sum_pre"] + df["BDI_diff"]
+        elif quest_key.startswith("moca"):
+            if "MoCA_sum_post" not in df.columns and {"MoCA_sum_pre", "MoCA_diff"}.issubset(df.columns):
+                df["MoCA_sum_post"] = df["MoCA_sum_pre"] + df["MoCA_diff"]
+
+        if linear_pre_col not in df.columns:
+            raise ValueError(f"Column '{linear_pre_col}' not found in dataframe for linear regression plot.")
+
+        target_col = None
+        target_label = ylabel
+        for candidate, label in target_preferences:
+            if candidate in df.columns:
+                target_col = candidate
+                target_label = label
+                break
+        if target_col is None:
+            raise ValueError(
+                f"None of the expected target columns {[c for c, _ in target_preferences]} were found in the dataframe."
+            )
+
         plot_df = pd.DataFrame({
-            "Actual": y_test,
-            "Predicted": y_pred
-        })
-        r, p = best_model["r2"], best_model["p_value"]
-        plot_regression(plot_df, r, p, save_path, title)
-    
-    def plot_linear_regression(data_path: str, title: str, xlabel: str = "BDI Pre Score", ylabel: str = "BDI Ratio"):
-        # Read the BDI data CSV
-        df = pd.read_csv(data_path)
-        # Extract the y_test and y_pred arrays from the DataFrame
-        if quest == "BDI":
-            df["BDI_sum_post"] = df["BDI_sum_pre"] + df["BDI_diff"]
-            plot_df = pd.DataFrame({
-                "Pre": df["BDI_sum_pre"],
-                "Ratio": df["BDI_ratio"]
-            })
-        elif quest == "MoCA":
-            df["MoCA_sum_post"] = df["MoCA_sum_pre"] + df["MoCA_diff"]
-            plot_df = pd.DataFrame({
-                "Pre": df["MoCA_sum_pre"],
-                "Ratio": df["MoCA_ratio"]
-            })
-        else:
-            raise ValueError("Invalid questionnaire type. Choose 'BDI' or 'MoCA'.")
+            "Pre": df[linear_pre_col],
+            "Outcome": df[target_col]
+        }).dropna()
         # Fit a linear regression model
-        _, _, r, p, std_err = linregress(plot_df["Pre"], plot_df["Ratio"])
+        _, _, r, p, _ = linregress(plot_df["Pre"], plot_df["Outcome"])
 
         
-        plot_regression(plot_df, r, p, save_path, title, xlabel=xlabel, ylabel=ylabel, type="linear")
+        plot_regression(
+            plot_df,
+            r,
+            p,
+            save_prefix,
+            title,
+            "Pre",
+            "Outcome",
+            xlabel=xlabel,
+            ylabel=target_label
+        )
 
-        
-    plot_model(metrics_path_full, "Model Predicted vs. Actual - Full Model")
-    plot_model(metrics_path_best, "Model Predicted vs. Actual - Best Model")
-    plot_linear_regression(data_path, "Pre vs. Ratio", xlabel="MoCA Pre", ylabel="MoCA Ratio")
+    # Ensemble full model (step with all features)
+    full_plot_df, full_r, full_p, full_rho = _load_ensemble_predictions(ensemble_step_full, quest or "")
+    plot_regression(
+        full_plot_df,
+        full_r,
+        full_p,
+        save_path,
+        "Model Predicted vs. Actual - Full Ensemble",
+        "Actual",
+        "Predicted",
+        x_label,
+        y_label,
+        rho=full_rho
+    )
+
+    # Best ensemble step across ablation
+    if ensemble_step_best and ensemble_step_best != ensemble_step_full:
+        best_plot_df, best_r, best_p, best_rho = _load_ensemble_predictions(ensemble_step_best, quest or "")
+        plot_regression(
+            best_plot_df,
+            best_r,
+            best_p,
+            save_path,
+            "Model Predicted vs. Actual - Best Ensemble",
+            "Actual",
+            "Predicted",
+            x_label,
+            y_label,
+            rho=best_rho
+        )
+
+    # Inference runs (if available)
+    for inference_dir in inference_dirs:
+        try:
+            result = _load_inference_predictions(inference_dir)
+        except FileNotFoundError:
+            continue
+        if result is None:
+            continue
+        plot_df_inf, r_inf, p_inf, rho_inf = result
+        label = os.path.basename(inference_dir)
+        plot_regression(
+            plot_df_inf,
+            r_inf,
+            p_inf,
+            save_path,
+            f"Inference Predicted vs. Actual - {label}",
+            "Actual",
+            "Predicted",
+            x_label,
+            y_label,
+            rho=rho_inf
+        )
+
+    linear_ylabel = target_preferences[0][1]
+    if quest_key.startswith("bdi"):
+        linear_xlabel = "BDI Pre Score"
+    else:
+        linear_xlabel = "MoCA Pre Score"
+    #plot_linear_regression(
+    #    data_path,
+    #    "Pre vs. Outcome",
+    #    save_path,
+    #    xlabel=linear_xlabel,
+    #    ylabel=linear_ylabel
+    #)
 
 
 def threshold_figure(
@@ -564,36 +878,23 @@ def threshold_figure(
         }
     # 1) Load inputs
     removals = pd.read_csv(removal_list_path)  # Assumes a single‐column CSV listing removed feature names
-    df = pd.read_csv(data_path)
+    df = _prepare_dataframe(data_path)
 
-    shap_values = np.load(shap_data_path)      # shape = (n_samples, n_features_remaining)
-    
+    shap_values_raw, shap_feature_names = _load_shap_data(shap_data_path)
+    shap_values = _ensure_2d_shap(shap_values_raw)
 
-    # Drop unnecessary columns from bdi_df
-    df = df.drop(columns=["BDI_diff", "BDI_ratio", "Pat_ID"], errors="ignore")
-    df = df.drop(columns=["MoCA_diff", "MoCA_ratio", "Pat_ID"], errors="ignore")
-    original_features = [col for col in df.columns if col != "BDI_diff"]
-    n_original = len(original_features)
-    n_shap_cols = shap_values.shape[1]
-    n_removed_before = n_original - n_shap_cols
-    
-    if n_removed_before < 0 or n_removed_before > len(removals):
-        raise ValueError(
-            f"Calculated removed_count = {n_removed_before} is invalid. "
-            f"Check that shap_values and removal_list correspond."
-        )
+    feature_df = df.drop(columns=["OP_DATUM"], errors="ignore")
+    remaining_features = _resolve_remaining_features(feature_df, removals, shap_values, shap_feature_names)
 
-    # Take exactly the first n_removed_before entries from the removal history
-    removed_up_to_now = removals.iloc[:n_removed_before, 0].astype(str).tolist()
-
-    # Form the list of features that remain at the time SHAP values were computed
-    remaining_features = [f for f in original_features if f not in removed_up_to_now]
+    if shap_feature_names:
+        feature_indices = [shap_feature_names.index(name) for name in remaining_features]
+        shap_values = shap_values[:, feature_indices]
 
     #if feature_name not in remaining_features:
     #    raise ValueError(f"Feature '{feature_name}' was already removed in the ablation history; no SHAP values available.")
     for feature_name in remaining_features:
 
-        feature = df[feature_name].values
+        feature = feature_df[feature_name].to_numpy()
         # The column index within shap_values for feature_name:
         shap_col_index = remaining_features.index(feature_name)
         shap_feature = shap_values[:, shap_col_index]
@@ -707,36 +1008,23 @@ def shap_importance_histo_figure(
     # 1) Load inputs
     removals = pd.read_csv(removal_list_path)  # Assumes a single‐column CSV listing removed feature names
     
-    bdi_df = pd.read_csv(data_path)
-    all_shap_values = np.load(shap_data_path)
-    foldwise_abs_shaps = np.mean(np.abs(all_shap_values), axis=1)       # shape = (n_samples, n_features_remaining)
-    abs_shaps = np.mean(np.abs(np.mean(all_shap_values, axis=0)), axis=0)  # Mean absolute SHAP values across all samples
-    # Drop unnecessary columns from bdi_df
-    bdi_df = bdi_df.drop(columns=["BDI_diff", "BDI_ratio", "Pat_ID"], errors="ignore")
-    original_features = [col for col in bdi_df.columns if col != "BDI_diff"]
-    n_original = len(original_features)
-    n_shap_cols = abs_shaps.shape[0]
-    n_removed_before = n_original - n_shap_cols
+    df = _prepare_dataframe(data_path)
+    shap_values_raw, shap_feature_names = _load_shap_data(shap_data_path)
+    shap_values = _ensure_2d_shap(shap_values_raw)
+    feature_df = df.drop(columns=["OP_DATUM"], errors="ignore")
+    remaining_features = _resolve_remaining_features(feature_df, removals, shap_values, shap_feature_names)
 
-    if n_removed_before < 0 or n_removed_before > len(removals):
-        raise ValueError(
-            f"Calculated removed_count = {n_removed_before} is invalid. "
-            f"Check that shap_values and removal_list correspond."
-        )
+    if shap_feature_names:
+        feature_indices = [shap_feature_names.index(name) for name in remaining_features]
+        shap_values = shap_values[:, feature_indices]
 
-    # Take exactly the first n_removed_before entries from the removal history
-    removed_up_to_now = removals.iloc[:n_removed_before, 0].astype(str).tolist()
-
-    # Form the list of features that remain at the time SHAP values were computed
-    remaining_features = [f for f in original_features if f not in removed_up_to_now]
-
-    # The column index within shap_values for feature_name:
+    abs_shaps = np.mean(np.abs(shap_values), axis=0)
     sorted_shap_indices = np.argsort(abs_shaps)[::-1]  # Sort indices by absolute SHAP values in descending order
     x_labels = [remaining_features[i] for i in sorted_shap_indices]
     x_labels = [feature_name_mapping.get(label, label) for label in x_labels]  # Map feature names if available
     x_values = abs_shaps[sorted_shap_indices]
-    
-    sorted_shap_matrix = foldwise_abs_shaps[:, sorted_shap_indices]
+
+    sorted_shap_matrix = np.abs(shap_values[:, sorted_shap_indices])
 
     # Create list to hold p-values from paired t-tests between consecutive features
     p_values = []
@@ -822,50 +1110,41 @@ def shap_interaction_figure(
     """    Plots a scatter plot of SHAP values for two features, coloring points by the sign of the SHAP interaction.
     """
     removals = pd.read_csv(removal_list_path)  # Assumes a single‐column CSV listing removed feature names
-    df = pd.read_csv(data_path)
+    df = _prepare_dataframe(data_path)
 
-    shap_values = np.load(shap_data_path)      # shape = (n_samples, n_features_remaining)
-    
+    shap_values_raw, shap_feature_names = _load_shap_data(shap_data_path)      # shape = (n_samples, n_features_remaining)
+    shap_values = _ensure_2d_shap(shap_values_raw)
 
-    # Drop unnecessary columns from bdi_df
-    df = df.drop(columns=["BDI_diff", "BDI_ratio", "Pat_ID"], errors="ignore")
-    df = df.drop(columns=["MoCA_diff", "MoCA_ratio", "Pat_ID"], errors="ignore")
-    original_features = [col for col in df.columns if col != "BDI_diff"]
-    n_original = len(original_features)
-    n_shap_cols = shap_values.shape[1]
-    n_removed_before = n_original - n_shap_cols
-    
-    if n_removed_before < 0 or n_removed_before > len(removals):
-        raise ValueError(
-            f"Calculated removed_count = {n_removed_before} is invalid. "
-            f"Check that shap_values and removal_list correspond."
-        )
+    feature_df = df.drop(columns=["OP_DATUM"], errors="ignore")
+    remaining_features = _resolve_remaining_features(feature_df, removals, shap_values, shap_feature_names)
 
-    # Take exactly the first n_removed_before entries from the removal history
-    removed_up_to_now = removals.iloc[:n_removed_before, 0].astype(str).tolist()
+    if shap_feature_names:
+        feature_indices = [shap_feature_names.index(name) for name in remaining_features]
+        shap_values = shap_values[:, feature_indices]
 
-    # Form the list of features that remain at the time SHAP values were computed
-    remaining_features = [f for f in original_features if f not in removed_up_to_now]
     if feature1 not in remaining_features or feature2 not in remaining_features:
         raise ValueError(f"Features '{feature1}' or '{feature2}' were already removed in the ablation history; no SHAP values available.")
     
-    # The column indices within shap_values for feature1 and feature2:
-    #feature1_index = remaining_features.index(feature1)
-    #feature2_index = remaining_features.index(feature2)
+    shap_matrix = shap_values
+
     feature1_name = feature_name_mapping.get(feature1, feature1)
     feature2_name = feature_name_mapping.get(feature2, feature2)
-    all_feature_names = feature_name_mapping.get("all", remaining_features)
+    all_feature_names = [
+        feature_name_mapping.get(name, name) for name in remaining_features
+    ]
+    feature_matrix = feature_df[remaining_features].to_numpy()
     fig = plt.figure(figsize=(8, 5))
     shap.summary_plot(
-        shap_values,
-        features=df[remaining_features].values,
+        shap_matrix,
+        features=feature_matrix,
         feature_names=all_feature_names,
         show=False)
     shap.dependence_plot(
-        shap_values,
-        features = df[remaining_features].values,
-        feature_names = [feature1_name, feature2_name],
-        interaction_index=None,
+        feature1,
+        shap_matrix,
+        feature_matrix,
+        feature_names=remaining_features,
+        interaction_index=feature2,
         show=False,)
     #shap.initjs()
     #shap.plots.scatter(
@@ -888,15 +1167,57 @@ def ablation_plot(
         ablation_folder_path: str,
         save_path: str,
         title: str = "Pearson-R Scores Over Feature Ablation") -> None:
-    ablation = pd.read_csv(ablation_folder_path+ "/" + questionnaire + "_ablation_history.csv")
+    history_path = os.path.join(ablation_folder_path, f"{questionnaire}_ablation_history.csv")
+    if not os.path.exists(history_path):
+        raise FileNotFoundError(f"Ablation history file not found at {history_path}")
     custom_palette = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#525252"]
     sns.set_theme(style="whitegrid", context="paper")
                 # Set Seaborn style, context, and custom palette
     r2_scores = []
-    for i in range(1, 14):
-        df = pd.read_csv(ablation_folder_path + f"/ablation_step[{i}]/{questionnaire}_ratio_metrics.csv")
-        r2_scores.append(df["r2"].values[0])
-    x = np.arange(len(r2_scores))
+    x = []
+    step_dirs = []
+    for entry in os.listdir(ablation_folder_path):
+        if entry.startswith("ablation_step[") and entry.endswith("]"):
+            try:
+                idx = int(entry[len("ablation_step["):-1])
+            except ValueError:
+                continue
+            step_dirs.append((idx, entry))
+    step_dirs.sort()
+
+    metric_candidates = [
+        "{prefix}_ratio_metrics.csv",
+        "{prefix}_metrics.csv",
+        "{prefix}_metrics_ENSEMBLE.csv",
+    ]
+    score_columns = ["r2", "r", "r_ensemble"]
+
+    for idx, folder in step_dirs:
+        folder_path = os.path.join(ablation_folder_path, folder)
+        metrics_path = None
+        for candidate in metric_candidates:
+            candidate_path = os.path.join(folder_path, candidate.format(prefix=questionnaire))
+            if os.path.exists(candidate_path):
+                metrics_path = candidate_path
+                break
+        if metrics_path is None:
+            continue
+        df = _prepare_dataframe(metrics_path)
+        score = None
+        for col in score_columns:
+            if col in df.columns:
+                score = df[col].iloc[0]
+                break
+        if score is None:
+            raise ValueError(
+                f"None of the expected score columns {score_columns} were found in {metrics_path}"
+            )
+        r2_scores.append(score)
+        x.append(idx)
+
+    if not r2_scores:
+        raise ValueError(f"No ablation metrics found in {ablation_folder_path}")
+
     sns.set_palette(custom_palette)
             # Read in the CS
     # Create a figure
@@ -920,71 +1241,108 @@ def ablation_plot(
     plt.close()
 
 if __name__ == "__main__":
-    #root_dir = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction"
-    #root_dir = "/Users/georgtirpitz/Library/CloudStorage/OneDrive-Persönlich/Neuromodulation/PD-MultiModal-Prediction/"
-    root_dir = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction"
-    #/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/level2/level2/NGBoost/BDI_ablation_history.csv
-    #visualize_demographics("BDI", root_dir)
-    metrics_path_best = root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_metrics.csv"
-    metrics_path_full = root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/MoCA_ratio_metrics.csv"
-    moca_data_path = root_dir + "/data/MoCA/level2/moca_df.csv"
-    
-    moca_data_folder_path = root_dir + "/data/MoCA/level2"
-    original_features = ['MoCA_sum_pre', 'AGE_AT_OP', 'TimeSinceDiag', 'X_L', 'Y_L', 'Z_L', 'X_R',
-       'Y_R', 'Z_R', 'Left_1_mA', 'Right_1_mA', 'LEDD_ratio']
-    
-    feature_names_for_plotting = ['MoCA Sum Pre', 'Age at Operation', 'Time passed Since Diagnosis', 'X Left', 'Y Left', 'Z Left', 'X Right',
-       'Y Right', 'Z Right', 'Left mA', 'Right mA', 'LEDD Reduction Ratio']
-    
-    feature_name_mapping = dict(zip(original_features, feature_names_for_plotting))
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    run_name = "1_MoCA_sum_post_ledd"
+    results_dir = os.path.join(repo_root, "results", run_name, "level2", "ElasticNet")
+    data_dir = os.path.join(repo_root, "data", "MoCA", "level2")
 
-    #visualize_demographics("MoCA", root_dir)
+    figures_root = os.path.join(repo_root, "figures", "MoCA_sum_post_ledd")
+    demographics_dir = os.path.join(figures_root, "demographics")
+    regression_dir = os.path.join(figures_root, "regression")
+    threshold_dir = os.path.join(figures_root, "threshold")
+    shap_dir = os.path.join(figures_root, "shap")
+    ablation_fig_dir = os.path.join(figures_root, "ablation")
+
+    for directory in [figures_root, demographics_dir, regression_dir, threshold_dir, shap_dir, ablation_fig_dir]:
+        os.makedirs(directory, exist_ok=True)
+
+    feature_name_mapping = {
+        "TimeSinceSurgery": "Time Since Surgery",
+        "AGE_AT_OP": "Age at Operation",
+        "TimeSinceDiag": "Time Since Diagnosis",
+        "MoCA_Executive_sum_pre": "MoCA Executive (Pre)",
+        "MoCA_Erinnerung_sum_pre": "MoCA Memory (Pre)",
+        "MoCA_Sprache_sum_pre": "MoCA Language (Pre)",
+        "MoCA_Aufmerksamkeit_sum_pre": "MoCA Attention (Pre)",
+        "MoCA_Abstraktion_sum_pre": "MoCA Abstraction (Pre)",
+        "UPDRS_reduc": "UPDRS Reduction",
+        "UPDRS_on": "UPDRS On",
+        "LEDD_pre": "LEDD Pre",
+        }
+
+    shap_data_path = os.path.join(results_dir, "MoCA_sum_post_all_shap_values(mu).csv")
+    removal_list_path = os.path.join(results_dir, "ablation", "MoCA_sum_post_ENSEMBLE_ablation_history.csv")
+    _, shap_feature_names = _load_shap_data(shap_data_path)
+    if shap_feature_names:
+        feature_name_mapping.setdefault(
+            "all",
+            [feature_name_mapping.get(name, name) for name in shap_feature_names]
+        )
+    else:
+        feature_name_mapping.setdefault("all", list(feature_name_mapping.values()))
+
     visualize_demographics(
-        moca_data_folder_path, 
-        "MoCA", 
-        save_path = root_dir + "/figures/MoCA/")
-    
-    #regression_figures(
-    #    metrics_path_best,
-    #    metrics_path_full,
-    #    moca_data_path,
-    #    save_path = root_dir + "/figures/MoCA/",
-    #    quest="MoCA")
-    #
-    #threshold_figure(
-    #    feature_name_mapping,
-    #    data_path=moca_data_path,
-    #    shap_data_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_mean_shap_values.npy",
-    #    removal_list_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/MoCA_ablation_history.csv",
-    #    save_path=root_dir + "/figures/MoCA/moca_threshold_figure"
-    #)
-#
-    #shap_importance_histo_figure(
-    #    feature_name_mapping,
-    #    data_path=moca_data_path,
-    #    shap_data_path=root_dir +  "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_all_shap_values(mu).npy",
-    #    removal_list_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/MoCA_ablation_history.csv",
-    #    save_path=root_dir + "/figures/MoCA/moca_abs_importance_figure"
-    #)
-#
-    #shap_interaction_figure(
-    #    feature_name_mapping,
-    #    data_path=moca_data_path,
-    #    shap_data_path=root_dir +  "/results/Paper_runs/MoCA/level2/NGBoost/ablation/ablation_step[9]/MoCA_ratio_mean_shap_values.npy",
-    #    removal_list_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation/MoCA_ablation_history.csv",
-    #    feature1="Z_R",
-    #    feature2="Right_1_mA",
-    #    save_path=root_dir + "/figures/MoCA/moca_dependence")
+        data_dir,
+        "MoCA",
+        save_path=demographics_dir + "/"
+    )
 
-    #ablation_plot(
-    #    questionnaire="MoCA",
-    #    ablation_folder_path=root_dir + "/results/Paper_runs/MoCA/level2/NGBoost/ablation",
-    #    save_path=root_dir + "/figures/MoCA/moca_ablation_plot"
-    #    
-    #)
-    #ablation_plot(
-    #    questionnaire="MoCA",
-    #    ablation_folder_path=root_dir + "/results/Paper_runs/MoCA_shuffeled/level2/NGBoost/ablation",
-    #    save_path=root_dir + "/figures/MoCA/moca_ablation_shuffeled_plot",
-    #    title="Feature Ablation with shuffeled targets"
-    #)
+    ablation_dir = os.path.join(results_dir, "ablation")
+    # Set these paths manually to the ablation steps you want to visualise.
+    # Example: os.path.join(ablation_dir, "ablation_step[5]")
+    full_step_dir = os.path.join(ablation_dir, "ablation_step[1]")
+    best_step_dir = os.path.join(ablation_dir, "ablation_step[8]")
+
+    if not os.path.exists(full_step_dir):
+        raise FileNotFoundError(
+            "Expected full ensemble step directory not found. "
+            "Please update 'full_step_dir' in MoCA_plotting.py to point to the desired ablation step."
+        )
+    if not os.path.exists(best_step_dir):
+        raise FileNotFoundError(
+            "Expected best ensemble step directory not found. "
+            "Please update 'best_step_dir' in MoCA_plotting.py to point to the desired ablation step."
+        )
+
+    inference_dirs = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi_ledd"
+
+    regression_figures(
+        ensemble_step_full=full_step_dir,
+        ensemble_step_best=best_step_dir,
+        inference_dirs=inference_dirs,
+        data_path=os.path.join(data_dir, "moca_demo.csv"),
+        save_path=os.path.join(regression_dir, "moca_sum_post"),
+        quest="MoCA_sum_post"
+    )
+
+    threshold_figure(
+        feature_name_mapping,
+        data_path=os.path.join(data_dir, "moca_demo.csv"),
+        shap_data_path=shap_data_path,
+        removal_list_path=removal_list_path,
+        save_path=os.path.join(threshold_dir, "moca_sum_post_threshold")
+    )
+
+    shap_importance_histo_figure(
+        feature_name_mapping,
+        data_path=os.path.join(data_dir, "moca_demo.csv"),
+        shap_data_path=shap_data_path,
+        removal_list_path=removal_list_path,
+        save_path=os.path.join(shap_dir, "moca_sum_post_importance")
+    )
+
+    shap_interaction_figure(
+        feature_name_mapping,
+        data_path=os.path.join(data_dir, "moca_demo.csv"),
+        shap_data_path=shap_data_path,
+        removal_list_path=removal_list_path,
+        feature1="TimeSinceSurgery",
+        feature2="AGE_AT_OP",
+        save_path=os.path.join(shap_dir, "moca_sum_post_dependence")
+    )
+
+    ablation_plot(
+        questionnaire="MoCA_sum_post_ENSEMBLE",
+        ablation_folder_path=os.path.join(results_dir, "ablation"),
+        save_path=os.path.join(ablation_fig_dir, "moca_sum_post_ablation")
+    )
