@@ -248,7 +248,7 @@ def main(
         data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [11.90, -13.28, -6.74])
     #data_df['L_distance'] = np.random.permutation(data_df['L_distance'].values)
     #data_df['R_distance'] = np.random.permutation(data_df['R_distance'].values)
-    data_df["STIM_distance"] = (data_df['L_distance'] + data_df['R_distance']) / 2
+    #data_df["STIM_distance"] = (data_df['L_distance'] + data_df['R_distance']) / 2
     # Define target and features
     Feature_Selection['target'] = target_col
     Feature_Selection['features'] = feature_cols
@@ -320,18 +320,18 @@ def main(
 
     ######
     model.plot(f"Actual vs. Prediction (Elastic Net)")
-    _,_, removals= model.feature_ablation_ensemble(folds=folds, tune=tune, tune_folds=tune_folds, members=members)
-    #inference_csv = os.path.join(folder_path, "data/MoCA/level2/ppmi_ledd.csv")
-    #inference_save_dir = os.path.join(safe_path, "inference_ppmi_ledd")
-    #model.inference(
-    #    inference_csv_path=inference_csv,
-    #    param_grid=param_grid,
-    #    members=members,
-    #    folds=tune_folds,
-    #    target_col=target_col,
-    #    save_dir=inference_save_dir,
-    #    random_seed=42,
-    #)
+    #_,_, removals= model.feature_ablation_ensemble(folds=folds, tune=tune, tune_folds=tune_folds, members=members)
+    inference_csv = os.path.join(folder_path, "data/MoCA/level2/ppmi_ledd.csv")
+    inference_save_dir = os.path.join(safe_path, "inference_ppmi")
+    model.inference(
+        inference_csv_path=inference_csv,
+        param_grid=param_grid,
+        members=members,
+        folds=tune_folds,
+        target_col=target_col,
+        save_dir=inference_save_dir,
+        random_seed=42,
+    )
 
     #log_obj.close()
         
@@ -371,16 +371,10 @@ if __name__ == "__main__":
                             #"L_distance",
                             #"R_distance",
                             #"STIM_distance"
-                            "X_L" ,
-                            "Y_L" ,
-                            "Z_L" ,
-                            "X_R" ,
-                            "Y_R" ,
-                            "Z_R" ,
                             ] ,
                 'outlier_cols':[ 
-                            "TimeSinceSurgery",
-                            "AGE_AT_OP",
+                            #"TimeSinceSurgery",
+                            #"AGE_AT_OP",
                             "TimeSinceDiag",
                             #"SEX",
                             #"UPDRS_reduc",
@@ -402,8 +396,8 @@ if __name__ == "__main__":
                             #"MoCA_Orientierung_sum_post",
                             #"LEDD_reduc",
                             #"LEDD_pre",
-                            "L_distance",
-                            "R_distance",
+                            #"L_distance",
+                            #"R_distance",
                             #"STIM_distance"
                             ] ,
                 },
@@ -415,14 +409,14 @@ if __name__ == "__main__":
         feature_cols = exp_info['feature_cols']
         outlier_cols = exp_info['outlier_cols']
         main(folder_path=folder_path, 
-            data_path="data/MoCA/level2/moca_stim.csv", 
+            data_path="data/MoCA/level2/moca_updrs.csv", 
             feature_cols=feature_cols, 
             target_col=target_col, 
             outlier_cols=outlier_cols,
-            out=f"results/{exp_number}_{target_col}_stim_all_BM/level2/ElasticNet", 
+            out=f"results/{exp_number}_{target_col}_updrs/level2/ElasticNet", 
             folds=10, 
             tune_folds=5, 
             tune=True, 
             members=10,
             uncertainty=False, 
-            filtered_data_path="filtered_MoCA_stim_all_BM.csv")
+            filtered_data_path="filtered_MoCA_updrs.csv")
