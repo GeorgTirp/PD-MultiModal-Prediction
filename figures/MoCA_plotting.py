@@ -321,7 +321,7 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
     ax.set_xticklabels(features_list, fontsize=11)
     ax.set_yticklabels([f'{int(tick)}' for tick in ax.get_yticks()], fontsize=10)
     ax.set_ylabel(modality_name, fontsize=11)
-    ax.set_title(f"{modality_name} Raincloud Plot", fontsize=14)
+    ax.set_title(f"{modality_name} Raincloud Plot  N={len(data)}", fontsize=14)
     ax.set_xlim(0.5, x_positions[-1] + 0.5)
 
     # Add legend for BDI
@@ -368,16 +368,34 @@ def demographics_pre_post(
     data = _prepare_dataframe(modality_path)
     if model_data_path is not None:
         model_df = _prepare_dataframe(model_data_path)
-        data = data[data['OP_DATUM'].isin(model_df['OP_DATUM'])]
+        if 'OP_DATUM' in model_df.columns and 'OP_DATUM' in data.columns:
+            data = data[data['OP_DATUM'].isin(model_df['OP_DATUM'])]
     
 
     if modality_name == "BDI":
-        data["BDI_sum_post"] = data["BDI_sum_pre"] + data["BDI_diff"]
-        data = data[['BDI_sum_pre', 'BDI_sum_post']]
+        if {"BDI_sum_pre", "BDI_sum_post"}.issubset(data.columns):
+            data = data[["BDI_sum_pre", "BDI_sum_post"]]
+        elif {"BDI_sum_pre", "BDI_diff"}.issubset(data.columns):
+            data["BDI_sum_post"] = data["BDI_sum_pre"] + data["BDI_diff"]
+            data = data[["BDI_sum_pre", "BDI_sum_post"]]
+        else:
+            raise ValueError("BDI data must contain either 'BDI_sum_pre'/'BDI_sum_post' or 'BDI_sum_pre'/'BDI_diff'.")
 
     if modality_name == "MoCA":
-        data["MoCA_sum_post"] = data["MoCA_sum_pre"] + data["MoCA_diff"]
-        data = data[['MoCA_sum_pre', 'MoCA_sum_post']]
+        if {"MoCA_sum_pre", "MoCA_sum_post"}.issubset(data.columns):
+            data = data[["MoCA_sum_pre", "MoCA_sum_post"]]
+        elif {"MoCA_sum_pre", "MoCA_diff"}.issubset(data.columns):
+            data["MoCA_sum_post"] = data["MoCA_sum_pre"] + data["MoCA_diff"]
+            data = data[["MoCA_sum_pre", "MoCA_sum_post"]]
+        else:
+            raise ValueError("MoCA data must contain either 'MoCA_sum_pre'/'MoCA_sum_post' or 'MoCA_sum_pre'/'MoCA_diff'.")
+
+    if modality_name == "LEDD":
+        if "LEDD_post" not in data.columns and "LEDD_pre" in data.columns and "LEDD_reduc" in data.columns:
+            data["LEDD_post"] = data["LEDD_pre"] * (1 - data["LEDD_reduc"])
+        if not {"LEDD_pre", "LEDD_post"}.issubset(data.columns):
+            raise ValueError("LEDD data must contain 'LEDD_pre' and 'LEDD_post' columns.")
+        data = data[['LEDD_pre', 'LEDD_post']]
 
     if modality_name == "MDS-UPDRS III":
         data = data.rename(columns={'MDS_UPDRS_III_sum_pre': 'Pre', 'MDS_UPDRS_III_sum_post': 'Post'})
@@ -425,11 +443,12 @@ def histoplot(input_path: str, feature: str,  save_path: str, show: bool = False
         color = 'orange'
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    print(data[feature].mean())
-    print(data[feature].std())
-    sns.histplot(data[feature], kde=True, bins=30, color=color)
+    feature_series = data[feature].dropna()
+    print(feature_series.mean())
+    print(feature_series.std())
+    sns.histplot(feature_series, kde=True, bins=30, color=color)
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.set_title(title, fontsize=16)
+    ax.set_title(f"{title} (N={len(feature_series)})", fontsize=16)
     ax.set_xlabel(xlabel, fontsize=14)
     ax.set_ylabel('Frequency', fontsize=14)
     ax.tick_params(axis='both', labelsize=11)
@@ -447,32 +466,56 @@ def histoplot(input_path: str, feature: str,  save_path: str, show: bool = False
 
 
 def visualize_demographics(
-        data_path, 
-        questionnaire, 
-        save_path) -> None:
-    # Example usage
-    
-    
-    stim_path = data_path + "/stim_positions.csv"
-    mds_prepost_path = data_path+ "/mupdrs3_pre_vs_post.csv"
-    ledd_prepost_path = data_path + "/ledd_pre_vs_post.csv"
-    if questionnaire == "MoCA":  
-        quest_prepost_path = data_path + "/moca_pre_vs_post.csv"
-        quest = data_path + "/moca_df.csv"
-    elif questionnaire == "BDI":
-        quest_prepost_path = data_path + "/bdi_pre_vs_post.csv"
-        quest = data_path + "/bdi_df.csv"
+        data_path: str,
+        questionnaire: str,
+        save_path: str,
+        dataframe_path: str,
+        filtered_path: str,
+    ) -> None:
+    """
+    Create demographic visualizations using the unified dataframe but restricted
+    to only the OP_DATUMs that are present in the filtered dataset.
 
-    op_dates_path = data_path + "/op_dates.csv"
+    - dataframe_path: the full (unfiltered) data CSV (contains LEDD + questionnaire info)
+    - filtered_path: the filtered data CSV used in modeling (defines patient subset)
+    """
 
-    # Ensure save path exists
+    # === Setup ===
     os.makedirs(save_path, exist_ok=True)
+    op_dates_path = os.path.join(data_path, "op_dates.csv")
+
+    # === Read data ===
+    df = pd.read_csv(dataframe_path)
+    df_filtered = pd.read_csv(filtered_path)
+
+    # === Restrict to same OP_DATUMs ===
+    if "OP_DATUM" not in df.columns:
+        raise ValueError(f"Expected 'OP_DATUM' column in {dataframe_path}")
+    if "OP_DATUM" not in df_filtered.columns:
+        raise ValueError(f"Expected 'OP_DATUM' column in {filtered_path}")
+
+    allowed_ops = set(df_filtered["OP_DATUM"].dropna().unique())
+    df_common = df[df["OP_DATUM"].isin(allowed_ops)].copy()
+
+    # Save filtered dataframe (for traceability)
+    filtered_copy_path = os.path.join(save_path, "dataframe_filtered_by_OP_DATUM.csv")
+    df_common.to_csv(filtered_copy_path, index=False)
+
+    # === Now all downstream plots use the same filtered df ===
+    stim_path = os.path.join(data_path, "stim_positions.csv")
+    mds_prepost_path = os.path.join(data_path, "mupdrs3_pre_vs_post.csv")
+
+    # MDS-UPDRS still uses its original file + op_dates for timing
     demographics_pre_post(mds_prepost_path, op_dates_path, "MDS-UPDRS III", save_path)
-    demographics_pre_post(ledd_prepost_path, op_dates_path, "LEDD", save_path)
-    demographics_pre_post(quest_prepost_path, op_dates_path, questionnaire, save_path)
-    histoplot(quest, "TimeSinceSurgery", save_path)
-    histoplot(quest, "TimeSinceDiag", save_path)
-    histoplot(quest, "AGE_AT_OP", save_path)
+
+    # LEDD and questionnaire both come from the unified filtered df
+    demographics_pre_post(filtered_copy_path, None, "LEDD", save_path)
+    demographics_pre_post(filtered_copy_path, None, questionnaire, save_path)
+
+    # Histograms from the same filtered df
+    histoplot(filtered_copy_path, "TimeSinceSurgery", save_path)
+    histoplot(filtered_copy_path, "TimeSinceDiag",   save_path)
+    histoplot(filtered_copy_path, "AGE_AT_OP",       save_path)
 
 
 
@@ -1280,10 +1323,15 @@ if __name__ == "__main__":
     else:
         feature_name_mapping.setdefault("all", list(feature_name_mapping.values()))
 
+    dataframe_path = os.path.join(data_dir, "moca_ledd.csv")
+    filtered_ledd_path = os.path.join(data_dir, "filtered_MoCA_ledd.csv")
+
     visualize_demographics(
         data_dir,
         "MoCA",
-        save_path=demographics_dir + "/"
+        save_path=demographics_dir + "/",
+        dataframe_path=dataframe_path,
+        filtered_path=filtered_ledd_path
     )
 
     ablation_dir = os.path.join(results_dir, "ablation")

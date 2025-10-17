@@ -277,6 +277,7 @@ class BaseRegressionModel:
 
         preds = np.concatenate(preds)
         y_vals = np.concatenate(y_vals)
+        test_indices = np.concatenate(test_indices)
         r, p = pearsonr(y_vals, preds)
         f_squared = (r**2) / (1 - r**2)
         mse = mean_squared_error(y_vals, preds)
@@ -409,6 +410,7 @@ class BaseRegressionModel:
         pred_dists = []
         y_vals = []
         y_trains = []
+        test_indices = []
         all_shap_values = []
         all_shap_mean = []
         all_shap_variance = []
@@ -518,6 +520,7 @@ class BaseRegressionModel:
             y_vals.append(y_val_kf)
             y_trains.append(y_train_kf)
             X_vals.append(X_val_kf)
+            test_indices.append(val_idx)
             if hasattr(self, 'weights'):
                 mse = mean_squared_error(y_val_kf, pred, sample_weight=w_test)
                 train_mse = mean_squared_error(y_train_kf, pred_train, sample_weight=w_train)
@@ -655,7 +658,8 @@ class BaseRegressionModel:
         r, p = pearsonr(y_vals, preds)
         f_squared = (r**2) / (1 - r**2)
         rho, pval_spearman = spearmanr(y_vals, preds)
-
+        test_indices = [self.X.iloc[idx].index.to_numpy() for idx in test_indices]
+        test_indices = np.concatenate(test_indices)
         mse = mean_squared_error(y_vals, preds)
         train_mse = mean_squared_error(y_trains, preds_train)
 
@@ -827,7 +831,7 @@ class BaseRegressionModel:
         'y_pred': preds,
         'y_test': y_vals,
         'pred_dist': pred_dists,
-        'test_index': val_idx,
+        'test_index': test_indices,
         'epistemic': epistemic_uncertainty if uncertainty else None,
         'aleatoric': aleatoric_uncertainty if uncertainty else None,
         'feature_importance': feature_importances if get_shap else None,
