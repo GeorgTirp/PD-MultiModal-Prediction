@@ -924,139 +924,127 @@ def regression_figures(
     #    ylabel=linear_ylabel
     #)
 
+def _normalize_feature_aliases(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Rename known alias columns to a canonical name (in-place safe).
+    - If the canonical already exists, we DO NOT overwrite it.
+    - If multiple aliases exist, the first one encountered is used.
+    """
+    # extend here if you hit more variants later
+    alias_map = {
+        "UPDRS_on": ["UPDRS_on", "MDS_UPDRS_III_ON", "MDS_UPDRS_III_sum_ON"],
+    }
+    for canonical, aliases in alias_map.items():
+        if canonical in df.columns:
+            continue
+        for alt in aliases:
+            if alt in df.columns:
+                df = df.rename(columns={alt: canonical})
+                break
+    return df
+
 
 def threshold_figure(
         feature_name_mapping: dict,
         data_path: str,
         shap_data_path: str,
-        removal_list_path: str,
         save_path: str) -> None:
-    """
-    Reads in the BDI data, SHAP values, and the list of removed features at each ablation step.
-    1) Determines which column in the SHAP array corresponds to `feature_name`.
-    2) Plots a histogram of the SHAP values for that feature, coloring bars by sign (negative vs. positive).
-    3) Creates a simple linear‐SVM on the raw feature values to find a decision threshold for 
-       predicting (BDI_diff >= 0). Plots a histogram of the feature values split by target class 
-       and draws the SVM‐determined threshold as a vertical line.
-    4) Saves the combined figure to `save_path`.
-    """
+
     colors = {
-            "deterioration": "#04E762",
-            "improvement": "#FF5714",
-            "det_edge": "#007C34",
-            "imp_edge": "#8A3210",
-            "line": "grey",
-            "scatter": "grey",
-            "ideal_line": "black",
-        }
-    # 1) Load inputs
-    removals = pd.read_csv(removal_list_path)  # Assumes a single‐column CSV listing removed feature names
+        "deterioration": "#04E762",
+        "improvement": "#FF5714",
+        "det_edge": "#007C34",
+        "imp_edge": "#8A3210",
+        "line": "grey",
+        "scatter": "grey",
+        "ideal_line": "black",
+    }
+
+    # --- load & normalize column names (aliases) ---
     df = _prepare_dataframe(data_path)
+    shap_df = _prepare_dataframe(shap_data_path)
 
-    shap_values_raw, shap_feature_names = _load_shap_data(shap_data_path)
-    shap_values = _ensure_2d_shap(shap_values_raw)
+    df = _normalize_feature_aliases(df)
+    shap_df = _normalize_feature_aliases(shap_df)
 
-    feature_df = df.drop(columns=["OP_DATUM"], errors="ignore")
-    remaining_features = _resolve_remaining_features(feature_df, removals, shap_values, shap_feature_names)
+    # (optional) make sure pretty label exists
+    feature_name_mapping.setdefault("UPDRS_on", feature_name_mapping.get("MDS_UPDRS_III_ON", "UPDRS On"))
 
-    if shap_feature_names:
-        feature_indices = [shap_feature_names.index(name) for name in remaining_features]
-        shap_values = shap_values[:, feature_indices]
+    # keep only numeric feature columns; drop obvious keys
+    feature_df = df.drop(columns=[c for c in ["OP_DATUM", "Pat_ID"] if c in df.columns], errors="ignore")
+    feature_df = feature_df.apply(pd.to_numeric, errors="coerce")
+    shap_df = shap_df.apply(pd.to_numeric, errors="coerce")
 
-    #if feature_name not in remaining_features:
-    #    raise ValueError(f"Feature '{feature_name}' was already removed in the ablation history; no SHAP values available.")
-    for feature_name in remaining_features:
+    # Align features between data and SHAP after alias normalization
+    shared_features = [c for c in feature_df.columns if c in shap_df.columns]
+    if not shared_features:
+        raise ValueError(
+            "No overlapping feature columns between data and SHAP CSV after alias normalization.\n"
+            f"Data columns (sample): {list(feature_df.columns)[:10]}...\n"
+            f"SHAP columns (sample): {list(shap_df.columns)[:10]}..."
+        )
 
-        feature = feature_df[feature_name].to_numpy()
-        # The column index within shap_values for feature_name:
-        shap_col_index = remaining_features.index(feature_name)
-        shap_feature = shap_values[:, shap_col_index]
-        # Convert shap_feature to a binary vector: 1 if SHAP ≥ 0, else 0
-        target = (shap_feature >= 0).astype(int)
+    for feature_name in shared_features:
+        x_raw = feature_df[feature_name]
+        shap_vals = shap_df[feature_name]
 
-        X = feature.reshape(-1, 1)
-        y = target
+        mask = x_raw.notna() & shap_vals.notna()
+        x = x_raw[mask].to_numpy()
+        shap_feature = shap_vals[mask].to_numpy()
+        if x.size < 5:
+            continue
 
-        param_grid = {'C': [0.01, 0.1, 1, 10, 100]}
-        svm = SVC(kernel="linear")
-        grid_search = GridSearchCV(svm, param_grid, cv=5)
-        grid_search.fit(X, y)
-        svm_clf = grid_search.best_estimator_
-        print(f"Best C: {grid_search.best_params_['C']} with accuracy: {grid_search.best_score_:.2f}")
-        w = svm_clf.coef_[0][0]
-        b = svm_clf.intercept_[0]
-        threshold = -b / w  
+        y = (shap_feature >= 0).astype(int)
+        has_both = (y.min() == 0) and (y.max() == 1)
+
+        threshold_val = None
+        acc_text = "N/A"
+        if has_both:
+            X = x.reshape(-1, 1)
+            n_pos, n_neg = int(y.sum()), int((1 - y).sum())
+            max_cv = max(2, min(5, n_pos, n_neg))
+            try:
+                gs = GridSearchCV(SVC(kernel="linear"), {'C': [0.01, 0.1, 1, 10, 100]}, cv=max_cv)
+                gs.fit(X, y)
+                acc_text = f"{gs.best_score_:.2f}"
+                w = float(gs.best_estimator_.coef_[0][0])
+                b = float(gs.best_estimator_.intercept_[0])
+                threshold_val = (-b / w) if abs(w) > 1e-12 else None
+            except Exception as e:
+                print(f"[threshold] {feature_name}: SVM skipped ({e})")
+                threshold_val = None
 
         fig, ax = plt.subplots(figsize=(10, 7))
-
-        # Split feature values by SHAP sign
         mask_neg = (shap_feature < 0)
-        mask_pos = (shap_feature >= 0)
-
-        feature_neg_shap = feature[mask_neg]
-        feature_pos_shap = feature[mask_pos]
-
-
-        # Common bins over the raw feature range
-        fmin, fmax = feature.min(), feature.max()
+        mask_pos = ~mask_neg
+        fmin, fmax = float(np.nanmin(x)), float(np.nanmax(x))
+        if fmin == fmax:
+            fmin -= 1e-6; fmax += 1e-6
         bins = np.linspace(fmin, fmax, 30)
 
-        # Compute histogram counts manually
-        counts_neg, _ = np.histogram(feature_neg_shap, bins=bins)
-        counts_pos, _ = np.histogram(feature_pos_shap, bins=bins)
-
-        # Compute error bars as Poisson (sqrt of counts)
-        err_neg = np.sqrt(counts_neg)
-        err_pos = np.sqrt(counts_pos)
-
-        # Bar positions and width
+        counts_neg, _ = np.histogram(x[mask_neg], bins=bins)
+        counts_pos, _ = np.histogram(x[mask_pos], bins=bins)
         bar_positions = (bins[:-1] + bins[1:]) / 2
         bar_width = bins[1] - bins[0]
 
-        # Plot negative‐SHAP bars
-        ax.bar(
-            bar_positions,
-            counts_neg,
-            #yerr=err_neg,
-            #capsize=5,
-            width=bar_width,
-            color=colors["improvement"],
-            alpha=0.7,
-            edgecolor=colors["imp_edge"],
-            linewidth=1.5,
-            label="negative SHAPs"
-        )
-        # Plot positive‐SHAP bars
-        ax.bar(
-            bar_positions,
-            counts_pos,
-            #yerr=err_pos,
-            #capsize=5,
-            width=bar_width,
-            color=colors["deterioration"],
-            alpha=0.7,
-            edgecolor=colors["det_edge"],
-            linewidth=1.5,
-            label="positive SHAPs"
-        )
+        ax.bar(bar_positions, counts_neg, width=bar_width, color=colors["improvement"],
+               alpha=0.7, edgecolor=colors["imp_edge"], linewidth=1.5, label="negative SHAPs")
+        ax.bar(bar_positions, counts_pos, width=bar_width, color=colors["deterioration"],
+               alpha=0.7, edgecolor=colors["det_edge"], linewidth=1.5, label="positive SHAPs")
 
-        # Draw vertical line at the SVM threshold
-        ax.axvline(threshold, color="black", linestyle="--", linewidth=2,
-                   label=f"SVM threshold = {threshold:.3f}")
+        if threshold_val is not None and np.isfinite(threshold_val):
+            ax.axvline(threshold_val, color="black", linestyle="--", linewidth=2,
+                       label=f"SVM threshold = {threshold_val:.3f}")
+            acc_label = f"Accuracy: {acc_text}"
+        else:
+            acc_label = "Accuracy: N/A (no class split / SVM failed)"
 
-        feature_name_plot= feature_name_mapping[feature_name] if feature_name in feature_name_mapping else feature_name
-        title = f"Histogram of {feature_name_plot} with SHAP values and threshold (Accuracy: {grid_search.best_score_:.2f})"
-        ax.set_title(title, fontsize=14)
-        ax.set_xlabel(f"{feature_name_plot}", fontsize=12)
+        feature_name_plot = feature_name_mapping.get(feature_name, feature_name)
+        ax.set_title(f"Histogram of {feature_name_plot} with SHAP values and threshold ({acc_label})", fontsize=14)
+        ax.set_xlabel(feature_name_plot, fontsize=12)
         ax.set_ylabel("Frequency", fontsize=12)
         ax.legend()
-
-        plt.grid(False)
-        sns.set_context("paper")
-            # Optionally choose a style you like
-        sns.despine()
-        plt.tight_layout()
-        plt.tight_layout()
+        plt.grid(False); sns.set_context("paper"); sns.despine(); plt.tight_layout()
         plt.savefig(f'{save_path}_{feature_name}.png', dpi=300)
         plt.savefig(f'{save_path}_{feature_name}.svg', dpi=300)
         plt.close(fig)
@@ -1343,7 +1331,7 @@ if __name__ == "__main__":
         "LEDD_pre": "LEDD Pre",
         }
 
-    shap_data_path = os.path.join(results_dir, "MoCA_sum_post_all_shap_values(mu).csv")
+    shap_data_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi/MoCA_sum_post_ensemble_shap_values.csv"
     removal_list_path = os.path.join(results_dir, "ablation", "MoCA_sum_post_ENSEMBLE_ablation_history.csv")
     _, shap_feature_names = _load_shap_data(shap_data_path)
     if shap_feature_names:
@@ -1358,68 +1346,67 @@ if __name__ == "__main__":
     updrs_post_path = os.path.join(data_dir, "moca_ledd_with_upost.csv")
     filtered_ledd_path = os.path.join(data_dir, "filtered_MoCA_ledd.csv")
 
-    visualize_demographics(
-        data_dir,
-        "MoCA",
-        save_path=demographics_dir + "/",
-        dataframe_path=dataframe_path,
-        filtered_path=filtered_ledd_path,
-        updrs_post_path=updrs_post_path
-    )
+    #visualize_demographics(
+    #    data_dir,
+    #    "MoCA",
+    #    save_path=demographics_dir + "/",
+    #    dataframe_path=dataframe_path,
+    #    filtered_path=filtered_ledd_path,
+    #    updrs_post_path=updrs_post_path
+    #)
 
-    ablation_dir = os.path.join(results_dir, "ablation")
-    # Set these paths manually to the ablation steps you want to visualise.
-    # Example: os.path.join(ablation_dir, "ablation_step[5]")
-    full_step_dir = os.path.join(ablation_dir, "ablation_step[1]")
-    best_step_dir = os.path.join(ablation_dir, "ablation_step[8]")
-
-    if not os.path.exists(full_step_dir):
-        raise FileNotFoundError(
-            "Expected full ensemble step directory not found. "
-            "Please update 'full_step_dir' in MoCA_plotting.py to point to the desired ablation step."
-        )
-    if not os.path.exists(best_step_dir):
-        raise FileNotFoundError(
-            "Expected best ensemble step directory not found. "
-            "Please update 'best_step_dir' in MoCA_plotting.py to point to the desired ablation step."
-        )
+    #ablation_dir = os.path.join(results_dir, "ablation")
+    ## Set these paths manually to the ablation steps you want to visualise.
+    ## Example: os.path.join(ablation_dir, "ablation_step[5]")
+    #full_step_dir = os.path.join(ablation_dir, "ablation_step[1]")
+    #best_step_dir = os.path.join(ablation_dir, "ablation_step[1]")
+#
+    #if not os.path.exists(full_step_dir):
+    #    raise FileNotFoundError(
+    #        "Expected full ensemble step directory not found. "
+    #        "Please update 'full_step_dir' in MoCA_plotting.py to point to the desired ablation step."
+    #    )
+    #if not os.path.exists(best_step_dir):
+    #    raise FileNotFoundError(
+    #        "Expected best ensemble step directory not found. "
+    #        "Please update 'best_step_dir' in MoCA_plotting.py to point to the desired ablation step."
+    #    )
 
     inference_dirs = [os.path.join(results_dir, "1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi")]
     inference_dirs = ["/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi"]
-    regression_figures(
-        ensemble_step_full=full_step_dir,
-        ensemble_step_best=best_step_dir,
-        inference_dirs=inference_dirs,
-        data_path=os.path.join(data_dir, "moca_demo.csv"),
-        save_path=os.path.join(regression_dir, "moca_sum_post"),
-        quest="MoCA_sum_post"
-    )
+    #regression_figures(
+    #    ensemble_step_full=full_step_dir,
+    #    ensemble_step_best=best_step_dir,
+    #    inference_dirs=inference_dirs,
+    #    data_path=os.path.join(data_dir, "moca_demo.csv"),
+    #    save_path=os.path.join(regression_dir, "moca_sum_post"),
+    #    quest="MoCA_sum_post"
+    #)
 
-    threshold_figure(
-        feature_name_mapping,
-        data_path=os.path.join(data_dir, "moca_demo.csv"),
-        shap_data_path=shap_data_path,
-        removal_list_path=removal_list_path,
-        save_path=os.path.join(threshold_dir, "moca_sum_post_threshold")
-    )
+    #threshold_figure(
+    #    feature_name_mapping,
+    #    data_path=os.path.join(data_dir, "moca_updrs.csv"),
+    #    shap_data_path=shap_data_path,
+    #    save_path=os.path.join(threshold_dir, "moca_sum_post_threshold")
+    #)
 
-    shap_importance_histo_figure(
-        feature_name_mapping,
-        data_path=os.path.join(data_dir, "moca_demo.csv"),
-        shap_data_path=shap_data_path,
-        removal_list_path=removal_list_path,
-        save_path=os.path.join(shap_dir, "moca_sum_post_importance")
-    )
-
-    shap_interaction_figure(
-        feature_name_mapping,
-        data_path=os.path.join(data_dir, "moca_demo.csv"),
-        shap_data_path=shap_data_path,
-        removal_list_path=removal_list_path,
-        feature1="TimeSinceSurgery",
-        feature2="AGE_AT_OP",
-        save_path=os.path.join(shap_dir, "moca_sum_post_dependence")
-    )
+    #shap_importance_histo_figure(
+    #    feature_name_mapping,
+    #    data_path=os.path.join(data_dir, "moca_demo.csv"),
+    #    shap_data_path=shap_data_path,
+    #    removal_list_path=removal_list_path,
+    #    save_path=os.path.join(shap_dir, "moca_sum_post_importance")
+    #)
+#
+    #shap_interaction_figure(
+    #    feature_name_mapping,
+    #    data_path=os.path.join(data_dir, "moca_demo.csv"),
+    #    shap_data_path=shap_data_path,
+    #    removal_list_path=removal_list_path,
+    #    feature1="TimeSinceSurgery",
+    #    feature2="AGE_AT_OP",
+    #    save_path=os.path.join(shap_dir, "moca_sum_post_dependence")
+    #)
 
     ablation_plot(
         questionnaire="MoCA_sum_post_ENSEMBLE",
