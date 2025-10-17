@@ -51,6 +51,7 @@ class ElasticNetRegressionModel(BaseRegressionModel):
             top_n: int = -1,
             hparams: dict = None,          
             hparam_grid: dict = None,
+            standardize_features: str = "zscore",
             split_shaps: bool = None,
             logging=None):
 
@@ -61,6 +62,7 @@ class ElasticNetRegressionModel(BaseRegressionModel):
             test_split_size,
             save_path,
             top_n,
+            standardize=standardize_features,
             split_shaps=split_shaps,
             logging=logging)
 

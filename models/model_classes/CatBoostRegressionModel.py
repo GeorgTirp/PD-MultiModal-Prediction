@@ -81,33 +81,77 @@ class CatBoostRegressionModel(BaseRegressionModel):
     # Preprocessing
     # ------------------------------------------------------------------
     def model_specific_preprocess(self, data_df: pd.DataFrame) -> Tuple:
+        """
+        Preprocess for CatBoost:
+        - Keep categorical columns (incl. 'SEX') as category dtype (no manual encoding).
+        - Impute numeric columns only.
+        - Store cat feature indices in self.cat_features for CatBoost.fit(..., cat_features=...).
+        """
         self.logging.info("Starting CatBoost preprocessing...")
 
-        data_df = data_df.dropna(subset=self.feature_selection["features"] + [self.feature_selection["target"]])
-        X = data_df[self.feature_selection["features"]].copy()
-        y = data_df[self.feature_selection["target"]]
+        # Only require target to be present; allow feature NaNs (CatBoost can handle them)
+        target_col = self.feature_selection["target"]
+        feature_cols = self.feature_selection["features"]
 
-        # Encode categorical/string columns via pandas category codes
-        from pandas.api.types import is_string_dtype
+        # drop rows where target is missing
+        data_df = data_df.dropna(subset=[target_col])
 
-        string_cols = [col for col in X.columns if is_string_dtype(X[col])]
-        for col in string_cols:
-            self.logging.info(f"Encoding column '{col}' as categorical codes for CatBoost.")
-            X[col] = X[col].astype("category").cat.codes
+        X = data_df[feature_cols].copy()
+        y = data_df[target_col]
 
-        numeric_cols = X.select_dtypes(include=["number"]).columns
-        if len(numeric_cols) > 0:
-            X[numeric_cols] = X[numeric_cols].fillna(X[numeric_cols].mean())
+        # Identify categorical columns: object, category, or boolean (CatBoost handles bool as categorical fine)
+        cat_cols = (
+            list(X.select_dtypes(include=["object", "category", "bool"]).columns)
+        )
 
-        X = X.apply(pd.to_numeric, errors="raise")
-        y = y.apply(pd.to_numeric, errors="raise")
+        # Ensure 'SEX' (if present) is treated as categorical
+        if "SEX" in X.columns and "SEX" not in cat_cols:
+            cat_cols.append("SEX")
 
+        # Cast categorical columns to pandas category (stable + efficient)
+        for col in cat_cols:
+            X[col] = X[col].astype("category")
+
+            # Optional: unify missing label for categorical (CatBoost can handle NaN, but a distinct 'Unknown' can be clearer)
+            # Comment out the next line if you prefer to keep NaNs.
+            X[col] = X[col].cat.add_categories(["<Unknown>"]).fillna("<Unknown>")
+
+        # Numeric columns: impute mean (CatBoost handles NaN in numeric too; keeping this for determinism)
+        num_cols = list(X.select_dtypes(include=["number"]).columns)
+        if len(num_cols) > 0:
+            X[num_cols] = X[num_cols].astype(float)
+            X[num_cols] = X[num_cols].fillna(X[num_cols].mean())
+
+        # Save categorical feature indices for CatBoost
+        self.cat_features = [X.columns.get_loc(c) for c in cat_cols]
+
+        # Convert y to numeric
+        y = pd.to_numeric(y, errors="coerce")
+        # If target had non-numeric, drop those rows
+        non_nan_mask = ~y.isna()
+        if not non_nan_mask.all():
+            dropped = (~non_nan_mask).sum()
+            self.logging.info(f"Dropping {dropped} rows due to non-numeric target.")
+            y = y[non_nan_mask]
+            X = X.loc[y.index]
+
+        # Standardization info for target (as your original code)
         m = y.mean()
         std = y.std(ddof=0)
         z = (y - m) / (std if std != 0 else 1.0)
 
-        self.logging.info("Finished CatBoost preprocessing.")
+        self.logging.info(
+            f"Finished CatBoost preprocessing. "
+            f"{len(cat_cols)} categorical features detected: {cat_cols}"
+        )
         return X, y, z, m, std
+
+    def fit(self, X, y, **kwargs):
+        if "sample_weight" not in kwargs and self.weights is not None:
+            kwargs["sample_weight"] = self.weights
+        kwargs.setdefault("cat_features", getattr(self, "cat_features", None))
+        return self.model.fit(X, y, **kwargs)
+
 
     # ------------------------------------------------------------------
     # Feature Importance (SHAP)
@@ -154,28 +198,15 @@ class CatBoostRegressionModel(BaseRegressionModel):
     # ------------------------------------------------------------------
     # Hyperparameter Tuning
     # ------------------------------------------------------------------
-    def tune_hparams(
-        self,
-        X,
-        y,
-        param_grid: dict,
-        folds: int = 5,
-        groups: Optional[np.ndarray] = None,
-        weights: Optional[np.ndarray] = None,
-    ) -> Dict:
+    def tune_hparams(self, X, y, param_grid, folds=5, groups=None, weights=None) -> Dict:
         if param_grid is None:
             raise ValueError("param_grid must be provided for tuning.")
-
         if weights is None:
             weights = self.weights
 
-        if folds == -1:
-            splitter = LeaveOneOut() if groups is None else LeaveOneGroupOut()
-        else:
-            if groups is None:
-                splitter = KFold(n_splits=folds, shuffle=True, random_state=self.random_state)
-            else:
-                splitter = GroupKFold(n_splits=folds)
+        splitter = (LeaveOneOut() if groups is None else LeaveOneGroupOut()) if folds == -1 \
+            else (KFold(n_splits=folds, shuffle=True, random_state=self.random_state) if groups is None
+                  else GroupKFold(n_splits=folds))
 
         estimator = CatBoostRegressor(**self.cat_hparams)
         grid_search = GridSearchCV(
@@ -187,9 +218,12 @@ class CatBoostRegressionModel(BaseRegressionModel):
             verbose=0,
         )
 
-        fit_kwargs = {}
+        fit_kwargs = {"cat_features": getattr(self, "cat_features", None)}
         if weights is not None:
             fit_kwargs["sample_weight"] = weights
+        if groups is not None and folds != -1:
+            # GridSearchCV handles groups via split() generator, but pass for completeness
+            fit_kwargs["groups"] = groups
 
         grid_search.fit(X, y, **fit_kwargs)
 
@@ -199,8 +233,8 @@ class CatBoostRegressionModel(BaseRegressionModel):
         if hasattr(self, "logging") and self.logging:
             self.logging.info(f"Best CatBoost params: {best_params}")
             self.logging.info(f"Best CatBoost CV score: {grid_search.best_score_:.6f}")
-
         return best_params
+
 
     # ------------------------------------------------------------------
     # Override predict to ensure numpy output
