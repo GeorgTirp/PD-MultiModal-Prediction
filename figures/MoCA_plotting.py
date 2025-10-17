@@ -13,7 +13,6 @@ import seaborn as sns
 from sklearn.model_selection import train_test_split, KFold, GridSearchCV, LeaveOneOut
 import pickle
 from scipy.stats import pearsonr
-import faster_evidential_boost
 from tqdm import tqdm
 import ast
 from scipy.stats import linregress
@@ -355,13 +354,12 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
     plt.close()
     
 
-
-
 def demographics_pre_post(
         modality_path: str, 
         model_data_path = None, 
         modality_name = None,
         save_path = None,
+        updrs_post_path = None,
         show = False) -> None:
     """ Plot the demographic data before and after the treatment as raincloud plot"""
 
@@ -398,13 +396,45 @@ def demographics_pre_post(
         data = data[['LEDD_pre', 'LEDD_post']]
 
     if modality_name == "MDS-UPDRS III":
-        data = data.rename(columns={'MDS_UPDRS_III_sum_pre': 'Pre', 'MDS_UPDRS_III_sum_post': 'Post'})
-        data_pre_off = data[data['MEDICATION'] == 'OFF'].rename(columns={'Pre': 'Pre_OFF'})
-        data_pre_on = data[data['MEDICATION'] == 'ON'].rename(columns={'Pre': 'Pre_ON'})
-        data_post_off = data[data['MEDICATION'] == 'OFF'].rename(columns={'Post': 'Post_OFF'})
-        data_post_on = data[data['MEDICATION'] == 'ON'].rename(columns={'Post': 'Post_ON'})
-        data = pd.concat([data_pre_off[['Pre_OFF']], data_pre_on[['Pre_ON']], data_post_on[['Post_ON']]], axis=1)
-        data = data.drop(columns=['MEDICATION'], errors='ignore')
+        # Use the SAME dataframe as LEDD/Questionnaire for pre scores:
+        #   - MDS_UPDRS_III_sum_OFF  (Pre OFF)
+        #   - MDS_UPDRS_III_sum_ON   (Pre ON)
+        #
+        # Post scores come from the companion '<dataframe_path_without_.csv>_with_upost.csv'
+        #   - MDS_UPDRS_III_sum_POST (Post ON / Stim ON)
+        post_path = updrs_post_path
+        if not os.path.exists(post_path):
+            raise FileNotFoundError(
+                f"MDS-UPDRS post file not found: {post_path}. "
+                "Expected companion '<dataframe>_with_upost.csv' containing 'MDS_UPDRS_III_sum_POST'."
+            )
+        post_df = _prepare_dataframe(post_path)
+
+        # Merge on OP_DATUM if present in both; otherwise align by index (best effort).
+        if "OP_DATUM" in data.columns and "OP_DATUM" in post_df.columns:
+            merged = pd.merge(
+                data, post_df[["OP_DATUM", "MDS_UPDRS_III_sum_POST"]],
+                on="OP_DATUM", how="left"
+            )
+        else:
+            merged = pd.concat([data.reset_index(drop=True),
+                                post_df[["MDS_UPDRS_III_sum_POST"]].reset_index(drop=True)],
+                               axis=1)
+
+        # Validate required columns
+        required_cols = ["MDS_UPDRS_III_sum_OFF", "MDS_UPDRS_III_sum_ON", "MDS_UPDRS_III_sum_POST"]
+        missing = [c for c in required_cols if c not in merged.columns]
+        if missing:
+            raise ValueError(
+                f"MDS-UPDRS III needs columns {required_cols}. Missing: {missing}. "
+                f"Check {modality_path} and {post_path}."
+            )
+
+        data = merged[required_cols].rename(columns={
+            "MDS_UPDRS_III_sum_OFF":  "Pre_OFF",
+            "MDS_UPDRS_III_sum_ON":   "Pre_ON",
+            "MDS_UPDRS_III_sum_POST": "Post_ON",
+        })
 
     # Drop the 'OP_DATUM' column from data if not already done 
     if 'OP_DATUM' in data.columns:
@@ -471,6 +501,7 @@ def visualize_demographics(
         save_path: str,
         dataframe_path: str,
         filtered_path: str,
+        updrs_post_path = None,
     ) -> None:
     """
     Create demographic visualizations using the unified dataframe but restricted
@@ -503,10 +534,10 @@ def visualize_demographics(
 
     # === Now all downstream plots use the same filtered df ===
     stim_path = os.path.join(data_path, "stim_positions.csv")
-    mds_prepost_path = os.path.join(data_path, "mupdrs3_pre_vs_post.csv")
+
 
     # MDS-UPDRS still uses its original file + op_dates for timing
-    demographics_pre_post(mds_prepost_path, op_dates_path, "MDS-UPDRS III", save_path)
+    demographics_pre_post(filtered_copy_path, None, "MDS-UPDRS III", save_path ,updrs_post_path=updrs_post_path)
 
     # LEDD and questionnaire both come from the unified filtered df
     demographics_pre_post(filtered_copy_path, None, "LEDD", save_path)
@@ -1324,6 +1355,7 @@ if __name__ == "__main__":
         feature_name_mapping.setdefault("all", list(feature_name_mapping.values()))
 
     dataframe_path = os.path.join(data_dir, "moca_ledd.csv")
+    updrs_post_path = os.path.join(data_dir, "moca_ledd_with_upost.csv")
     filtered_ledd_path = os.path.join(data_dir, "filtered_MoCA_ledd.csv")
 
     visualize_demographics(
@@ -1331,7 +1363,8 @@ if __name__ == "__main__":
         "MoCA",
         save_path=demographics_dir + "/",
         dataframe_path=dataframe_path,
-        filtered_path=filtered_ledd_path
+        filtered_path=filtered_ledd_path,
+        updrs_post_path=updrs_post_path
     )
 
     ablation_dir = os.path.join(results_dir, "ablation")
@@ -1351,8 +1384,8 @@ if __name__ == "__main__":
             "Please update 'best_step_dir' in MoCA_plotting.py to point to the desired ablation step."
         )
 
-    inference_dirs = ["/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi"]
-
+    inference_dirs = [os.path.join(results_dir, "1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi")]
+    inference_dirs = ["/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi"]
     regression_figures(
         ensemble_step_full=full_step_dir,
         ensemble_step_best=best_step_dir,
