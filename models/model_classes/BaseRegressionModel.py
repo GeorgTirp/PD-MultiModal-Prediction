@@ -953,52 +953,6 @@ class BaseRegressionModel:
         if param_grid and folds == 1:
             raise ValueError("When param_grid is provided, folds must be >= 2 to enable majority voting.")
 
-        def _instantiate_model(param_update: Dict) -> object:
-            params = {**base_params, **param_update}
-            try:
-                return self.model.__class__(**params)
-            except Exception:
-                model_clone = skl_clone(self.model)
-                try:
-                    model_clone.set_params(**params)
-                except Exception:
-                    for key, val in params.items():
-                        try:
-                            model_clone.set_params(**{key: val})
-                        except Exception:
-                            pass
-                return model_clone
-
-        def _fit_feature_scaler(X_fit: pd.DataFrame):
-            if self.feature_scaler is None:
-                return None
-            scaler = copy.deepcopy(self.feature_scaler)
-            scaler.fit(X_fit)
-            return scaler
-
-        def _fit_target_scaler(y_fit: pd.Series):
-            if self.scaler is None:
-                return None
-            scaler = copy.deepcopy(self.scaler)
-            scaler.fit(y_fit)
-            return scaler
-
-        def _transform_features(scaler, X: pd.DataFrame) -> np.ndarray:
-            if scaler is None:
-                return X.to_numpy()
-            return scaler.transform(X)
-
-        def _transform_target(scaler, y: pd.Series) -> np.ndarray:
-            if scaler is None:
-                return y.to_numpy()
-            transformed = scaler.transform(y)
-            return np.asarray(transformed).ravel()
-
-        def _inverse_target(scaler, y_pred: np.ndarray) -> np.ndarray:
-            if scaler is None:
-                return np.asarray(y_pred).ravel()
-            inv = scaler.inverse_transform(np.asarray(y_pred))
-            return np.asarray(inv).ravel()
 
         member_models = []
         member_params = []
@@ -1011,76 +965,75 @@ class BaseRegressionModel:
         original_features_state = list(self.feature_selection.get('features', []))
 
         for idx in range(members):
-            self.logging.info(f"[Inference] Starting ensemble member {idx} (seed={int(member_seeds[idx])})")
-            fold_votes = []
+            self.logging.info(f"[Inference] Starting ensemble member {idx}")
 
-            for fold_idx, split in enumerate(cv_splitter.split(X_train_full, y_train_full, groups=groups) if groups is not None else cv_splitter.split(X_train_full, y_train_full)):
-                train_idx, val_idx = split
-                X_tr = X_train_full.iloc[train_idx]
-                X_val = X_train_full.iloc[val_idx]
-                y_tr = y_train_full.iloc[train_idx]
-                y_val = y_train_full.iloc[val_idx]
+            # --- Seed pro Member setzen, damit tune_hparams den auch nutzt ---
+            seed_m = int(member_seeds[idx])
+            # Viele deiner Modelklassen lesen self.random_state in tune_hparams ein
+            if hasattr(self, "random_state"):
+                self.random_state = seed_m
+                self.logging.info(f"[Inference] Member {idx}: Set self.random_state = {seed_m}")
+            # CatBoost-Spezialfall: cat_hparams.random_seed
+            if hasattr(self, "cat_hparams") and isinstance(self.cat_hparams, dict):
+                if "random_seed" in self.cat_hparams:
+                    self.cat_hparams["random_seed"] = seed_m
 
-                feature_scaler_fold = _fit_feature_scaler(X_tr)
-                target_scaler_fold = _fit_target_scaler(y_tr)
-
-                X_tr_proc = _transform_features(feature_scaler_fold, X_tr)
-                X_val_proc = _transform_features(feature_scaler_fold, X_val)
-                y_tr_proc = _transform_target(target_scaler_fold, y_tr)
-                y_val_raw = y_val.to_numpy()
-
-                best_params = None
-                best_score = np.inf
-
-                for candidate in param_candidates:
-                    model_candidate = _instantiate_model(candidate)
-                    fit_kwargs = {}
-                    if hasattr(self, 'weights') and self.weights is not None:
-                        fit_kwargs["sample_weight"] = self.weights[train_idx]
-
-                    model_candidate.fit(X_tr_proc, y_tr_proc, **fit_kwargs)
-                    preds_val_proc = model_candidate.predict(X_val_proc)
-                    preds_val = _inverse_target(target_scaler_fold, preds_val_proc)
-
-                    score = mean_squared_error(y_val_raw, preds_val)
-                    if score < best_score:
-                        best_score = score
-                        best_params = candidate
-
-                if best_params is None:
-                    best_params = {}
-                fold_votes.append(best_params)
-                self.logging.info(f"[Inference] Member {idx}, fold {fold_idx}: voted params {best_params}")
-
-            if fold_votes:
-                vote_strings = [json.dumps(v, sort_keys=True) for v in fold_votes]
-                vote_counter = Counter(vote_strings)
-                chosen_key, _ = vote_counter.most_common(1)[0]
-                chosen_params = json.loads(chosen_key)
+            # --- (Optional) CV-Splitter-Info für Gruppen ---
+            if folds == -1:
+                groups = self.Pat_IDs.to_numpy() if self.Pat_IDs is not None else None
             else:
-                chosen_params = {}
+                groups = self.Pat_IDs.to_numpy() if self.Pat_IDs is not None else None
 
-            member_params.append(chosen_params)
+            # --- Hyperparametertuning über die MODELLEIGENE Methode ---
+            # Erwartete Signatur wie in deinem CatBoost-Beispiel:
+            #   tune_hparams(X, y, param_grid, folds=..., groups=..., weights=...)
+            best_params = self.tune_hparams(
+                X=X_train_full,
+                y=y_train_full,
+                param_grid=param_grid if param_grid is not None else {},
+                folds=folds,
+                groups=groups,
+                weights=getattr(self, "weights", None),
+            )
+            self.logging.info(f"[Inference] Member {idx}: best params {best_params}")
 
-            # Final training on full dataset with voted params
-            feature_scaler_final = _fit_feature_scaler(X_train_full)
-            target_scaler_final = _fit_target_scaler(y_train_full)
+            # --- Skalierer wie bisher: auf FULL TRAIN fitten, train/infer transformieren ---
+            feature_scaler_final = None
+            if self.feature_scaler is not None:
+                feature_scaler_final = copy.deepcopy(self.feature_scaler)
+                feature_scaler_final.fit(X_train_full)
+                X_train_final = feature_scaler_final.transform(X_train_full)
+                X_infer_final  = feature_scaler_final.transform(X_infer)
+            else:
+                X_train_final = X_train_full.to_numpy()
+                X_infer_final  = X_infer.to_numpy()
 
-            X_train_final = _transform_features(feature_scaler_final, X_train_full)
-            y_train_final = _transform_target(target_scaler_final, y_train_full)
-            X_infer_final = _transform_features(feature_scaler_final, X_infer)
+            target_scaler_final = None
+            if self.scaler is not None:
+                target_scaler_final = copy.deepcopy(self.scaler)
+                target_scaler_final.fit(y_train_full)
+                y_train_final = np.asarray(target_scaler_final.transform(y_train_full)).ravel()
+            else:
+                y_train_final = y_train_full.to_numpy()
 
-            member_model = _instantiate_model(chosen_params)
+            # --- WICHTIG: self.model ist jetzt schon der best_estimator_ vom Tuning.
+            # Wir klonen ihn pro Member, damit sich Mitglieder nicht überschreiben. ---
+            member_model = skl_clone(self.model)
+
             fit_kwargs = {}
-            if hasattr(self, 'weights') and self.weights is not None:
+            if hasattr(self, "weights") and self.weights is not None:
                 fit_kwargs["sample_weight"] = self.weights
             member_model.fit(X_train_final, y_train_final, **fit_kwargs)
 
+            # --- Inferenz + ggf. Inverse-Target-Transform ---
             preds_proc = member_model.predict(X_infer_final)
-            preds = _inverse_target(target_scaler_final, preds_proc)
+            if target_scaler_final is not None:
+                preds = np.asarray(target_scaler_final.inverse_transform(np.asarray(preds_proc))).ravel()
+            else:
+                preds = np.asarray(preds_proc).ravel()
             member_predictions.append(preds)
 
-            # Persist model artefacts
+            # --- Member-Artefakte speichern (wie bisher) ---
             member_artifacts = {
                 "model": member_model,
                 "feature_scaler": feature_scaler_final,
@@ -1092,10 +1045,10 @@ class BaseRegressionModel:
                 pickle.dump(member_artifacts, fh)
             self.logging.info(f"[Inference] Saved member {idx} artefacts to {model_path}")
 
-            # Collect SHAP values for ensemble aggregation
+            # --- SHAP wie bisher, temporär self.model = member_model ---
             try:
                 self.model = member_model
-                self.feature_selection['features'] = common_features
+                self.feature_selection["features"] = common_features
                 fi_signature = inspect.signature(self.feature_importance)
                 base_kwargs = {
                     "X": X_train_full[common_features],
@@ -1129,7 +1082,7 @@ class BaseRegressionModel:
             except Exception as shap_err:
                 self.logging.warning(f"[Inference] Failed to compute SHAP for member {idx}: {shap_err}")
 
-            # Store per-member metrics on inference data if target available
+            # --- Member-Metriken (falls y_infer vorhanden) wie bisher ---
             metrics_member = {}
             if y_infer is not None:
                 preds_series = pd.Series(preds, index=X_infer.index)
@@ -1137,12 +1090,7 @@ class BaseRegressionModel:
                 r, _ = pearsonr(y_series, preds_series)
                 rho, _ = spearmanr(y_series, preds_series)
                 mse = mean_squared_error(y_series, preds_series)
-                metrics_member = {
-                    "r": r,
-                    "rho": rho,
-                    "mse": mse,
-                    "rmse": np.sqrt(mse),
-                }
+                metrics_member = {"r": r, "rho": rho, "mse": mse, "rmse": np.sqrt(mse)}
             member_metrics.append(metrics_member)
 
             member_models.append({
@@ -1150,6 +1098,7 @@ class BaseRegressionModel:
                 "feature_scaler": feature_scaler_final,
                 "target_scaler": target_scaler_final,
             })
+
 
         # Restore original state
         self.model = original_model
@@ -1905,7 +1854,7 @@ class BaseRegressionModel:
             ens_rmse_test = float(np.sqrt(ens_mse_test))
             ens_mse_train = float(np.mean(member_train_mse)) if member_train_mse else np.nan
             ens_rmse_train = float(np.sqrt(ens_mse_train)) if not np.isnan(ens_mse_train) else np.nan
-    
+
             # Save ensemble metrics + ensemble Actual vs Predicted
             pd.DataFrame([{
                 "r_ensemble": ens_r,
@@ -1916,7 +1865,9 @@ class BaseRegressionModel:
                 "train_rmse_proxy": ens_rmse_train,
                 "rmse_ensemble": ens_rmse_test,
                 "members": members,
-                "features_remaining": number_of_features
+                "features_remaining": number_of_features,
+                "y_test": json.dumps(y_test_ref.tolist()),
+                "y_pred": json.dumps(y_pred_ens.tolist())
             }]).to_csv(f"{step_dir}/{self.target_name}_metrics_ENSEMBLE.csv", index=False)
 
             denom = 1 - (ens_r ** 2)

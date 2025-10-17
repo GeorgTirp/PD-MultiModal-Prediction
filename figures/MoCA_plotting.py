@@ -23,6 +23,7 @@ from scipy.stats import ttest_rel, false_discovery_control
 from matplotlib.ticker import MaxNLocator
 from matplotlib.ticker import AutoMinorLocator
 import shap
+from scipy.stats import pearsonr, spearmanr
 
 def _load_shap_data(shap_path: str):
     """
@@ -486,90 +487,48 @@ def _load_ensemble_predictions(step_dir: str, target_name: str):
     r_val = row.get("r_ensemble")
     p_val = row.get("p_value_ensemble")
     rho_val = row.get("rho_ensemble")
+    y_test_raw = row.get("y_test")
+    y_pred_raw = row.get("y_pred")
+
+    y_test_ref = None
+    pred_mean = None
+    if y_test_raw is not None and not pd.isna(y_test_raw) and y_pred_raw is not None and not pd.isna(y_pred_raw):
+        try:
+            y_test_ref = np.asarray(ast.literal_eval(str(y_test_raw)), dtype=float)
+            pred_mean = np.asarray(ast.literal_eval(str(y_pred_raw)), dtype=float)
+        except (ValueError, SyntaxError):
+            y_test_ref = np.fromstring(str(y_test_raw).strip("[]"), sep=" ")
+            pred_mean = np.fromstring(str(y_pred_raw).strip("[]"), sep=" ")
 
     member_pattern = os.path.join(glob.escape(step_dir), "member*", f"{target_name}_metrics.csv")
     member_paths = sorted(glob.glob(member_pattern))
-    if not member_paths:
-        raise FileNotFoundError(
-            f"No member metrics found in {step_dir}. "
-            "Provide an ensemble predictions CSV or ensure member metrics are present."
-        )
+    if y_test_ref is None or pred_mean is None:
+        if not member_paths:
+            raise FileNotFoundError(
+                f"No member metrics found in {step_dir}. "
+                "Provide an ensemble predictions CSV or ensure member metrics are present."
+            )
+        member_y_tests = []
+        member_y_preds = []
+        for path in member_paths:
+            metrics_df = _prepare_dataframe(path)
+            row_member = metrics_df.iloc[0]
+            try:
+                y_test = np.asarray(ast.literal_eval(str(row_member["y_test"])), dtype=float)
+                y_pred = np.asarray(ast.literal_eval(str(row_member["y_pred"])), dtype=float)
+            except (ValueError, SyntaxError):
+                y_test = np.fromstring(str(row_member["y_test"]).strip("[]"), sep=" ")
+                y_pred = np.fromstring(str(row_member["y_pred"]).strip("[]"), sep=" ")
+            member_y_tests.append(y_test)
+            member_y_preds.append(y_pred)
 
-    member_y_tests = []
-    member_y_preds = []
-    for path in member_paths:
-        metrics_df = _prepare_dataframe(path)
-        row = metrics_df.iloc[0]
-        try:
-            y_test = np.asarray(ast.literal_eval(str(row["y_test"])), dtype=float)
-            y_pred = np.asarray(ast.literal_eval(str(row["y_pred"])), dtype=float)
-        except (ValueError, SyntaxError):
-            y_test = np.fromstring(str(row["y_test"]).strip("[]"), sep=" ")
-            y_pred = np.fromstring(str(row["y_pred"]).strip("[]"), sep=" ")
-        member_y_tests.append(y_test)
-        member_y_preds.append(y_pred)
+        min_len = min(len(y) for y in member_y_tests)
+        member_y_tests = [y[:min_len] for y in member_y_tests]
+        member_y_preds = [y[:min_len] for y in member_y_preds]
 
-    min_len = min(len(y) for y in member_y_tests)
-    member_y_tests = [y[:min_len] for y in member_y_tests]
-    member_y_preds = [y[:min_len] for y in member_y_preds]
-
-    y_test_ref = member_y_tests[0]
-    pred_stack = np.vstack(member_y_preds)
-    pred_mean = np.mean(pred_stack, axis=0)
-
-    if r_val is None or pd.isna(r_val) or p_val is None or pd.isna(p_val) or rho_val is None or pd.isna(rho_val):
-        r_val, p_val = pearsonr(y_test_ref, pred_mean)
-        rho_val, _ = spearmanr(y_test_ref, pred_mean)
-
-    return (
-        pd.DataFrame({"Actual": y_test_ref, "Predicted": pred_mean}),
-        float(r_val),
-        float(p_val),
-        float(rho_val)
-    )
-
-
-def _load_inference_predictions(inference_dir: str):
-    """Load ensemble predictions produced during inference."""
-    ensemble_metrics_path = os.path.join(inference_dir, "ensemble_predictions_metrics_ENSEMBLE.csv")
-    if not os.path.exists(ensemble_metrics_path):
-        raise FileNotFoundError(f"Ensemble metrics not found at {ensemble_metrics_path}")
-
-    metrics_df = _prepare_dataframe(ensemble_metrics_path)
-    row = metrics_df.iloc[0]
-    r_val = row.get("r_ensemble")
-    p_val = row.get("p_value_ensemble")
-    rho_val = row.get("rho_ensemble")
-
-    member_pattern = os.path.join(glob.escape(inference_dir), "member*", "ensemble_predictions.csv")
-    member_paths = sorted(glob.glob(member_pattern))
-    if not member_paths:
-        raise FileNotFoundError(
-            f"No member metrics found in {inference_dir}. "
-            "Provide an ensemble predictions CSV or ensure member metrics are present."
-        )
-
-    member_y_tests = []
-    member_y_preds = []
-    for path in member_paths:
-        metrics_df = _prepare_dataframe(path)
-        row = metrics_df.iloc[0]
-        try:
-            y_test = np.asarray(ast.literal_eval(str(row["y_test"])), dtype=float)
-            y_pred = np.asarray(ast.literal_eval(str(row["y_pred"])), dtype=float)
-        except (ValueError, SyntaxError):
-            y_test = np.fromstring(str(row["y_test"]).strip("[]"), sep=" ")
-            y_pred = np.fromstring(str(row["y_pred"]).strip("[]"), sep=" ")
-        member_y_tests.append(y_test)
-        member_y_preds.append(y_pred)
-
-    min_len = min(len(y) for y in member_y_tests)
-    member_y_tests = [y[:min_len] for y in member_y_tests]
-    member_y_preds = [y[:min_len] for y in member_y_preds]
-
-    y_test_ref = member_y_tests[0]
-    pred_stack = np.vstack(member_y_preds)
-    pred_mean = np.mean(pred_stack, axis=0)
+        y_test_ref = member_y_tests[0]
+        pred_stack = np.vstack(member_y_preds)
+        pred_mean = np.mean(pred_stack, axis=0)
 
     if r_val is None or pd.isna(r_val) or p_val is None or pd.isna(p_val) or rho_val is None or pd.isna(rho_val):
         r_val, p_val = pearsonr(y_test_ref, pred_mean)
@@ -581,6 +540,53 @@ def _load_inference_predictions(inference_dir: str):
         float(p_val),
         float(rho_val)
     )
+
+
+def _load_inference_predictions(inference_dir: str, target_name: str = ""):
+    """
+    Expect exactly one file in <inference_dir> named 'ensemble_predictions.csv'
+    with numeric columns:
+        - 'Prediction' (or 'Predicted', 'y_pred')
+        - 'Actual'     (or 'y_test', 'y_true')
+    Returns (plot_df, r, p, rho) where plot_df has columns ['Actual','Predicted'].
+    """
+    pred_path = os.path.join(inference_dir, "ensemble_predictions.csv")
+    if not os.path.exists(pred_path):
+        raise FileNotFoundError(f"No file found at {pred_path}")
+
+    df = _prepare_dataframe(pred_path)
+
+    # Flexible column picking (case-insensitive)
+    cols = {c.lower(): c for c in df.columns}
+    def pick(*names):
+        for n in names:
+            if n.lower() in cols:
+                return cols[n.lower()]
+        return None
+
+    actual_col = pick("Actual", "y_test", "y_true")
+    pred_col   = pick("Prediction", "Predicted", "y_pred", "yhat")
+
+    if actual_col is None or pred_col is None:
+        raise ValueError(
+            f"'ensemble_predictions.csv' must contain Actual and Prediction "
+            f"(or compatible names). Found: {list(df.columns)}"
+        )
+
+    # Coerce to numeric & drop bad rows
+    plot_df = df[[actual_col, pred_col]].rename(
+        columns={actual_col: "Actual", pred_col: "Predicted"}
+    ).apply(pd.to_numeric, errors="coerce").dropna()
+
+    if len(plot_df) < 2:
+        raise ValueError("Not enough valid rows in ensemble_predictions.csv to compute correlations.")
+
+    r_val, p_val   = pearsonr(plot_df["Actual"], plot_df["Predicted"])
+    rho_val, _     = spearmanr(plot_df["Actual"], plot_df["Predicted"])
+
+    return plot_df, float(r_val), float(p_val), float(rho_val)
+
+
 
 
 def regression_figures(
@@ -818,25 +824,18 @@ def regression_figures(
     # Inference runs (if available)
     for inference_dir in inference_dirs:
         try:
-            result = _load_inference_predictions(inference_dir)
-        except FileNotFoundError:
+            plot_df_inf, r_inf, p_inf, rho_inf = _load_inference_predictions(inference_dir, quest or "")
+        except (FileNotFoundError, ValueError) as e:
+            print(f"[inference] SKIPPED: {e}")
             continue
-        if result is None:
-            continue
-        plot_df_inf, r_inf, p_inf, rho_inf = result
-        label = os.path.basename(inference_dir)
+
+        label = os.path.basename(inference_dir.rstrip("/"))
         plot_regression(
-            plot_df_inf,
-            r_inf,
-            p_inf,
-            save_path,
+            plot_df_inf, r_inf, p_inf, save_path,
             f"Inference Predicted vs. Actual - {label}",
-            "Actual",
-            "Predicted",
-            x_label,
-            y_label,
-            rho=rho_inf
+            "Actual", "Predicted", x_label, y_label, rho=rho_inf
         )
+
 
     linear_ylabel = target_preferences[0][1]
     if quest_key.startswith("bdi"):
@@ -1304,7 +1303,7 @@ if __name__ == "__main__":
             "Please update 'best_step_dir' in MoCA_plotting.py to point to the desired ablation step."
         )
 
-    inference_dirs = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi_ledd"
+    inference_dirs = ["/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi"]
 
     regression_figures(
         ensemble_step_full=full_step_dir,
