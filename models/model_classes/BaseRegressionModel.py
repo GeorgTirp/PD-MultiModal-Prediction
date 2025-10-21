@@ -355,8 +355,406 @@ class BaseRegressionModel:
 
         return metrics
 
-
     def nested_eval(
+            self, 
+            folds=10, 
+            get_shap=True, 
+            tune=False, 
+            tune_folds=10, 
+            uncertainty=False, 
+            ablation_idx=None,
+            member_idx=None,
+            safe_best_hparams: bool = False) -> Dict:
+        """
+        Nested CV with correct scaling/SHAP alignment.
+        - Model is trained & evaluated on SCALED features (unchanged behavior).
+        - SHAP is computed on the same SCALED features the model saw.
+        - New: saves ALIGNED CSVs to map test SHAP rows back to original dataset order.
+        """
+        self.logging.info("Starting model evaluation...")
+    
+        # --- (re)build base matrices once
+        X, y, z, m, std = self.model_specific_preprocess(self._raw_df.copy())
+        self.X, self.y, self.z, self.m, self.std = X, y, z, m, std
+    
+        # --- choose outer CV (group-aware if Pat_IDs is present)
+        if self.Pat_IDs is None:
+            outer_cv = LeaveOneOut() if folds == -1 else KFold(n_splits=folds, shuffle=True, random_state=self.random_state)
+            split_args, split_kwargs = (self.X,), {}
+        else:
+            outer_cv = LeaveOneGroupOut() if folds == -1 else GroupKFold(n_splits=folds)
+            split_args, split_kwargs = (self.X, self.y), {'groups': self.Pat_IDs}
+    
+        if tune and self.param_grid is None:
+            raise ValueError("When calling tune=True, a param_grid has to be passed when initializing the model.")
+    
+        # --- collectors
+        preds, preds_train = [], []
+        y_vals, y_trains = [], []
+        pred_dists, epistemics, aleatorics = [], [], []
+    
+        # SHAP collectors
+        all_shap_values = []                 # non-NGBoost: SHAP on full X (scaled) per fold
+        all_shap_mean, all_shap_variance = [], []   # NGBoost: SHAP on full X (scaled) per fold
+        all_shap_test = []                   # non-NGBoost: SHAP on test (scaled)
+        all_test_shap_mean, all_test_shap_variance = []  # NGBoost: SHAP on test (scaled)
+    
+        # for ALIGNED CSVs
+        X_vals_raw = []                      # raw (inverse-transformed) test features (for plots)
+        test_indices = []                    # original row indices (positions) of each test split
+    
+        iter_idx = 0
+        hyperparam_votes = []
+    
+        # helper to JSON-serialize best params if requested
+        def _to_serializable(value):
+            if isinstance(value, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+                return int(value)
+            if isinstance(value, (np.floating, np.float64, np.float32, np.float16)):
+                return float(value)
+            if isinstance(value, np.ndarray):
+                return [_to_serializable(v) for v in value.tolist()]
+            if isinstance(value, (list, tuple)):
+                return [_to_serializable(v) for v in value]
+            if isinstance(value, dict):
+                return {k: _to_serializable(v) for k, v in value.items()}
+            if hasattr(value, "item"):
+                try:
+                    return value.item()
+                except Exception:
+                    return str(value)
+            if isinstance(value, (str, bool)) or value is None:
+                return value
+            return str(value)
+    
+        def _normalize_params(params: Dict) -> Dict:
+            return {k: _to_serializable(v) for k, v in params.items()}
+    
+        # ===================== outer CV =====================
+        for tr_idx, va_idx in tqdm(
+            outer_cv.split(*split_args, **split_kwargs),
+            total=outer_cv.get_n_splits(*split_args, **split_kwargs),
+            desc="Cross-validation", leave=False
+        ):
+            # raw splits
+            X_tr_raw, X_va_raw = self.X.iloc[tr_idx], self.X.iloc[va_idx]
+            y_tr_raw, y_va_raw = self.y.iloc[tr_idx], self.y.iloc[va_idx]
+    
+            # weights
+            if hasattr(self, 'weights') and self.weights is not None:
+                w_tr, w_va = self.weights[tr_idx], self.weights[va_idx]
+            else:
+                w_tr, w_va = None, None
+    
+            # --- scale target (optional)
+            if self.scaler is not None:
+                self.scaler.fit(y_tr_raw)
+                y_tr = self.scaler.transform(y_tr_raw)
+                y_va = self.scaler.transform(y_va_raw)
+            else:
+                y_tr, y_va = y_tr_raw, y_va_raw
+    
+            # --- scale features (critical!)
+            if self.feature_scaler is not None:
+                self.feature_scaler.fit(X_tr_raw)
+                X_tr = self.feature_scaler.transform(X_tr_raw)
+                X_va = self.feature_scaler.transform(X_va_raw)
+            else:
+                X_tr, X_va = X_tr_raw, X_va_raw
+    
+            # groups for tuning (if any)
+            groups_tr = None
+            if self.Pat_IDs is not None:
+                groups_tr = self.Pat_IDs.iloc[tr_idx].to_numpy()
+    
+            # --- tune or fit
+            best_params = None
+            if tune:
+                best_params = self.tune_hparams(X_tr, y_tr, self.param_grid, tune_folds, groups_tr, w_tr)
+            else:
+                if hasattr(self, 'weights') and self.weights is not None:
+                    self.model.fit(X_tr, y_tr, sample_weight=w_tr)
+                else:
+                    self.model.fit(X_tr, y_tr)
+                if safe_best_hparams and hasattr(self.model, "get_params"):
+                    try:
+                        best_params = self.model.get_params()
+                    except Exception:
+                        best_params = None
+    
+            if safe_best_hparams and best_params:
+                hyperparam_votes.append(_normalize_params(best_params))
+    
+            # --- predict on scaled features the model expects
+            pred_va = self.model.predict(X_va)
+            pred_tr = self.model.predict(X_tr)
+    
+            # invert target scaling for metrics/plots
+            if self.scaler is not None:
+                pred_va = self.scaler.inverse_transform(pred_va)
+                y_va_plot = self.scaler.inverse_transform(y_va)
+            else:
+                y_va_plot = y_va
+    
+            preds.append(pred_va)
+            preds_train.append(pred_tr)
+            y_vals.append(y_va_plot)
+            y_trains.append(y_tr)  # keep scaled here for train MSE; that’s how you had it
+    
+            # keep *raw* features for plotting axes later (optional)
+            if self.feature_scaler is not None:
+                X_va_raw_for_plot = self.feature_scaler.inverse_transform(X_va)
+            else:
+                X_va_raw_for_plot = X_va
+            X_vals_raw.append(X_va_raw_for_plot)
+            test_indices.append(va_idx)
+    
+            # sample-wise errors
+            if hasattr(self, 'weights') and self.weights is not None:
+                mse_fold = mean_squared_error(y_va_plot, pred_va, sample_weight=w_va)
+                train_mse_fold = mean_squared_error(y_tr, pred_tr, sample_weight=w_tr)
+            else:
+                mse_fold = mean_squared_error(y_va_plot, pred_va)
+                train_mse_fold = mean_squared_error(y_tr, pred_tr)
+    
+            if len(preds) > 1:
+                tqdm.write(f'Current Pearson-r: {pearsonr(np.concatenate(y_vals), np.concatenate(preds))[0]:.4f}, '
+                           f'Train MSE = {train_mse_fold:.4f}, Test MSE {mse_fold:.4f}')
+    
+            # uncertainties
+            if uncertainty is True:
+                _, epistemic, aleatoric = self.compute_uncertainties(mode="nig", X=X_va)  # SHAP/uncertainty on scaled X
+                epistemics.append(epistemic); aleatorics.append(aleatoric)
+    
+            # NGBoost predictive distribution
+            if self.model_name == "NGBoost":
+                pred_dist = self.model.pred_dist(X_va).params
+                pred_dist = np.column_stack([pred_dist[key] for key in pred_dist.keys()])
+                pred_dists.append(pred_dist)
+    
+            # --- SHAP (IMPORTANT: use the same SCALED features the model saw)
+            if get_shap:
+                with io.capture_output():
+                    if ablation_idx is not None:
+                        val_index = None  # unused but preserved from your code
+                    if self.model_name == "NGBoost":
+                        if self.split_shaps:
+                            test_shap_mean = self.feature_importance_mean(
+                                X_va, top_n=-1, save_results=True, iter_idx=iter_idx)
+                            if self.prob_func == NormalInverseGamma:
+                                test_shap_variance, _, _ = self.feature_importance_variance(
+                                    X_va, mode="nig", top_n=-1, save_results=True, iter_idx=iter_idx)
+                            elif self.prob_func == Normal:
+                                test_shap_variance = self.feature_importance_variance(
+                                    X_va, mode="normal", top_n=-1, save_results=True, iter_idx=iter_idx)
+                            all_test_shap_mean.append(test_shap_mean)
+                            all_test_shap_variance.append(test_shap_variance)
+    
+                        # SHAP on the *full* dataset as seen by this fold's model/scaler
+                        X_full_scaled = self.feature_scaler.transform(self.X) if self.feature_scaler is not None else self.X
+                        shap_values_mean = self.feature_importance_mean(
+                            X_full_scaled, top_n=-1, save_results=True, iter_idx=iter_idx)
+                        if self.prob_func == NormalInverseGamma:
+                            shap_values_variance, _, _ = self.feature_importance_variance(
+                                X_full_scaled, mode="nig", top_n=-1, save_results=True, iter_idx=iter_idx)
+                        elif self.prob_func == Normal:
+                            shap_values_variance = self.feature_importance_variance(
+                                X_full_scaled, mode="normal", top_n=-1, save_results=True, iter_idx=iter_idx)
+                        all_shap_mean.append(shap_values_mean)
+                        all_shap_variance.append(shap_values_variance)
+                    else:
+                        if self.split_shaps:
+                            shap_values_test = self.feature_importance(
+                                X_va, top_n=-1, save_results=True, iter_idx=iter_idx)
+                            all_shap_test.append(shap_values_test)
+    
+                        X_full_scaled = self.feature_scaler.transform(self.X) if self.feature_scaler is not None else self.X
+                        shap_values = self.feature_importance(
+                            X_full_scaled, top_n=-1, save_results=True, iter_idx=iter_idx)
+                        all_shap_values.append(shap_values)
+    
+            iter_idx += 1
+        # ===================== end CV =====================
+    
+        # aggregate predictions & metrics
+        preds = np.concatenate(preds)
+        preds_train = np.concatenate(preds_train)
+        y_vals = np.concatenate(y_vals)
+        y_trains = np.concatenate(y_trains)
+        r, p = pearsonr(y_vals, preds)
+        rho, pval_spearman = spearmanr(y_vals, preds)
+        f_squared = (r**2) / (1 - r**2)
+        mse = mean_squared_error(y_vals, preds)
+        train_mse = mean_squared_error(y_trains, preds_train)
+    
+        # flatten helpers we saved per fold
+        X_vals_raw = np.concatenate(X_vals_raw)          # raw features for test rows (for plotting)
+        test_indices = [self.X.iloc[idx].index.to_numpy() for idx in test_indices]
+        test_indices = np.concatenate(test_indices)      # original row labels for each test row (per fold)
+    
+        # save test/train predictions
+        os.makedirs(self.save_path, exist_ok=True)
+        pd.DataFrame({"y_true": y_vals, "y_pred": preds}).to_csv(
+            os.path.join(self.save_path, f"{self.target_name}_cv_test_predictions.csv"), index=False)
+        pd.DataFrame({"y_true": y_trains, "y_pred": preds_train}).to_csv(
+            os.path.join(self.save_path, f"{self.target_name}_cv_train_predictions.csv"), index=False)
+    
+        if uncertainty is True:
+            epistemic_uncertainty = np.concatenate(epistemics)
+            aleatoric_uncertainty = np.concatenate(aleatorics)
+    
+        # save path (member/ablation aware)
+        if ablation_idx is not None:
+            save_path = f'{self.save_path}/ablation/ablation_step[{ablation_idx}]/'
+            if member_idx is not None:
+                save_path = f'{save_path}/member[{member_idx}]/'
+            os.makedirs(save_path, exist_ok=True)
+            save_path = f'{save_path}_{self.target_name}'
+        else:
+            if member_idx is not None:
+                save_path = f'{self.save_path}/member[{member_idx}]/'
+            save_path = f'{self.save_path}/{self.target_name}'
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    
+        # ---------- SAVE SHAP (original outputs unchanged) ----------
+        def _save_shap_csv(array: np.ndarray, file_path: str) -> None:
+            arr = np.asarray(array)
+            if arr.ndim == 1:
+                arr = arr.reshape(1, -1)
+            elif arr.ndim > 2:
+                arr = arr.reshape(-1, arr.shape[-1])
+            feature_names = list(self.feature_selection.get('features', self.X.columns.tolist()))
+            if arr.shape[1] != len(feature_names):
+                cols = list(self.X.columns[:arr.shape[1]])
+            else:
+                cols = feature_names
+            pd.DataFrame(arr, columns=cols).to_csv(file_path, index=False)
+    
+        if get_shap:
+            if self.model_name == "NGBoost":
+                if self.split_shaps:
+                    test_mu = np.concatenate(all_test_shap_mean, axis=0)
+                    test_var = np.concatenate(all_test_shap_variance, axis=0)
+                    _save_shap_csv(test_mu,  f'{save_path}_mean_shap_values_test.csv')
+                    _save_shap_csv(test_var, f'{save_path}_predicitve_uncertainty_shap_values_test.csv')
+    
+                    shap.summary_plot(test_mu, features=X_vals_raw, feature_names=self.X.columns,
+                                      show=False, max_display=self.top_n)
+                    plt.title(f'{self.target_name} Summary Plot (Aggregated - Mean)', fontsize=16)
+                    plt.subplots_adjust(top=0.90)
+                    plt.savefig(f'{save_path}_mean_shap_aggregated_test.png'); plt.close()
+    
+                all_mu  = np.stack(all_shap_mean, axis=0)
+                all_var = np.stack(all_shap_variance, axis=0)
+                mean_shap_values     = np.mean(all_mu,  axis=0)
+                variance_shap_values = np.mean(all_var, axis=0)
+                _save_shap_csv(mean_shap_values,     f'{save_path}_mean_shap_values.csv')
+                _save_shap_csv(variance_shap_values, f'{save_path}_predicitve_uncertainty_shap_values.csv')
+    
+                shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns,
+                                  show=False, max_display=self.top_n)
+                plt.title(f'{self.target_name} Summary Plot (Aggregated - Mean)', fontsize=16)
+                plt.subplots_adjust(top=0.90)
+                plt.savefig(f'{save_path}_mean_shap_aggregated.png'); plt.close()
+    
+                shap.summary_plot(variance_shap_values, features=self.X, feature_names=self.X.columns,
+                                  show=False, max_display=self.top_n)
+                plt.title(f'{self.target_name} Summary Plot (Aggregated - Variance)', fontsize=16)
+                plt.subplots_adjust(top=0.90)
+                if getattr(self, "prob_func", None) == NormalInverseGamma:
+                    plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated.png')
+                else:
+                    plt.savefig(f'{save_path}_std_shap_aggregated.png')
+                plt.close()
+    
+            else:
+                if self.split_shaps:
+                    test_shap_mean = np.concatenate(all_shap_test, axis=0)
+                    _save_shap_csv(test_shap_mean, f'{self.save_path}/{self.target_name}_mean_shap_values_test.csv')
+                    shap.summary_plot(test_shap_mean, features=X_vals_raw, feature_names=self.X.columns,
+                                      show=False, max_display=self.top_n)
+                    plt.title(f'{self.target_name}  Summary Plot (Aggregated)', fontsize=16)
+                    plt.subplots_adjust(top=0.90)
+                    plt.savefig(f'{save_path}_shap_aggregated_beeswarm_test.png'); plt.close()
+    
+            all_shap_mean_array = np.stack(all_shap_values, axis=0) if all_shap_values else None
+            if all_shap_mean_array is not None:
+                mean_shap_values = np.mean(all_shap_mean_array, axis=0)
+                _save_shap_csv(mean_shap_values, f'{self.save_path}/{self.target_name}_mean_shap_values.csv')
+                shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns,
+                                  show=False, max_display=self.top_n)
+                plt.title(f'{self.target_name}  Summary Plot (Aggregated)', fontsize=16)
+                plt.subplots_adjust(top=0.90)
+                plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png'); plt.close()
+                _save_shap_csv(all_shap_mean_array, f'{save_path}_all_shap_values(mu).csv')
+    
+        # ---------- NEW: ALIGNED CSVs (added only) ----------
+        # 1) SHAP aligned to original order (train rows => NaN)
+        if self.split_shaps:
+            test_shap_for_align = test_shap_mean if self.model_name != "NGBoost" else test_mu
+            if test_shap_for_align is not None:
+                aligned_test_shap = pd.DataFrame(
+                    test_shap_for_align, index=test_indices, columns=self.X.columns
+                ).reindex(self.X.index)
+                aligned_path = os.path.join(self.save_path, f"{self.target_name}_mean_shap_values_test_ALIGNED.csv")
+                aligned_test_shap.to_csv(aligned_path)
+    
+        # 2) Raw features for the same test rows, aligned (handy for threshold plots)
+        try:
+            X_test_raw_aligned = pd.DataFrame(X_vals_raw, columns=self.X.columns, index=test_indices).reindex(self.X.index)
+            X_test_raw_aligned.to_csv(os.path.join(self.save_path, f"{self.target_name}_features_test_ALIGNED.csv"))
+        except Exception:
+            pass
+        
+        # keep last test matrix as a dataframe for downstream plotting (non-breaking)
+        try:
+            self.X_test = pd.DataFrame(X_vals_raw, columns=self.X.columns)
+        except Exception:
+            self.X_test = X_vals_raw
+    
+        # store references for ablation/inference code paths
+        self.shap_mean = locals().get("mean_shap_values", None)
+        if self.split_shaps:
+            self.test_shap_mean = locals().get("test_shap_mean", None)
+        if self.model_name == "NGBoost":
+            self.shap_variance = locals().get("variance_shap_values", None)
+            if self.split_shaps:
+                self.test_shap_variance = locals().get("test_shap_variance", None)
+    
+        # feature importances (unchanged)
+        if locals().get("mean_shap_values", None) is not None:
+            feature_importances = np.mean(np.abs(mean_shap_values), axis=0)
+        else:
+            feature_importances = None
+        if self.split_shaps and locals().get("test_shap_mean", None) is not None:
+            feature_importances_test = np.mean(np.abs(test_shap_mean), axis=0)
+        else:
+            feature_importances_test = None
+    
+        # metrics payload (unchanged keys)
+        metrics = {
+            'mse': mse,
+            'train_mse': train_mse,
+            'r': r,
+            'rho': rho,
+            'f_squared': f_squared,
+            'p_value': p,
+            'y_pred': preds,
+            'y_test': y_vals,
+            'pred_dist': (np.vstack(pred_dists) if self.model_name == "NGBoost" else pred_dists),
+            'test_index': test_indices,
+            'epistemic': epistemic_uncertainty if uncertainty else None,
+            'aleatoric': aleatoric_uncertainty if uncertainty else None,
+            'feature_importance': feature_importances if get_shap else None,
+            'feature_importance_test': feature_importances_test if (get_shap and self.split_shaps) else None
+        }
+        self.metrics = metrics
+        pd.DataFrame([metrics]).to_csv(f'{save_path}_metrics.csv', index=False)
+    
+        self.logging.info("Finished model evaluation.")
+        return metrics
+
+    def nested_eval_old(
             self, 
             folds=10, 
             get_shap=True, 
