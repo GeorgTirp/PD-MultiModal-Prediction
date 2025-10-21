@@ -800,6 +800,19 @@ class BaseRegressionModel:
             plt.close()
 
         _save_shap_csv(all_shap_mean_array, f'{save_path}_all_shap_values(mu).csv')
+        test_idx = np.asarray(test_indices)            # original row positions in self.X
+        aligned_test_shap = pd.DataFrame(
+            test_shap_mean,
+            index=test_idx,
+            columns=self.X.columns
+        )
+        
+        # 2) Reindex to the FULL original order (train rows become NaN)
+        aligned_test_shap = aligned_test_shap.reindex(self.X.index)
+        
+        # 3) Save an aligned CSV (one row per original sample, same order as self.X)
+        aligned_path = os.path.join(self.save_path, f"{self.target_name}_mean_shap_values_test_ALIGNED.csv")
+        aligned_test_shap.to_csv(aligned_path)
         try:
             self.X_test = pd.DataFrame(X_vals, columns=self.X.columns)
         except Exception:
@@ -1999,6 +2012,16 @@ class BaseRegressionModel:
                 ens_test = _average_or_pool(test_mats)
                 X_test_ens = _average_or_pool(Xtest_mats) if Xtest_mats else None
                 csv_path = _save_csv(ens_test, tag="test")
+                if ens_test is not None and isinstance(ens_test, np.ndarray):
+                    idx = None
+                    if member_test_index and member_test_index[0] is not None:
+                        idx = np.concatenate([np.asarray(t).ravel() for t in member_test_index if t is not None])
+                    if idx is not None and len(idx) == ens_test.shape[0]:
+                        aligned = pd.DataFrame(ens_test, columns=feature_names_current, index=idx).sort_index()
+                    else:
+                        aligned = pd.DataFrame(ens_test, columns=feature_names_current)
+                    aligned_path = os.path.join(step_dir, f"{self.target_name}_mean_shap_values_test_ALIGNED.csv")
+                    aligned.to_csv(aligned_path, index=False)
                 try:
                     _save_beeswarm(ens_test, X_test_ens, tag="test")
                 except Exception as e:
@@ -2012,6 +2035,9 @@ class BaseRegressionModel:
                 ens_train = _average_or_pool(train_mats)
                 X_train_ens = _average_or_pool(Xtrain_mats) if Xtrain_mats else None
                 csv_path = _save_csv(ens_train, tag="train")
+                if ens_train is not None and isinstance(ens_train, np.ndarray):
+                    aligned_train_path = os.path.join(step_dir, f"{self.target_name}_mean_shap_values_train_ALIGNED.csv")
+                    pd.DataFrame(ens_train, columns=feature_names_current).to_csv(aligned_train_path, index=False)
                 try:
                     _save_beeswarm(ens_train, X_train_ens, tag="train")
                 except Exception as e:
