@@ -346,7 +346,18 @@ def raincloud_plot(data: pd.DataFrame, modality_name: str, features_list: list, 
     sns.set_context("paper")
     # Optionally choose a style you like
     sns.despine()
-    plt.tight_layout()    
+    if len(features_list) == 2 and data.shape[1] >= 2:
+        diff = data.iloc[:, 0] - data.iloc[:, 1]
+        diff_mean = diff.mean()
+        diff_std = diff.std()
+        ax.text(0.5, -0.18,
+                f"Mean Δ (Pre-Post): {diff_mean:.2f} ± {diff_std:.2f}",
+                transform=ax.transAxes,
+                ha='center', va='top', fontsize=11,
+                bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
+        plt.tight_layout(rect=[0, 0.05, 1, 1])
+    else:
+        plt.tight_layout()    
     plt.savefig(safe_path + modality_name + "_raincloud_plot.png")
     plt.savefig(safe_path + modality_name + "_raincloud_plot.svg")
     if show:
@@ -447,10 +458,13 @@ def demographics_pre_post(
         raincloud_plot(data, modality_name , ['Pre', 'Post'], save_path, show=show)
 
 
-def histoplot(input_path: str, feature: str,  save_path: str, show: bool = False) -> None:
+def histoplot(input_path, feature: str,  save_path: str, show: bool = False) -> None:
     """ Plot the demographic data before and after the treatment as raincloud plot"""
     # Load the data
-    data = _prepare_dataframe(input_path)
+    if isinstance(input_path, pd.DataFrame):
+        data = input_path.copy()
+    else:
+        data = _prepare_dataframe(input_path)
     sns.set_theme(style="white", context="paper")
     sns.set_palette("deep")
     # Create a figure with two subplots
@@ -473,9 +487,9 @@ def histoplot(input_path: str, feature: str,  save_path: str, show: bool = False
         color = 'orange'
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    feature_series = data[feature].dropna()
-    print(feature_series.mean())
-    print(feature_series.std())
+    feature_series = data[feature].dropna().astype(float)
+    mean_val = feature_series.mean()
+    std_val = feature_series.std()
     sns.histplot(feature_series, kde=True, bins=30, color=color)
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax.set_title(f"{title} (N={len(feature_series)})", fontsize=16)
@@ -483,6 +497,12 @@ def histoplot(input_path: str, feature: str,  save_path: str, show: bool = False
     ax.set_ylabel('Frequency', fontsize=14)
     ax.tick_params(axis='both', labelsize=11)
     ax.grid(False)
+    ax.text(0.97, 0.95,
+            f"Mean: {mean_val:.2f}\nSD: {std_val:.2f}",
+            transform=ax.transAxes,
+            fontsize=12,
+            ha='right', va='top',
+            bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
     sns.set_context("paper")
     # Optionally choose a style you like
     sns.despine()
@@ -944,109 +964,164 @@ def _normalize_feature_aliases(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _to_numeric_df(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    for c in out.columns:
+        out[c] = pd.to_numeric(out[c], errors="coerce")
+    return out
+
 def threshold_figure(
-        feature_name_mapping: dict,
-        data_path: str,
-        shap_data_path: str,
-        save_path: str) -> None:
+    feature_name_mapping: dict,
+    data_path: str,           # raw features CSV saved BEFORE scaling (same row order as model input)
+    shap_path: str,      # SHAP values CSV (ALIGNED to the same row order)
+    save_path: str
+) -> None:
+    """
+    Histogram of raw feature values split by SHAP sign.
+    Assumes rows correspond between files. We align by index if both CSVs carry one;
+    otherwise we align by position (truncate to min length).
+    """
 
-    colors = {
-        "deterioration": "#04E762",
-        "improvement": "#FF5714",
-        "det_edge": "#007C34",
-        "imp_edge": "#8A3210",
-        "line": "grey",
-        "scatter": "grey",
-        "ideal_line": "black",
-    }
+    # ----- load -----
+    def _load(path):
+        # keep potential saved index if present
+        try:
+            df = pd.read_csv(path, index_col=0)
+            # if that index looks like a 0..N counter, we can still use it
+        except Exception:
+            df = pd.read_csv(path)
+        # drop unnamed junk columns
+        df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed")]
+        return df
 
-    # --- load & normalize column names (aliases) ---
-    df = _prepare_dataframe(data_path)
-    shap_df = _prepare_dataframe(shap_data_path)
+    raw = _load(data_path)
+    shap = _load(shap_path)
 
-    df = _normalize_feature_aliases(df)
-    shap_df = _normalize_feature_aliases(shap_df)
+    # numeric only (coerce but do NOT silently throw whole columns away)
+    def _to_numeric(df):
+        out = df.copy()
+        for c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+        return out
 
-    # (optional) make sure pretty label exists
-    feature_name_mapping.setdefault("UPDRS_on", feature_name_mapping.get("MDS_UPDRS_III_ON", "UPDRS On"))
+    raw  = _to_numeric(raw)
+    shap = _to_numeric(shap)
 
-    # keep only numeric feature columns; drop obvious keys
-    feature_df = df.drop(columns=[c for c in ["OP_DATUM", "Pat_ID"] if c in df.columns], errors="ignore")
-    feature_df = feature_df.apply(pd.to_numeric, errors="coerce")
-    shap_df = shap_df.apply(pd.to_numeric, errors="coerce")
+    # ----- align rows -----
+    if raw.index.equals(shap.index):
+        # index-aware, preserves your “second indexing of the filtered csv”
+        raw_al, shap_al = raw.align(shap, join="inner", axis=0)
+    else:
+        # positional fallback (truncate to min length)
+        n = min(len(raw), len(shap))
+        raw_al  = raw.iloc[:n].copy()
+        shap_al = shap.iloc[:n].copy()
+        raw_al.index = pd.RangeIndex(n)   # avoid accidental misinterpretation later
+        shap_al.index = pd.RangeIndex(n)
 
-    # Align features between data and SHAP after alias normalization
-    shared_features = [c for c in feature_df.columns if c in shap_df.columns]
-    if not shared_features:
+    # ----- shared features -----
+    shared = [c for c in raw_al.columns if c in shap_al.columns]
+    if not shared:
         raise ValueError(
-            "No overlapping feature columns between data and SHAP CSV after alias normalization.\n"
-            f"Data columns (sample): {list(feature_df.columns)[:10]}...\n"
-            f"SHAP columns (sample): {list(shap_df.columns)[:10]}..."
+            "No shared columns between RAW and SHAP CSVs.\n"
+            f"RAW first 10:  {list(raw_al.columns)[:10]}\n"
+            f"SHAP first 10: {list(shap_al.columns)[:10]}"
         )
 
-    for feature_name in shared_features:
-        x_raw = feature_df[feature_name]
-        shap_vals = shap_df[feature_name]
+    # colors
+    colors = {
+        "neg":  "#FF5714",   # negative SHAPs
+        "pos":  "#04E762",   # positive SHAPs
+        "neg_e":"#8A3210",
+        "pos_e":"#007C34",
+    }
 
-        mask = x_raw.notna() & shap_vals.notna()
-        x = x_raw[mask].to_numpy()
-        shap_feature = shap_vals[mask].to_numpy()
-        if x.size < 5:
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    sns.set_theme(style="white", context="paper")
+
+    for feat in shared:
+        x = raw_al[feat].to_numpy(dtype=float)
+        s = shap_al[feat].to_numpy(dtype=float)
+
+        mask = np.isfinite(x) & np.isfinite(s)
+        kept = mask.sum()
+        if kept < 5:
+            # too few usable samples
             continue
+        dropped = len(mask) - kept
+        if dropped > 0 and dropped / len(mask) > 0.2:
+            print(f"[threshold] WARN: dropping {dropped}/{len(mask)} rows for '{feat}' due to NaNs.")
 
-        y = (shap_feature >= 0).astype(int)
+        x = x[mask]
+        s = s[mask]
+
+        # split by SHAP sign (this is the only thing we use from SHAP)
+        neg = s < 0
+        pos = ~neg
+
+        # ----- bins: robust 1–99% window with safe fallback -----
+        lo, hi = np.nanpercentile(x, 1), np.nanpercentile(x, 99)
+        if not np.isfinite(lo) or not np.isfinite(hi) or np.isclose(lo, hi):
+            lo, hi = float(np.nanmin(x)), float(np.nanmax(x))
+            if np.isclose(lo, hi):
+                lo -= 1e-6
+                hi += 1e-6
+        bins = np.linspace(lo, hi, 30)
+
+        # ----- optional SVM threshold (only if meaningful) -----
+        threshold_val, acc_text = None, "N/A"
+        y = (s >= 0).astype(int)
         has_both = (y.min() == 0) and (y.max() == 1)
-
-        threshold_val = None
-        acc_text = "N/A"
-        if has_both:
-            X = x.reshape(-1, 1)
-            n_pos, n_neg = int(y.sum()), int((1 - y).sum())
-            max_cv = max(2, min(5, n_pos, n_neg))
+        var_ok = np.nanstd(x) > 1e-8
+        if has_both and var_ok:
             try:
-                gs = GridSearchCV(SVC(kernel="linear"), {'C': [0.01, 0.1, 1, 10, 100]}, cv=max_cv)
-                gs.fit(X, y)
+                n_pos, n_neg = int(y.sum()), int((1 - y).sum())
+                max_cv = max(2, min(5, n_pos, n_neg))
+                gs = GridSearchCV(SVC(kernel="linear"),
+                                  {"C": [0.01, 0.1, 1, 10, 100]},
+                                  cv=max_cv)
+                gs.fit(x.reshape(-1, 1), y)
                 acc_text = f"{gs.best_score_:.2f}"
                 w = float(gs.best_estimator_.coef_[0][0])
                 b = float(gs.best_estimator_.intercept_[0])
-                threshold_val = (-b / w) if abs(w) > 1e-12 else None
-            except Exception as e:
-                print(f"[threshold] {feature_name}: SVM skipped ({e})")
-                threshold_val = None
+                if abs(w) > 1e-12:
+                    tv = -b / w
+                    # only draw if it falls inside the plotted window
+                    if lo <= tv <= hi:
+                        threshold_val = tv
+            except Exception:
+                pass  # keep it simple; threshold stays None
 
+        # ----- plot -----
         fig, ax = plt.subplots(figsize=(10, 7))
-        mask_neg = (shap_feature < 0)
-        mask_pos = ~mask_neg
-        fmin, fmax = float(np.nanmin(x)), float(np.nanmax(x))
-        if fmin == fmax:
-            fmin -= 1e-6; fmax += 1e-6
-        bins = np.linspace(fmin, fmax, 30)
+        counts_neg, _ = np.histogram(x[neg], bins=bins)
+        counts_pos, _ = np.histogram(x[pos], bins=bins)
+        centers = (bins[:-1] + bins[1:]) / 2
+        width   = bins[1] - bins[0]
 
-        counts_neg, _ = np.histogram(x[mask_neg], bins=bins)
-        counts_pos, _ = np.histogram(x[mask_pos], bins=bins)
-        bar_positions = (bins[:-1] + bins[1:]) / 2
-        bar_width = bins[1] - bins[0]
+        ax.bar(centers, counts_neg, width=width, color=colors["neg"],
+               alpha=0.75, edgecolor=colors["neg_e"], linewidth=1.3, label="negative SHAPs")
+        ax.bar(centers, counts_pos, width=width, color=colors["pos"],
+               alpha=0.75, edgecolor=colors["pos_e"], linewidth=1.3, label="positive SHAPs")
 
-        ax.bar(bar_positions, counts_neg, width=bar_width, color=colors["improvement"],
-               alpha=0.7, edgecolor=colors["imp_edge"], linewidth=1.5, label="negative SHAPs")
-        ax.bar(bar_positions, counts_pos, width=bar_width, color=colors["deterioration"],
-               alpha=0.7, edgecolor=colors["det_edge"], linewidth=1.5, label="positive SHAPs")
-
-        if threshold_val is not None and np.isfinite(threshold_val):
+        if threshold_val is not None:
             ax.axvline(threshold_val, color="black", linestyle="--", linewidth=2,
                        label=f"SVM threshold = {threshold_val:.3f}")
-            acc_label = f"Accuracy: {acc_text}"
+            subtitle = f"Accuracy: {acc_text}"
         else:
-            acc_label = "Accuracy: N/A (no class split / SVM failed)"
+            subtitle = "Accuracy: N/A"
 
-        feature_name_plot = feature_name_mapping.get(feature_name, feature_name)
-        ax.set_title(f"Histogram of {feature_name_plot} with SHAP values and threshold ({acc_label})", fontsize=14)
-        ax.set_xlabel(feature_name_plot, fontsize=12)
-        ax.set_ylabel("Frequency", fontsize=12)
+        feat_label = feature_name_mapping.get(feat, feat)
+        ax.set_title(f"{feat_label} — SHAP sign split ({subtitle})", fontsize=14)
+        ax.set_xlabel(feat_label)
+        ax.set_ylabel("Frequency")
+        ax.set_xlim(lo, hi)            # lock to the robust window (prevents crazy autoscale)
+        ax.ticklabel_format(style="plain", useOffset=False, axis="x")
         ax.legend()
-        plt.grid(False); sns.set_context("paper"); sns.despine(); plt.tight_layout()
-        plt.savefig(f'{save_path}_{feature_name}.png', dpi=300)
-        plt.savefig(f'{save_path}_{feature_name}.svg', dpi=300)
+        sns.despine()
+        plt.tight_layout()
+        out_path = f"{save_path}_{feat}.png"
+        plt.savefig(out_path, dpi=300)
         plt.close(fig)
 
 
@@ -1331,9 +1406,12 @@ if __name__ == "__main__":
         "LEDD_pre": "LEDD Pre",
         }
 
-    shap_data_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi/MoCA_sum_post_ensemble_shap_values.csv"
+    
+    shap_data_path_joined = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs_joined/level2/ElasticNet/ablation/ablation_step[1]/MoCA_sum_post_mean_shap_values_test_ALIGNED.csv"
+    #shap_data_path_full = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/results/1_MoCA_sum_post_ledd/level2/ElasticNet/ablation/ablation_step[1]/MoCA_sum_post_mean_shap_values_test_ENSEMBLE.csv"
     removal_list_path = os.path.join(results_dir, "ablation", "MoCA_sum_post_ENSEMBLE_ablation_history.csv")
-    _, shap_feature_names = _load_shap_data(shap_data_path)
+    _, shap_feature_names = _load_shap_data(shap_data_path_joined)
+    #_, _shap_feature_names_full = _load_shap_data(shap_data_path_full)
     if shap_feature_names:
         feature_name_mapping.setdefault(
             "all",
@@ -1346,14 +1424,14 @@ if __name__ == "__main__":
     updrs_post_path = os.path.join(data_dir, "moca_ledd_with_upost.csv")
     filtered_ledd_path = os.path.join(data_dir, "filtered_MoCA_ledd.csv")
 
-    #visualize_demographics(
-    #    data_dir,
-    #    "MoCA",
-    #    save_path=demographics_dir + "/",
-    #    dataframe_path=dataframe_path,
-    #    filtered_path=filtered_ledd_path,
-    #    updrs_post_path=updrs_post_path
-    #)
+    visualize_demographics(
+        data_dir,
+        "MoCA",
+        save_path=demographics_dir + "/",
+        dataframe_path=dataframe_path,
+        filtered_path=filtered_ledd_path,
+        updrs_post_path=updrs_post_path
+    )
 
     #ablation_dir = os.path.join(results_dir, "ablation")
     ## Set these paths manually to the ablation steps you want to visualise.
@@ -1372,8 +1450,8 @@ if __name__ == "__main__":
     #        "Please update 'best_step_dir' in MoCA_plotting.py to point to the desired ablation step."
     #    )
 
-    inference_dirs = [os.path.join(results_dir, "1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi")]
-    inference_dirs = ["/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi"]
+    #inference_dirs = [os.path.join(results_dir, "1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi")]
+    #inference_dirs = ["/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi"]
     #regression_figures(
     #    ensemble_step_full=full_step_dir,
     #    ensemble_step_best=best_step_dir,
@@ -1383,12 +1461,12 @@ if __name__ == "__main__":
     #    quest="MoCA_sum_post"
     #)
 
-    #threshold_figure(
-    #    feature_name_mapping,
-    #    data_path=os.path.join(data_dir, "moca_updrs.csv"),
-    #    shap_data_path=shap_data_path,
-    #    save_path=os.path.join(threshold_dir, "moca_sum_post_threshold")
-    #)
+    threshold_figure(
+        feature_name_mapping,
+        data_path=os.path.join(data_dir, "filtered_MoCA_updrs_joined.csv"),
+        shap_path=shap_data_path_joined,
+        save_path=os.path.join(threshold_dir, "moca_sum_post_threshold")
+    )
 
     #shap_importance_histo_figure(
     #    feature_name_mapping,
@@ -1408,8 +1486,8 @@ if __name__ == "__main__":
     #    save_path=os.path.join(shap_dir, "moca_sum_post_dependence")
     #)
 
-    ablation_plot(
-        questionnaire="MoCA_sum_post_ENSEMBLE",
-        ablation_folder_path=os.path.join(results_dir, "ablation"),
-        save_path=os.path.join(ablation_fig_dir, "moca_sum_post_ablation")
-    )
+    #ablation_plot(
+    #    questionnaire="MoCA_sum_post_ENSEMBLE",
+    #    ablation_folder_path=os.path.join(results_dir, "ablation"),
+    #    save_path=os.path.join(ablation_fig_dir, "moca_sum_post_ablation")
+    #)
