@@ -972,156 +972,116 @@ def _to_numeric_df(df: pd.DataFrame) -> pd.DataFrame:
 
 def threshold_figure(
     feature_name_mapping: dict,
-    data_path: str,           # raw features CSV saved BEFORE scaling (same row order as model input)
-    shap_path: str,      # SHAP values CSV (ALIGNED to the same row order)
+    data_path: str,           # filtered *raw* features (same row order as SHAP CSV)
+    shap_path: str,           # SHAP CSV aligned to the same rows
     save_path: str
 ) -> None:
-    """
-    Histogram of raw feature values split by SHAP sign.
-    Assumes rows correspond between files. We align by index if both CSVs carry one;
-    otherwise we align by position (truncate to min length).
-    """
+    import numpy as np, pandas as pd, matplotlib.pyplot as plt
+    from sklearn.svm import SVC
+    from sklearn.model_selection import GridSearchCV
+    import seaborn as sns
 
-    # ----- load -----
-    def _load(path):
-        # keep potential saved index if present
-        try:
-            df = pd.read_csv(path, index_col=0)
-            # if that index looks like a 0..N counter, we can still use it
-        except Exception:
-            df = pd.read_csv(path)
-        # drop unnamed junk columns
-        df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed")]
-        return df
-
-    raw = _load(data_path)
-    shap = _load(shap_path)
-
-    # numeric only (coerce but do NOT silently throw whole columns away)
-    def _to_numeric(df):
-        out = df.copy()
-        for c in out.columns:
-            out[c] = pd.to_numeric(out[c], errors="coerce")
-        return out
-
-    raw  = _to_numeric(raw)
-    shap = _to_numeric(shap)
-
-    # ----- align rows -----
-    if raw.index.equals(shap.index):
-        # index-aware, preserves your “second indexing of the filtered csv”
-        raw_al, shap_al = raw.align(shap, join="inner", axis=0)
-    else:
-        # positional fallback (truncate to min length)
-        n = min(len(raw), len(shap))
-        raw_al  = raw.iloc[:n].copy()
-        shap_al = shap.iloc[:n].copy()
-        raw_al.index = pd.RangeIndex(n)   # avoid accidental misinterpretation later
-        shap_al.index = pd.RangeIndex(n)
-
-    # ----- shared features -----
-    shared = [c for c in raw_al.columns if c in shap_al.columns]
-    if not shared:
-        raise ValueError(
-            "No shared columns between RAW and SHAP CSVs.\n"
-            f"RAW first 10:  {list(raw_al.columns)[:10]}\n"
-            f"SHAP first 10: {list(shap_al.columns)[:10]}"
-        )
-
-    # colors
     colors = {
-        "neg":  "#FF5714",   # negative SHAPs
-        "pos":  "#04E762",   # positive SHAPs
-        "neg_e":"#8A3210",
-        "pos_e":"#007C34",
+        "deterioration": "#04E762",  # positive SHAPs
+        "improvement":   "#FF5714",  # negative SHAPs
+        "det_edge":      "#007C34",
+        "imp_edge":      "#8A3210",
     }
 
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    sns.set_theme(style="white", context="paper")
+    # 1) Load as-is (positional alignment only)
+    df_raw  = pd.read_csv(data_path)
+    df_shap = pd.read_csv(shap_path)
+
+    # Drop obvious index columns
+    for d in (df_raw, df_shap):
+        for c in list(d.columns):
+            if c.lower().startswith("unnamed"):
+                d.drop(columns=[c], inplace=True)
+
+    # Keep strictly numeric
+    df_raw  = df_raw.apply(pd.to_numeric, errors="coerce")
+    df_shap = df_shap.apply(pd.to_numeric, errors="coerce")
+
+    # 2) Shared features only (exact name match)
+    shared = [c for c in df_shap.columns if c in df_raw.columns]
+    if not shared:
+        raise ValueError("No shared columns between raw and SHAP CSVs.")
+
+    # 3) Truncate to shared row count (naïve positional alignment)
+    n = min(len(df_raw), len(df_shap))
+    df_raw  = df_raw.iloc[:n].reset_index(drop=True)
+    df_shap = df_shap.iloc[:n].reset_index(drop=True)
 
     for feat in shared:
-        x = raw_al[feat].to_numpy(dtype=float)
-        s = shap_al[feat].to_numpy(dtype=float)
+        x = df_raw[feat].to_numpy()
+        s = df_shap[feat].to_numpy()
 
-        mask = np.isfinite(x) & np.isfinite(s)
-        kept = mask.sum()
-        if kept < 5:
-            # too few usable samples
+        # Drop NaNs jointly
+        m = np.isfinite(x) & np.isfinite(s)
+        x, s = x[m], s[m]
+        if x.size < 5:
             continue
-        dropped = len(mask) - kept
-        if dropped > 0 and dropped / len(mask) > 0.2:
-            print(f"[threshold] WARN: dropping {dropped}/{len(mask)} rows for '{feat}' due to NaNs.")
 
-        x = x[mask]
-        s = s[mask]
-
-        # split by SHAP sign (this is the only thing we use from SHAP)
+        # SHAP sign split
         neg = s < 0
         pos = ~neg
 
-        # ----- bins: robust 1–99% window with safe fallback -----
-        lo, hi = np.nanpercentile(x, 1), np.nanpercentile(x, 99)
-        if not np.isfinite(lo) or not np.isfinite(hi) or np.isclose(lo, hi):
+        # Robust x-range for bins
+        lo = np.nanpercentile(x, 1)
+        hi = np.nanpercentile(x, 99)
+        if not np.isfinite(lo) or not np.isfinite(hi) or lo == hi:
             lo, hi = float(np.nanmin(x)), float(np.nanmax(x))
-            if np.isclose(lo, hi):
-                lo -= 1e-6
-                hi += 1e-6
+            if lo == hi:
+                lo -= 1e-6; hi += 1e-6
         bins = np.linspace(lo, hi, 30)
 
-        # ----- optional SVM threshold (only if meaningful) -----
-        threshold_val, acc_text = None, "N/A"
+        # Optional SVM on raw x vs sign(s)
+        acc_text, thr = "N/A", None
         y = (s >= 0).astype(int)
-        has_both = (y.min() == 0) and (y.max() == 1)
-        var_ok = np.nanstd(x) > 1e-8
-        if has_both and var_ok:
+        if y.min()==0 and y.max()==1:
             try:
-                n_pos, n_neg = int(y.sum()), int((1 - y).sum())
+                n_pos, n_neg = int(y.sum()), int((1-y).sum())
                 max_cv = max(2, min(5, n_pos, n_neg))
                 gs = GridSearchCV(SVC(kernel="linear"),
-                                  {"C": [0.01, 0.1, 1, 10, 100]},
+                                  {"C":[0.01,0.1,1,10,100]},
                                   cv=max_cv)
-                gs.fit(x.reshape(-1, 1), y)
+                gs.fit(x.reshape(-1,1), y)
                 acc_text = f"{gs.best_score_:.2f}"
                 w = float(gs.best_estimator_.coef_[0][0])
                 b = float(gs.best_estimator_.intercept_[0])
                 if abs(w) > 1e-12:
-                    tv = -b / w
-                    # only draw if it falls inside the plotted window
-                    if lo <= tv <= hi:
-                        threshold_val = tv
+                    thr = -b / w
+                # if the threshold is wildly outside [lo, hi], ignore it
+                if thr is not None and not (lo <= thr <= hi):
+                    thr = None
             except Exception:
-                pass  # keep it simple; threshold stays None
+                pass
 
-        # ----- plot -----
-        fig, ax = plt.subplots(figsize=(10, 7))
-        counts_neg, _ = np.histogram(x[neg], bins=bins)
-        counts_pos, _ = np.histogram(x[pos], bins=bins)
-        centers = (bins[:-1] + bins[1:]) / 2
-        width   = bins[1] - bins[0]
+        # Plot
+        fig, ax = plt.subplots(figsize=(10,7))
+        for mask, color, edge, label in [
+            (neg, colors["improvement"], colors["imp_edge"], "negative SHAPs"),
+            (pos, colors["deterioration"], colors["det_edge"], "positive SHAPs"),
+        ]:
+            cts, edges = np.histogram(x[mask], bins=bins)
+            centers = (edges[:-1] + edges[1:]) / 2
+            width   = edges[1] - edges[0]
+            ax.bar(centers, cts, width=width, color=color, alpha=0.7,
+                   edgecolor=edge, linewidth=1.5, label=label)
 
-        ax.bar(centers, counts_neg, width=width, color=colors["neg"],
-               alpha=0.75, edgecolor=colors["neg_e"], linewidth=1.3, label="negative SHAPs")
-        ax.bar(centers, counts_pos, width=width, color=colors["pos"],
-               alpha=0.75, edgecolor=colors["pos_e"], linewidth=1.3, label="positive SHAPs")
-
-        if threshold_val is not None:
-            ax.axvline(threshold_val, color="black", linestyle="--", linewidth=2,
-                       label=f"SVM threshold = {threshold_val:.3f}")
-            subtitle = f"Accuracy: {acc_text}"
-        else:
-            subtitle = "Accuracy: N/A"
+        if thr is not None:
+            ax.axvline(thr, color="black", linestyle="--", linewidth=2,
+                       label=f"SVM threshold = {thr:.3f}")
 
         feat_label = feature_name_mapping.get(feat, feat)
-        ax.set_title(f"{feat_label} — SHAP sign split ({subtitle})", fontsize=14)
+        ax.set_title(f"{feat_label} — SHAP sign split (Accuracy: {acc_text})", fontsize=14)
         ax.set_xlabel(feat_label)
         ax.set_ylabel("Frequency")
-        ax.set_xlim(lo, hi)            # lock to the robust window (prevents crazy autoscale)
-        ax.ticklabel_format(style="plain", useOffset=False, axis="x")
         ax.legend()
+        ax.ticklabel_format(useOffset=False, style="plain", axis="x")
         sns.despine()
         plt.tight_layout()
-        out_path = f"{save_path}_{feat}.png"
-        plt.savefig(out_path, dpi=300)
+        plt.savefig(f"{save_path}_{feat}.png", dpi=300)
         plt.close(fig)
 
 
