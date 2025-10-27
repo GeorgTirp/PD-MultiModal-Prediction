@@ -188,7 +188,7 @@ def main(
     #'Dist': [NormalInverseGamma],
     #'Score' : [NIGLogScore],
     'n_estimators': [200, 300, 400],
-    'learning_rate': [0.01, 0.1, 0.005, 0.02],
+    'learning_rate': [ 0.1,  0.05],
     'Base__max_depth': [ 4, 5, 6],
     'Score__evid_strength': [0.1, 0.05, 0.15],
     'Score__kl_strength': [0.01, 0.05],
@@ -200,7 +200,7 @@ def main(
         'Dist': NormalInverseGamma,
         'Score' : NIGLogScore,
         'n_estimators': 300,
-        'learning_rate': 0.05,
+        'learning_rate': 0.1,
         'natural_gradient': True,
         #'Score_kwargs': {'evid_strength': 0.1, 'kl_strength': 0.01},
         'verbose': False,
@@ -241,10 +241,11 @@ def main(
 
 if __name__ == "__main__":
     #folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     main(
         folder_path, 
-        "data/BDI/level2/bdi_updrs_demo.csv", 
+        "data/BDI/level2/bdi_demo.csv", 
         "diff", 
         "BDI", 
         "results/BDI_NGBoost_diff/level2/NGBoost", 
@@ -252,4 +253,4 @@ if __name__ == "__main__":
         tune_folds=10, 
         detrend=False,
         tune=False,
-        filtered_data_path="filtered_moca_wo_mmse_df.csv")
+        filtered_data_path="filtered_bdi_demo.csv")

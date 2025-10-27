@@ -53,7 +53,8 @@ class ElasticNetRegressionModel(BaseRegressionModel):
             hparam_grid: dict = None,
             standardize_features: str = "zscore",
             split_shaps: bool = None,
-            logging=None):
+            logging=None,
+            random_state: int = 42,):
 
         super().__init__(
             data_df,
@@ -64,7 +65,9 @@ class ElasticNetRegressionModel(BaseRegressionModel):
             top_n,
             standardize=standardize_features,
             split_shaps=split_shaps,
-            logging=logging)
+            logging=logging,
+            random_state=random_state
+        )
 
         default_hparams = {
             'alpha': 1.0,
@@ -151,7 +154,7 @@ class ElasticNetRegressionModel(BaseRegressionModel):
 
         # SHAP for linear models
         shap.initjs()
-        background_data = X.sample(min(25, len(X)), random_state=42)
+        background_data = X.sample(min(25, len(X)), random_state=self.random_state)
         explainer = shap.LinearExplainer(self.model, background_data)
         shap_values = explainer.shap_values(X)
 
@@ -170,7 +173,7 @@ class ElasticNetRegressionModel(BaseRegressionModel):
                 os.makedirs(save_path, exist_ok=True)
                 plt.savefig(f'{save_path}/{self.target_name}_shap_aggregated_beeswarm_ablation_{ablation_idx}.png', dpi=150, bbox_inches='tight')
             else:
-                plt.savefig(f'{self.save_path}/{self.target_name}_shap_aggregated_beeswarm.png', dpi=150, bbox_inches='tight')
+                plt.savefig(f'{self.save_path}/{self.target_name}_shap_aggregated_beeswarm.svg', dpi=150, bbox_inches='tight')
             plt.close()
 
         if iter_idx is None:

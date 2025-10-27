@@ -35,6 +35,7 @@ from sklearn.model_selection import (
 )
 from sklearn.base import clone as skl_clone
 from typing import Optional, List
+from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 
 class BaseRegressionModel:
     """Base class for supervised regression models using scikit-learn and SHAP.
@@ -308,13 +309,13 @@ class BaseRegressionModel:
                 shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
                 plt.title(f'{self.target_name} Summary Plot (Aggregated - Mean)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
-                plt.savefig(f'{save_path}_mean_shap_aggregated.png')
+                plt.savefig(f'{save_path}_mean_shap_aggregated.svg')
                 plt.close()
 
                 shap.summary_plot(variance_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
                 plt.title(f'{self.target_name} Summary Plot (Aggregated - Variance)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
-                plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated.png')
+                plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated.svg')
                 plt.close()
             else:
                 all_shap_mean_array = np.stack(all_shap_values, axis=0)
@@ -323,7 +324,7 @@ class BaseRegressionModel:
                 shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
                 plt.title(f'{self.target_name} Summary Plot (Aggregated)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
-                plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png')
+                plt.savefig(f'{save_path}_shap_aggregated_beeswarm.svg')
                 with open(f'{save_path}_shap_explanations.pkl', 'wb') as fp:
                     pickle.dump(mean_shap_values, fp)
                 plt.close()
@@ -730,16 +731,16 @@ class BaseRegressionModel:
                     shap.summary_plot(test_shap_mean, features=X_vals, feature_names=self.X.columns, show=False, max_display=self.top_n)
                     plt.title(f'{self.target_name} Summary Plot (Aggregated - Mean)', fontsize=16)
                     plt.subplots_adjust(top=0.90)
-                    plt.savefig(f'{save_path}_mean_shap_aggregated_test.png')
+                    plt.savefig(f'{save_path}_mean_shap_aggregated_test.svg')
                     plt.close()
 
                     shap.summary_plot(test_shap_variance, features=X_vals, feature_names=self.X.columns, show=False, max_display=self.top_n)
                     plt.title(f'{self.target_name} Summary Plot (Aggregated - Variance)', fontsize=16)
                     plt.subplots_adjust(top=0.90)
                     if self.prob_func == NormalInverseGamma:
-                        plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated_test.png')
+                        plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated_test.svg')
                     elif self.prob_func == Normal:
-                        plt.savefig(f'{save_path}_std_shap_aggregated_test.png')
+                        plt.savefig(f'{save_path}_std_shap_aggregated_test.svg')
                     plt.close()
                     
                 all_shap_mean_array = np.stack(all_shap_mean, axis=0)
@@ -757,16 +758,16 @@ class BaseRegressionModel:
                 shap.summary_plot(mean_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
                 plt.title(f'{self.target_name} Summary Plot (Aggregated - Mean)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
-                plt.savefig(f'{save_path}_mean_shap_aggregated.png')
+                plt.savefig(f'{save_path}_mean_shap_aggregated.svg')
                 plt.close()
                 
                 shap.summary_plot(variance_shap_values, features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
                 plt.title(f'{self.target_name} Summary Plot (Aggregated - Variance)', fontsize=16)
                 plt.subplots_adjust(top=0.90)
                 if self.prob_func == NormalInverseGamma:
-                    plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated.png')
+                    plt.savefig(f'{save_path}_preditive_uncertainty_shap_aggregated.svg')
                 elif self.prob_func == Normal:
-                    plt.savefig(f'{save_path}_std_shap_aggregated.png')
+                    plt.savefig(f'{save_path}_std_shap_aggregated.svg')
                 plt.close()
             else:
                 if self.split_shaps:
@@ -777,7 +778,7 @@ class BaseRegressionModel:
                     #shap.summary_plot(train_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
                     #plt.title(f'{self.identifier}  Summary Plot (Aggregated)', fontsize=16)
                     #plt.subplots_adjust(top=0.90)
-                    #plt.savefig(f'{save_path}_shap_aggregated_beeswarm_train.png')
+                    #plt.savefig(f'{save_path}_shap_aggregated_beeswarm_train.svg')
                     #plt.close()
 
                     test_shap_mean = np.concatenate(all_shap_test, axis=0)
@@ -785,7 +786,7 @@ class BaseRegressionModel:
                     shap.summary_plot(test_shap_mean , features=X_vals, feature_names=self.X.columns, show=False, max_display=self.top_n)
                     plt.title(f'{self.target_name}  Summary Plot (Aggregated)', fontsize=16)
                     plt.subplots_adjust(top=0.90)
-                    plt.savefig(f'{save_path}_shap_aggregated_beeswarm_test.png')
+                    plt.savefig(f'{save_path}_shap_aggregated_beeswarm_test.svg')
                     plt.close()
             
             all_shap_mean_array = np.stack(all_shap_values, axis=0)
@@ -795,7 +796,7 @@ class BaseRegressionModel:
             shap.summary_plot(mean_shap_values , features=self.X, feature_names=self.X.columns, show=False, max_display=self.top_n)
             plt.title(f'{self.target_name}  Summary Plot (Aggregated)', fontsize=16)
             plt.subplots_adjust(top=0.90)
-            plt.savefig(f'{save_path}_shap_aggregated_beeswarm.png')
+            plt.savefig(f'{save_path}_shap_aggregated_beeswarm.svg')
             #with open(f'{save_path}_mean_shap_explanations.pkl', 'wb') as fp:
             #    pickle.dump(mean_shap_values, fp)
             plt.close()
@@ -1149,6 +1150,7 @@ class BaseRegressionModel:
                 "y_pred": ensemble_predictions,
             }
             plot_df = pd.DataFrame({"Actual": y_infer, "Predicted": ensemble_predictions})
+            plot_path = os.path.join(inference_root, f"{self.target_name}_ensemble_actual_vs_predicted.svg")
             plot_path = os.path.join(inference_root, f"{self.target_name}_ensemble_actual_vs_predicted.png")
             self.plot(
                 f"Actual vs. Prediction (Ensemble of {members}) - {self.model_name}",
@@ -1168,6 +1170,7 @@ class BaseRegressionModel:
                 shap_stack = np.stack(member_shap_values_train, axis=0)
                 shap_mean = np.mean(shap_stack, axis=0)
                 feature_matrix = X_train_full[common_features]
+                shap_plot_path = os.path.join(inference_root, f"{self.target_name}_ensemble_shap_beeswarm.svg")
                 shap_plot_path = os.path.join(inference_root, f"{self.target_name}_ensemble_shap_beeswarm.png")
                 plt.figure(figsize=(8, 6))
                 shap.summary_plot(
@@ -1191,6 +1194,7 @@ class BaseRegressionModel:
                 shap_stack_test = np.stack(member_shap_values_test, axis=0)
                 shap_mean_test = np.mean(shap_stack_test, axis=0)
                 feature_matrix_test = X_infer[common_features]
+                shap_plot_test_path = os.path.join(inference_root, f"{self.target_name}_ensemble_shap_beeswarm_test.svg")
                 shap_plot_test_path = os.path.join(inference_root, f"{self.target_name}_ensemble_shap_beeswarm_test.png")
                 plt.figure(figsize=(8, 6))
                 shap.summary_plot(
@@ -1204,7 +1208,10 @@ class BaseRegressionModel:
                 plt.tight_layout()
                 plt.savefig(shap_plot_test_path, dpi=300, bbox_inches="tight")
                 plt.close()
-                shap_csv_test_path = os.path.join(inference_root, f"{self.target_name}_ensemble_shap_values_test.csv")
+                shap_csv_test_path = os.path.join(
+                    inference_root,
+                    f"{self.target_name}_ensemble_shap_values_inference.csv"
+                )
                 pd.DataFrame(shap_mean_test, columns=common_features).to_csv(shap_csv_test_path, index=False)
             except Exception as shap_test_err:
                 self.logging.warning(f"[Inference] Failed to create inference SHAP plot: {shap_test_err}")
@@ -1348,7 +1355,7 @@ class BaseRegressionModel:
                     f"Actual vs. Prediction {self.model_name}- {self.target_name} No. features: {number_of_features}", 
                     modality='',
                     plot_df=pd.DataFrame({'Actual': metrics_df['y_test'].values[0], 'Predicted': metrics_df['y_pred'].values[0]}),
-                    save_path_file=f'{save_path}/{self.target_name}_actual_vs_predicted.png')
+                    save_path_file=f'{save_path}/{self.target_name}_actual_vs_predicted.svg')
 
                 ensemble_rs.append(metrics['r'])
                 ensemble_rhos.append(metrics['rho'])
@@ -1404,7 +1411,7 @@ class BaseRegressionModel:
                 plt.figure(figsize=(8, 6))
                 shap.plots.beeswarm(expl, show=False)  # do not pass color/style; let SHAP choose
                 plt.tight_layout()
-                plt.savefig(f"{step_dir}/{self.target_name}_SHAP_beeswarm_{tag}_AVG.png", dpi=300, bbox_inches="tight")
+                plt.savefig(f"{step_dir}/{self.target_name}_SHAP_beeswarm_{tag}_AVG.svg", dpi=300, bbox_inches="tight")
                 plt.close()
 
             # Save averaged test/train beeswarms if available
@@ -1461,7 +1468,7 @@ class BaseRegressionModel:
             #   ensemble_y_preds.append(metrics['y_pred'])
             #   ensemble_test_idx.append(metrics.get('test_index', None))
             
-            avg_plot_save = f"{step_dir}/{self.target_name}_actual_vs_predicted_AVG.png"
+            avg_plot_save = f"{step_dir}/{self.target_name}_actual_vs_predicted_AVG.svg"
             if members > 0:
                 if all(x is not None for x in locals().get('ensemble_test_idx', [])) \
                    and len(set(tuple(np.asarray(idx).ravel()) for idx in ensemble_test_idx)) == 1:
@@ -1516,7 +1523,7 @@ class BaseRegressionModel:
             def _save_avg_beeswarm(shap_list, X_list, tag="test"):
                 if not shap_list:
                     return
-                save_bee = f"{step_dir}/{self.target_name}_SHAP_beeswarm_{tag}_AVG.png"
+                save_bee = f"{step_dir}/{self.target_name}_SHAP_beeswarm_{tag}_AVG.svg"
             
                 # Try true mean per row if rows align; else pool values.
                 same_rows = False
@@ -1634,7 +1641,7 @@ class BaseRegressionModel:
         plt.title("Pearson-R Scores Over Feature Ablation")
         plt.legend()
         plt.tight_layout()
-        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_R.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_R.svg', dpi=300, bbox_inches='tight')
         plt.close()
 
         # Rho plot with std as whiskers
@@ -1645,7 +1652,7 @@ class BaseRegressionModel:
         plt.title("Spearman-Rho Scores Over Feature Ablation")
         plt.legend()
         plt.tight_layout()
-        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_Rho.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_Rho.svg', dpi=300, bbox_inches='tight')
         plt.close()
 
         # RMSE plot with std as whiskers
@@ -1657,7 +1664,7 @@ class BaseRegressionModel:
         plt.title("Train and Test RMSE Over Feature Ablation")
         plt.legend()
         plt.tight_layout()
-        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_errors.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_errors.svg', dpi=300, bbox_inches='tight')
         plt.close()
 
         # Save feature removal history
@@ -1777,7 +1784,7 @@ class BaseRegressionModel:
                     f"Actual vs. Prediction {self.model_name}- {self.target_name} No. features: {number_of_features}", 
                     modality='',
                     plot_df=pd.DataFrame({'Actual': metrics['y_test'], 'Predicted': metrics['y_pred']}),
-                    save_path_file=f'{member_dir}/{self.target_name}_actual_vs_predicted.png')
+                    save_path_file=f'{member_dir}/{self.target_name}_actual_vs_predicted.svg')
     
                 # Distinct member scalar metrics (for CIs)
                 member_rs.append(metrics['r'])
@@ -1901,7 +1908,7 @@ class BaseRegressionModel:
                 f"Actual vs. Prediction (ENSEMBLE of {members}) - {self.model_name} - {self.target_name} - No. features: {number_of_features}",
                 modality='',
                 plot_df=pd.DataFrame({"Actual": y_test_ref, "Predicted": y_pred_ens}),
-                save_path_file=f"{step_dir}/{self.target_name}_actual_vs_predicted_ENSEMBLE.png",
+                save_path_file=f"{step_dir}/{self.target_name}_actual_vs_predicted_ENSEMBLE.svg",
                 N=len(y_test_ref),
                 metrics_override=ensemble_metrics
             )
@@ -1979,10 +1986,10 @@ class BaseRegressionModel:
                                       show=False, max_display=max_disp)
                 plt.title(f"{self.target_name} SHAP Beeswarm (Ensemble, {tag})", fontsize=14)
                 plt.tight_layout()
-                out_png = os.path.join(step_dir, f"{self.target_name}_shap_aggregated_beeswarm_{tag}_ENSEMBLE.png")
-                plt.savefig(out_png, dpi=300, bbox_inches="tight")
+                out_svg = os.path.join(step_dir, f"{self.target_name}_shap_aggregated_beeswarm_{tag}_ENSEMBLE.svg")
+                plt.savefig(out_svg, dpi=300, bbox_inches="tight")
                 plt.close()
-                self.logging.info(f"[ablation {i}] Saved ensemble SHAP beeswarm ({tag}) to: {out_png}")
+                self.logging.info(f"[ablation {i}] Saved ensemble SHAP beeswarm ({tag}) to: {out_svg}")
     
             def _save_placeholder(reason_txt: str, tag: str):
                 with open(os.path.join(step_dir, f"{self.target_name}_SHAP_{tag}_ENSEMBLE_reason.txt"),
@@ -1992,7 +1999,7 @@ class BaseRegressionModel:
                 plt.axis('off')
                 plt.text(0.02, 0.5, f"No averaged SHAP ({tag})\n{reason_txt}", va='center')
                 plt.tight_layout()
-                fig.savefig(os.path.join(step_dir, f"{self.target_name}_shap_aggregated_beeswarm_{tag}_ENSEMBLE.png"),
+                fig.savefig(os.path.join(step_dir, f"{self.target_name}_shap_aggregated_beeswarm_{tag}_ENSEMBLE.svg"),
                             dpi=200, bbox_inches="tight")
                 plt.close(fig)
                 self.logging.warning(f"[ablation {i}] {reason_txt}")
@@ -2148,7 +2155,7 @@ class BaseRegressionModel:
         plt.title("Ensemble Pearson-R Over Feature Ablation")
         plt.legend()
         plt.tight_layout()
-        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_ENSEMBLE_R.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_ENSEMBLE_R.svg', dpi=300, bbox_inches='tight')
         plt.close()
     
         # Rho (ensemble)
@@ -2159,7 +2166,7 @@ class BaseRegressionModel:
         plt.title("Ensemble Spearman-Rho Over Feature Ablation")
         plt.legend()
         plt.tight_layout()
-        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_ENSEMBLE_Rho.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_ENSEMBLE_Rho.svg', dpi=300, bbox_inches='tight')
         plt.close()
     
         # RMSE (ensemble)
@@ -2171,7 +2178,7 @@ class BaseRegressionModel:
         plt.title("Ensemble Train/Test RMSE Over Feature Ablation")
         plt.legend()
         plt.tight_layout()
-        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_ENSEMBLE_errors.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{save_path_ablation}_{self.target_name}_feature_ablation_ENSEMBLE_errors.svg', dpi=300, bbox_inches='tight')
         plt.close()
     
         # Save feature removal history
@@ -2227,7 +2234,6 @@ class BaseRegressionModel:
                 Falls back to `self.metrics` if not provided.
         """
         self.logging.info("Starting plot generation.")
-        
         colors = {
             "deterioration": "04E762",
             "improvement": "FF5714",
@@ -2236,8 +2242,21 @@ class BaseRegressionModel:
             "ideal_line": "black",
         }
 
+        sns.set_theme(
+            style="ticks",
+            context="paper",
+            rc={
+                "xtick.minor.size": 2,
+                "ytick.minor.size": 2,
+                "xtick.minor.width": 0.8,
+                "ytick.minor.width": 0.8,
+                "xtick.minor.visible": True,
+                "ytick.minor.visible": True,
+            },
+        )
+
         # Create a wider (landscape) figure
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(8, 6))
 
         metrics_src = metrics_override if metrics_override is not None else self.metrics
         if metrics_src is None:
@@ -2259,11 +2278,6 @@ class BaseRegressionModel:
             data=plot_df, 
             alpha=0.7
         )
-        
-        # Plot a reference line with slope = 1
-        min_val = min(plot_df['Actual'].min(), plot_df['Predicted'].min())
-        max_val = max(plot_df['Actual'].max(), plot_df['Predicted'].max())
-        plt.plot([min_val, max_val], [min_val, max_val], color='grey', alpha=0.4, linestyle='--')
 
         # Fit a regression line
         sns.regplot(
@@ -2271,7 +2285,7 @@ class BaseRegressionModel:
             y='Predicted', 
             data=plot_df, 
             scatter=False, 
-            color='red', 
+            color=colors["line"], 
             line_kws={'label': 'Regression Line'}
         )
 
@@ -2282,7 +2296,7 @@ class BaseRegressionModel:
             y='Predicted', 
             data=plot_df, 
             scatter=False, 
-            color='red', 
+            color=colors["line"], 
             ci=ci, 
             line_kws={'label': f'{ci}% Confidence Interval'}
         )
@@ -2333,14 +2347,45 @@ class BaseRegressionModel:
         # get current y‐limits
         min_y, max_y = ax.get_ylim()
 
-        # shade below y=0 (improvement)
-        ax.axhspan(min_y, 0,
-                   color="#" + colors["improvement"],
-                   alpha=0.08, zorder=0)
-        # shade above y=0 (deterioration)
-        ax.axhspan(0, max_y,
-                   color="#" + colors["deterioration"],
-                   alpha=0.08, zorder=0)
+        if min_y < 0 < max_y:
+            # shade below y=0 (improvement)
+            ax.axhspan(min_y, 0,
+                       color="#" + colors["improvement"],
+                       alpha=0.08, zorder=0)
+            # shade above y=0 (deterioration)
+            ax.axhspan(0, max_y,
+                       color="#" + colors["deterioration"],
+                       alpha=0.08, zorder=0)
+
+        pad = 0.05  # default padding for x-axis
+        lower_pad_y = 0.0  # tighter padding on the lower end of y-axis
+        upper_pad_y = 0.05  # standard padding on the upper end of y-axis
+        combined_min = min(plot_df['Actual'].min(), plot_df['Predicted'].min())
+        combined_max = max(plot_df['Actual'].max(), plot_df['Predicted'].max())
+        delta = combined_max - combined_min
+        if np.isclose(delta, 0):
+            delta = 1.0
+        x_min = combined_min - pad * delta
+        x_max = combined_max + pad * delta
+        y_min = combined_min - lower_pad_y * delta
+        y_max = combined_max + upper_pad_y * delta
+
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True, steps=[1, 2, 3]))
+        ax.xaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True, steps=[1, 2, 3]))
+        ax.yaxis.set_minor_locator(AutoMinorLocator(2))
+        ax.tick_params(
+            which='minor',
+            bottom=True,
+            top=False,
+            left=True,
+            right=False,
+            length=4,
+            width=0.8,
+            color='lightgrey'
+        )
         # Label axes and set title
         plt.xlabel(f'Actual {modality} {self.target_name}', fontsize=12)
         plt.ylabel(f'Predicted {modality} {self.target_name}', fontsize=12)
@@ -2361,10 +2406,11 @@ class BaseRegressionModel:
 
         else:
             # Save and close
+            plt.savefig(f'{self.save_path}/{self.target_name}_actual_vs_predicted.svg')
             plt.savefig(f'{self.save_path}/{self.target_name}_actual_vs_predicted.png')
 
         plt.close()
 
         # Log info (optional)
-        self.logging.info("Plot saved to %s/%s_actual_vs_predicted.png", 
+        self.logging.info("Plot saved to %s/%s_actual_vs_predicted.svg", 
         self.save_path, self.target_name)

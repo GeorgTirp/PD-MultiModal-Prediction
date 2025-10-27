@@ -42,13 +42,31 @@ def outlier_removal(
     Returns:
         pd.DataFrame: DataFrame with outliers removed.
     """
+    if not cols:
+        return data_df
+
+    normalized_cols = []
+    missing_cols = []
+    for col in cols:
+        col_name = ''.join(col) if isinstance(col, (tuple, list)) else col
+        if col_name in data_df.columns:
+            normalized_cols.append(col_name)
+        else:
+            missing_cols.append(col_name)
+
+    if logging and missing_cols:
+        logging.warning(f"Skipping outlier removal for missing columns: {missing_cols}")
+
+    if not normalized_cols:
+        return data_df
+
     # Compute IQR bounds
-    Q1_vals = data_df[cols].quantile(Q1)
-    Q3_vals = data_df[cols].quantile(Q3)
+    Q1_vals = data_df[normalized_cols].quantile(Q1)
+    Q3_vals = data_df[normalized_cols].quantile(Q3)
     IQR = Q3_vals - Q1_vals
 
     # Identify outliers
-    is_outlier = (data_df[cols] < (Q1_vals - iqr_mult * IQR)) | (data_df[cols] > (Q3_vals + iqr_mult * IQR))
+    is_outlier = (data_df[normalized_cols] < (Q1_vals - iqr_mult * IQR)) | (data_df[normalized_cols] > (Q3_vals + iqr_mult * IQR))
 
     # Count outliers
     outlier_counts = is_outlier.sum()
@@ -57,7 +75,7 @@ def outlier_removal(
         logging.info("IQR Outliers per feature:\n" + str(outlier_counts))
 
         logging.info("\nDetailed outlier rows by feature:")
-        for col in cols:
+        for col in normalized_cols:
             outlier_rows = data_df.loc[is_outlier[col], [col]]
             if not outlier_rows.empty:
                 logging.info(f"\n--- Outliers in feature: {col} (n={len(outlier_rows)}) ---")
@@ -222,26 +240,21 @@ def main(
     test_split_size = 0.2
     Feature_Selection = {}
 
-    data_df = pd.read_csv(os.path.join(folder_path,data_path))
+    data_df = pd.read_csv(os.path.join(folder_path, data_path))
+    if "TEST_DATUM_pre" in data_df.columns:
+        data_df = data_df.rename(columns={"TEST_DATUM_pre": "OP_DATUM"})
 
-    # Restrict FUs between 1-3 years
-    logging.info(f"Dropping {(data_df["TimeSinceSurgery"] < 0.6).sum()} patients with TimeSinceSurgery less than 6 months")
-    data_df = data_df[(data_df["TimeSinceSurgery"] >= 0.6)]
+    # Restrict FUs between 1-3 years for the base cohort
+    mask_valid_fu = data_df["TimeSinceSurgery"] >= 0.6
+    logging.info(f"Dropping {(~mask_valid_fu).sum()} patients with TimeSinceSurgery less than 6 months")
+    data_df = data_df[mask_valid_fu].copy()
 
-    # If MDS_UPDRS_III_sum_OFF is present, compute UPDRS_ratio and drop the source columns
-    if "MDS_UPDRS_III_sum_OFF" in data_df.columns and "MDS_UPDRS_III_sum_ON" in data_df.columns:
-        data_df["UPDRS_reduc"] = (data_df["MDS_UPDRS_III_sum_OFF"] - data_df["MDS_UPDRS_III_sum_ON"]) / data_df["MDS_UPDRS_III_sum_OFF"]
-        logging.info(f"Patients with negative UPDRS_reduc: {(data_df["UPDRS_reduc"] < 0).sum()}")
-        data_df = data_df[data_df["UPDRS_reduc"] >= 0]
-        # Rename columns for clarity
-        if "MDS_UPDRS_III_sum_OFF" in data_df.columns:
-            data_df = data_df.rename(columns={"MDS_UPDRS_III_sum_OFF": "UPDRS_off"})
-        if "MDS_UPDRS_III_sum_ON" in data_df.columns:
-            data_df = data_df.rename(columns={"MDS_UPDRS_III_sum_ON": "UPDRS_on"})
-
-    #data_df['AGE_AT_DIAG'] = data_df["AGE_AT_OP"] - data_df['TimeSinceDiag']
+    if "UPDRS_off" in data_df.columns and "UPDRS_on" in data_df.columns:
+        data_df["UPDRS_reduc"] = (
+                data_df["UPDRS_off"] - data_df["UPDRS_on"]
+            ) / data_df["UPDRS_off"]
     #columns_to_drop += ['TimeSinceDiag']
-    
+
     if 'X_L' in data_df.columns:
         # Left locations in our dataframe is negated! otherwise sweetspot is [-12.08, -13.94,-6.74]
         data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [12.08, -13.94,-6.74])
@@ -252,11 +265,25 @@ def main(
     # Define target and features
     Feature_Selection['target'] = target_col
     Feature_Selection['features'] = feature_cols
+
     
+
+    # Ensure critical numeric columns are properly typed
+    for col in ["UPDRS_on", "MoCA_sum_pre", "TimeSinceSurgery", "AGE_AT_BASELINE", "TimeSinceDiag"]:
+        if col in data_df.columns:
+            data_df[col] = pd.to_numeric(data_df[col], errors='coerce')
+    
+    ### SPLIT BY AGE###
+    #data_df= data_df[data_df["AGE_AT_OP"] >= 65]
+    #data_df= data_df[data_df["AGE_AT_OP"] < 65]
+
     data_df = outlier_removal(data_df, outlier_cols, logging=logging)
     op_dates = data_df["OP_DATUM"]
 
     data_df = data_df[feature_cols + [target_col]]
+
+    
+
     # Plot corr matrix of features + target
     plt.figure(figsize=(10, 8))
     sns.heatmap(data_df.select_dtypes(include='number').corr(), 
@@ -275,7 +302,7 @@ def main(
     
     if filtered_data_path != "":
         data_dir = os.path.dirname(data_path)
-        filtered_df = data_df.copy()
+        filtered_df = data_df.copy().dropna()
         filtered_df["OP_DATUM"] = op_dates
         filtered_df.to_csv(data_dir + '/' + filtered_data_path)
 
@@ -322,7 +349,7 @@ def main(
     model.plot(f"Actual vs. Prediction (Elastic Net)")
     #_,_, removals= model.feature_ablation_ensemble(folds=folds, tune=tune, tune_folds=tune_folds, members=members)
     inference_csv = os.path.join(folder_path, "data/MoCA/level2/eligible_matched_ppmi.csv")
-    inference_save_dir = os.path.join(safe_path, "inference_medication")
+    inference_save_dir = os.path.join(safe_path, "inference_ppmi_matched")
     model.inference(
         inference_csv_path=inference_csv,
         param_grid=param_grid,
@@ -340,23 +367,24 @@ if __name__ == "__main__":
     #folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
     #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
     folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
+
     exp_infos = [
                 {
                 'exp_number' : 1,
                 'target_col' :"MoCA_sum_post", 
                 'feature_cols':[ 
                             #"TimeSinceSurgery",
-                            #"AGE_AT_OP",
-                            "TimeSinceDiag",
+                            "AGE_AT_BASELINE",
+                            #"TimeSinceDiag",
                             #"SEX",
                             #"UPDRS_reduc",
-                            "UPDRS_on",
+                            #"UPDRS_on",
                             #"MoCA_sum_pre",
-                            "MoCA_Executive_sum_pre",
+                            #"MoCA_Executive_sum_pre",
                             #"MoCA_Executive_sum_post",
                             "MoCA_Erinnerung_sum_pre",
                             #"MoCA_Erinnerung_sum_post",
-                            #"MoCA_Sprache_sum_pre",
+                            "MoCA_Sprache_sum_pre",
                             #"MoCA_Sprache_sum_post",
                             #"MoCA_Aufmerksamkeit_sum_pre",
                             #"MoCA_Aufmerksamkeit_sum_post",
@@ -370,16 +398,24 @@ if __name__ == "__main__":
                             #"LEDD_pre",
                             #"L_distance",
                             #"R_distance",
+                            #"Left_1_mA",
+                            #"Right_1_mA",
                             #"STIM_distance"
+                            #"X_L" ,
+                            #"Y_L" ,
+                            #"Z_L" ,
+                            #"X_R" ,
+                            #"Y_R" ,
+                            #"Z_R" ,
                             ] ,
                 'outlier_cols':[ 
                             #"TimeSinceSurgery",
-                            #"AGE_AT_OP",
-                            "TimeSinceDiag",
+                            "AGE_AT_BASELINE",
+                            #"TimeSinceDiag",
                             #"SEX",
                             #"UPDRS_reduc",
                             "MoCA_sum_pre",
-                            "UPDRS_on",
+                            #"UPDRS_on",
                             #"MoCA_Executive_sum_pre",
                             #"MoCA_Executive_sum_post",
                             #"MoCA_Erinnerung_sum_pre",
@@ -409,14 +445,15 @@ if __name__ == "__main__":
         feature_cols = exp_info['feature_cols']
         outlier_cols = exp_info['outlier_cols']
         main(folder_path=folder_path, 
-            data_path="data/MoCA/level2/moca_updrs.csv", 
+            data_path="data/MoCA/level2/ppmi_medication_distribution_cohort.csv", 
             feature_cols=feature_cols, 
             target_col=target_col, 
             outlier_cols=outlier_cols,
-            out=f"results/{exp_number}_{target_col}_updrs/level2/ElasticNet", 
+            out=f"results/{exp_number}_{target_col}_ppmi_medication/level2/ElasticNet", 
             folds=10, 
             tune_folds=5, 
             tune=True, 
             members=10,
             uncertainty=False, 
-            filtered_data_path="filtered_MoCA_updrs_joined.csv")
+            filtered_data_path="filtered_MoCA_ppmi_medication.csv"
+            )

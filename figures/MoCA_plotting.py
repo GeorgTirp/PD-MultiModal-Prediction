@@ -1082,6 +1082,7 @@ def threshold_figure(
         sns.despine()
         plt.tight_layout()
         plt.savefig(f"{save_path}_{feat}.png", dpi=300)
+        plt.savefig(f"{save_path}_{feat}.svg", dpi=300)
         plt.close(fig)
 
 
@@ -1338,11 +1339,11 @@ def ablation_plot(
 
 if __name__ == "__main__":
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    run_name = "1_MoCA_sum_post_ledd"
+    run_name = "1_MoCA_sum_post_stim_BM"
     results_dir = os.path.join(repo_root, "results", run_name, "level2", "ElasticNet")
     data_dir = os.path.join(repo_root, "data", "MoCA", "level2")
 
-    figures_root = os.path.join(repo_root, "figures", "MoCA_sum_post_ledd")
+    figures_root = os.path.join(repo_root, "figures", "MoCA_sum_post_stim_BM")
     demographics_dir = os.path.join(figures_root, "demographics")
     regression_dir = os.path.join(figures_root, "regression")
     threshold_dir = os.path.join(figures_root, "threshold")
@@ -1367,22 +1368,21 @@ if __name__ == "__main__":
         }
 
     
-    shap_data_path_joined = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs_joined/level2/ElasticNet/ablation/ablation_step[1]/MoCA_sum_post_mean_shap_values_test_ALIGNED.csv"
+    #shap_data_path_joined = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs_joined/level2/ElasticNet/ablation/ablation_step[1]/MoCA_sum_post_mean_shap_values_test_ALIGNED.csv"
     #shap_data_path_full = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/results/1_MoCA_sum_post_ledd/level2/ElasticNet/ablation/ablation_step[1]/MoCA_sum_post_mean_shap_values_test_ENSEMBLE.csv"
     removal_list_path = os.path.join(results_dir, "ablation", "MoCA_sum_post_ENSEMBLE_ablation_history.csv")
-    _, shap_feature_names = _load_shap_data(shap_data_path_joined)
+    #_, shap_feature_names = _load_shap_data(shap_data_path_joined)
     #_, _shap_feature_names_full = _load_shap_data(shap_data_path_full)
-    if shap_feature_names:
-        feature_name_mapping.setdefault(
-            "all",
-            [feature_name_mapping.get(name, name) for name in shap_feature_names]
-        )
-    else:
-        feature_name_mapping.setdefault("all", list(feature_name_mapping.values()))
-
-    dataframe_path = os.path.join(data_dir, "moca_ledd.csv")
-    updrs_post_path = os.path.join(data_dir, "moca_ledd_with_upost.csv")
-    filtered_ledd_path = os.path.join(data_dir, "filtered_MoCA_ledd.csv")
+   #if shap_feature_names:
+   #    feature_name_mapping.setdefault(
+   #        "all",
+   #        [feature_name_mapping.get(name, name) for name in shap_feature_names]
+   #    )
+   #else:/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/data/MoCA/level2/filtered_MoCA_stim_below_65.csv
+   #    feature_name_mapping.setdefault("all", list(feature_name_mapping.values()))
+    dataframe_path = os.path.join(data_dir, "moca_stim.csv")
+    updrs_post_path = os.path.join(data_dir, "moca_stim_with_upost.csv")
+    filtered_ledd_path = os.path.join(data_dir, "filtered_MoCA_stim_over_65.csv")
 
     visualize_demographics(
         data_dir,
@@ -1393,11 +1393,11 @@ if __name__ == "__main__":
         updrs_post_path=updrs_post_path
     )
 
-    #ablation_dir = os.path.join(results_dir, "ablation")
+    ablation_dir = os.path.join(results_dir, "ablation")
     ## Set these paths manually to the ablation steps you want to visualise.
     ## Example: os.path.join(ablation_dir, "ablation_step[5]")
-    #full_step_dir = os.path.join(ablation_dir, "ablation_step[1]")
-    #best_step_dir = os.path.join(ablation_dir, "ablation_step[1]")
+    full_step_dir = os.path.join(ablation_dir, "ablation_step[1]")
+    best_step_dir = os.path.join(ablation_dir, "ablation_step[1]")
 #
     #if not os.path.exists(full_step_dir):
     #    raise FileNotFoundError(
@@ -1410,21 +1410,21 @@ if __name__ == "__main__":
     #        "Please update 'best_step_dir' in MoCA_plotting.py to point to the desired ablation step."
     #    )
 
-    #inference_dirs = [os.path.join(results_dir, "1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi")]
-    #inference_dirs = ["/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi"]
+    inference_dirs = [os.path.join(results_dir, "1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi")]
+    inference_dirs = ["/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs/level2/ElasticNet/inference_ppmi/ensemble_predictions.csv"]
     #regression_figures(
     #    ensemble_step_full=full_step_dir,
     #    ensemble_step_best=best_step_dir,
     #    inference_dirs=inference_dirs,
-    #    data_path=os.path.join(data_dir, "moca_demo.csv"),
+    #    data_path=os.path.join(data_dir, "moca_updrs.csv"),
     #    save_path=os.path.join(regression_dir, "moca_sum_post"),
     #    quest="MoCA_sum_post"
     #)
-
+    shap_data_threshold_data = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/results/1_MoCA_sum_post_updrs_joined/level2/ElasticNet/ablation/ablation_step[1]/MoCA_sum_post_mean_shap_values_test_ALIGNED.csv"
     threshold_figure(
         feature_name_mapping,
         data_path=os.path.join(data_dir, "filtered_MoCA_updrs_joined.csv"),
-        shap_path=shap_data_path_joined,
+        shap_path=shap_data_threshold_data,
         save_path=os.path.join(threshold_dir, "moca_sum_post_threshold")
     )
 

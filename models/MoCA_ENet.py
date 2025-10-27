@@ -267,6 +267,12 @@ def main(
         # Left locations in our dataframe is negated! otherwise sweetspot is [-12.08, -13.94,-6.74]
         data_df['L_distance'] = signed_euclidean_distance(data_df[['X_L', 'Y_L', 'Z_L']].values, [12.08, -13.94,-6.74])
         data_df['R_distance'] = signed_euclidean_distance(data_df[['X_R', 'Y_R', 'Z_R']].values, [11.90, -13.28, -6.74])
+        data_df["X_avg"] = (data_df["X_L"] + data_df["X_R"]) / 2
+        data_df["Y_avg"] = (data_df["Y_L"] + data_df["Y_R"]) / 2
+        data_df["Z_avg"] = (data_df["Z_L"] + data_df["Z_R"]) / 2
+        data_df["STIM_distance"] = signed_euclidean_distance(data_df[['X_avg', 'Y_avg', 'Z_avg']].values, [ (12.08 + 11.90)/2, (-13.94 -13.28)/2, -6.74])
+    else:
+        logging.warning("Stimulation coordinates not found; skipping distance calculations.")
     #data_df['L_distance'] = np.random.permutation(data_df['L_distance'].values)
     #data_df['R_distance'] = np.random.permutation(data_df['R_distance'].values)
     #data_df["STIM_distance"] = (data_df['L_distance'] + data_df['R_distance']) / 2
@@ -312,13 +318,18 @@ def main(
             ppmi_dsb_df[col] = np.nan
     ppmi_subset = ppmi_dsb_df[base_cols_available].copy()
 
-    data_df = pd.concat([base_df, ppmi_subset], ignore_index=True)
+    #data_df = pd.concat([base_df, ppmi_subset], ignore_index=True)
 
     # Ensure critical numeric columns are properly typed
     for col in ["UPDRS_on", "MoCA_sum_pre", "TimeSinceSurgery", "AGE_AT_OP", "TimeSinceDiag"]:
         if col in data_df.columns:
             data_df[col] = pd.to_numeric(data_df[col], errors='coerce')
-    
+
+
+    ### AGE SPLIT ### 
+    #data_df = data_df[data_df['AGE_AT_OP'] >= 65].copy()
+    #data_df = data_df[data_df['AGE_AT_OP'] < 65].copy()
+
     data_df = outlier_removal(data_df, outlier_cols, logging=logging)
     op_dates = data_df["OP_DATUM"]
 
@@ -341,9 +352,9 @@ def main(
     
     if filtered_data_path != "":
         data_dir = os.path.dirname(data_path)
-        filtered_df = data_df.copy()
+        filtered_df = data_df.copy().dropna().reset_index(drop=True)
         filtered_df["OP_DATUM"] = op_dates
-        filtered_df.to_csv(data_dir + '/' + filtered_data_path)
+        filtered_df.to_csv(data_dir + '/' + filtered_data_path, index=False)
 
         #op_dates.to_csv(op_dates_path, index=False)
     param_grid = {
@@ -404,11 +415,11 @@ def main(
 if __name__ == "__main__":
 
     #folder_path = "/home/ubuntu/PD-MultiModal-Prediction/"
-    folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
-
+    #folder_path = "/home/georg-tirpitz/Documents/PD-MultiModal-Prediction/"
+    folder_path = "/home/georg/Documents/Neuromodulation/PD-MultiModal-Prediction/"
     exp_infos = [
                 {
-                'exp_number' : 1,
+                'exp_number' : 3,
                 'target_col' :"MoCA_sum_post", 
                 'feature_cols':[ 
                             #"TimeSinceSurgery",
@@ -436,8 +447,12 @@ if __name__ == "__main__":
                             #"LEDD_pre",
                             #"L_distance",
                             #"R_distance",
-                            #"STIM_distance"
-                            #"X_L" ,
+                            #"Left_1_mA",
+                            #"Right_1_mA",
+                            "STIM_distance",
+                            #"X_avg",
+                            #"Y_avg",
+                            #"Z_avg",
                             #"Y_L" ,
                             #"Z_L" ,
                             #"X_R" ,
@@ -468,8 +483,8 @@ if __name__ == "__main__":
                             #"MoCA_Orientierung_sum_post",
                             #"LEDD_reduc",
                             #"LEDD_pre",
-                            #"L_distance",
-                            #"R_distance",
+                            "L_distance",
+                            "R_distance",
                             #"STIM_distance"
                             ] ,
                 },
@@ -481,14 +496,14 @@ if __name__ == "__main__":
         feature_cols = exp_info['feature_cols']
         outlier_cols = exp_info['outlier_cols']
         main(folder_path=folder_path, 
-            data_path="data/MoCA/level2/moca_updrs.csv", 
+            data_path="data/MoCA/level2/moca_stim.csv", 
             feature_cols=feature_cols, 
             target_col=target_col, 
             outlier_cols=outlier_cols,
-            out=f"results/{exp_number}_{target_col}_updrs_joined/level2/ElasticNet", 
+            out=f"results/{exp_number}_{target_col}_stim_BM_below_65/level2/ElasticNet", 
             folds=10, 
             tune_folds=5, 
             tune=True, 
             members=10,
             uncertainty=False, 
-                filtered_data_path="filtered_MoCA_updrs.csv")
+            filtered_data_path="filtered_MoCA_stim.csv")
