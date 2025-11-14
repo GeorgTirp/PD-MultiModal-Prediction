@@ -80,6 +80,70 @@ class CatBoostRegressionModel(BaseRegressionModel):
     # ------------------------------------------------------------------
     # Preprocessing
     # ------------------------------------------------------------------
+    def model_specific_preprocess_cat(self, data_df: pd.DataFrame) -> Tuple:
+        self.logging.info("Starting CatBoost preprocessing...")
+
+        target_col = self.feature_selection["target"]
+        feature_cols = self.feature_selection["features"]
+
+        data_df = data_df.dropna(subset=[target_col])
+
+        X = data_df[feature_cols].copy()
+        y = data_df[target_col]
+
+        # --- Make ANTIDEP flags into string categories ("no"/"yes") ---
+        for col in ["ANTIDEP_pre", "ANTIDEP_post"]:
+            if col in X.columns:
+                # Ensure numeric first
+                X[col] = pd.to_numeric(X[col], errors="coerce")
+                # Map 0 -> "no", 1 -> "yes", NaN stays NaN for now
+                X[col] = X[col].map({0: "no", 1: "yes"})
+
+        # Identify categorical columns
+        cat_cols = list(X.select_dtypes(include=["object", "category", "bool"]).columns)
+
+        # Ensure 'SEX' is categorical
+        if "SEX" in X.columns and "SEX" not in cat_cols:
+            cat_cols.append("SEX")
+
+        # Make sure ANTIDEP columns are in cat_cols if they exist
+        for col in ["ANTIDEP_pre", "ANTIDEP_post"]:
+            if col in X.columns and col not in cat_cols:
+                cat_cols.append(col)
+
+        # Cast all cat_cols to 'category' and add "<Unknown>"
+        for col in cat_cols:
+            X[col] = X[col].astype("category")
+            X[col] = X[col].cat.add_categories(["<Unknown>"]).fillna("<Unknown>")
+
+        # Numeric columns
+        num_cols = list(X.select_dtypes(include=["number"]).columns)
+        if len(num_cols) > 0:
+            X[num_cols] = X[num_cols].astype(float)
+            X[num_cols] = X[num_cols].fillna(X[num_cols].mean())
+
+        # Use NAMES, not indices
+        self.cat_features = cat_cols
+
+        # Target
+        y = pd.to_numeric(y, errors="coerce")
+        non_nan_mask = ~y.isna()
+        if not non_nan_mask.all():
+            dropped = (~non_nan_mask).sum()
+            self.logging.info(f"Dropping {dropped} rows due to non-numeric target.")
+            y = y[non_nan_mask]
+            X = X.loc[y.index]
+
+        m = y.mean()
+        std = y.std(ddof=0)
+        z = (y - m) / (std if std != 0 else 1.0)
+
+        self.logging.info(
+            f"Finished CatBoost preprocessing. "
+            f"{len(cat_cols)} categorical features detected: {cat_cols}"
+        )
+        return X, y, z, m, std
+
     def model_specific_preprocess(self, data_df: pd.DataFrame) -> Tuple:
         """
         Preprocess for CatBoost:
@@ -105,9 +169,13 @@ class CatBoostRegressionModel(BaseRegressionModel):
         )
 
         # Ensure 'SEX' (if present) is treated as categorical
-        if "SEX" in X.columns and "SEX" not in cat_cols:
-            cat_cols.append("SEX")
-
+        #if "SEX" in X.columns and "SEX" not in cat_cols:
+        #    cat_cols.append("SEX")
+        #if "ANTIDEP_pre" in X.columns and "ANTIDEP_pre" not in cat_cols:
+        #    cat_cols.append("ANTIDEP_pre")
+        #if "ANTIDEP_post" in X.columns and "ANTIDEP_post" not in cat_cols:
+        #    cat_cols.append("ANTIDEP_post") 
+        
         # Cast categorical columns to pandas category (stable + efficient)
         for col in cat_cols:
             X[col] = X[col].astype("category")
@@ -123,7 +191,8 @@ class CatBoostRegressionModel(BaseRegressionModel):
             X[num_cols] = X[num_cols].fillna(X[num_cols].mean())
 
         # Save categorical feature indices for CatBoost
-        self.cat_features = [X.columns.get_loc(c) for c in cat_cols]
+        self.cat_features = cat_cols
+
 
         # Convert y to numeric
         y = pd.to_numeric(y, errors="coerce")
